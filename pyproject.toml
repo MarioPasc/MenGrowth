@@ -36,6 +36,7 @@ classifiers = [
 ]
 
 dependencies = [
+    "PyYAML",
 ]
 
 [project.urls]
@@ -46,6 +47,7 @@ Repository = "https://github.com/MarioPasc/MenGrowth"
 Changelog = "https://github.com/MarioPasc/MenGrowth/releases"
 
 [project.scripts]
+mengrowth-reorganize = "mengrowth.cli.reorganize_raw_data:main"
 
 [tool.setuptools]
 packages = [
@@ -53,7 +55,7 @@ packages = [
 ]
 
 [tool.setuptools.package-data]
-medsyn = ["py.typed"]
+mengrowth = ["py.typed"]
 
 [tool.mypy]
 python_version = "3.10"

@@ -1,0 +1,181 @@
+raw_data:
+  # Study name to study number mappings
+  # These define how directory names map to standardized study numbers
+  study_mappings:
+    # Source baseline study
+    baseline: "0"
+
+    # Extension studies (Spanish ordinals)
+    primera: "0"
+    primero: "0"
+    primera1: "0"
+    primero1: "0"
+    segunda1: "1"
+    segundo1: "1"
+    segunda: "1"
+    segundo: "1"
+    tercera: "2"
+    tercero: "2"
+    cuarta: "3"
+    cuarto: "3"
+    quinta: "4"
+    quinto: "4"
+    sexta: "5"
+    sexto: "5"
+    septima: "6"
+    septimo: "6"
+    octava: "7"
+    octavo: "7"
+    novena: "8"
+    noveno: "8"
+    decima: "9"
+    decimo: "9"
+    undecima: "10"
+    undecimo: "10"
+
+    # Control studies
+    control1: "1"
+    control2: "2"
+    control3: "3"
+    control4: "4"
+    control5: "5"
+    control6: "6"
+    control7: "7"
+    control8: "8"
+    control9: "9"
+    control10: "10"
+
+  # Modality name synonyms for file standardization
+  # Maps various naming conventions to standardized modality names
+  modality_synonyms:
+    # FLAIR variants
+    t2f:
+      - FLAIR
+      - flair
+      - Flair
+      - FLAIR-sequence
+      - flair-sequence
+      - t2f
+      - T2-FLAIR
+      - T2flair
+
+    # T1 pre-contrast (sin contraste) variants
+    t1n-axial:
+      - T1pre-axial
+      - T1-axial
+      - T1sin-axial
+      - T1AX
+      - T1AXIAL
+    t1n-sagital:
+      - T1pre-sagital
+      - T1-sagital
+      - T1sin-sagital
+      - T1SAG
+    t1n-coronal:
+      - T1pre-coronal
+      - T1-coronal
+      - T1sin-coronal
+      - T1COR
+      - T1CORONAL
+    t1n:
+      - T1pre
+      - T1-pre
+      - T1SIN
+      - T1sin
+    # T1 post-contrast (contrast-enhanced) variants
+    t1c-axial:
+      - T1ce-axial
+      - T1post-axial
+      - T1-axial
+      - T1-CE-axial
+    t1c-sagital:
+      - T1ce-sagital
+      - T1post-sagital
+      - T1-sagital
+    t1c-coronal:
+      - T1ce-coronal
+      - T1post-coronal
+      - T1-coronal
+    t1c:
+      - T1ce
+      - T1-ce
+      - T1post
+      - T1-post
+      - T1
+    # T2 variants
+    t2w-stargre:
+      - T2starGRE
+      - T2-STIR
+      - T2STIR
+      - T2-stir
+      - T2stir
+    t2w-spinecho:
+      - T2-SE
+      - T2SE
+      - T2-spinecho
+      - T2spinecho
+    t2w:
+      - T2
+      - t2
+      - T2-weighted
+
+    # SWI variants
+    swi:
+      - SWI
+      - swi
+      - Swi
+      - SUSC
+      - susc
+      - susceptibility
+
+    # Diffusion variants
+    dwi:
+      - DWI
+      - dwi
+      - DIFUSION1
+      - DIFUSION2
+      - DIFUSION3
+      - Diffusion
+      - DIFUSION
+
+    # ADC (Apparent Diffusion Coefficient)
+    adc:
+      - ADC
+      - adc
+
+    ct:  
+      - TC
+      - Ct
+      - ct
+      - TOMOGRAFIA
+      - TOMOGRAFIA-COMPUTARIZADA
+      - TOMOGRAFIA_COMPUTARIZADA
+
+  # File exclusion patterns (glob patterns)
+  # Files matching these patterns will NOT be copied
+  exclusion_patterns:
+    - "*seg*.nrrd"      # Segmentation files
+    - "*_seg.nrrd"      # Segmentation files (alternative naming)
+    - "*.h5"            # Transform files
+    - "*.dcm"           # DICOM files
+    - "*.seq.nrrd"      # Sequence files (if not needed)
+    - "*.txt"           # Text files
+    - "*.xlsx"          # Excel metadata files
+    - "*.csv"           # CSV metadata files
+    - "*.log"           # Log files
+    - "*_mask.nrrd"     # Mask files
+    - "*_label.nrrd"    # Label files
+    - "*Survey*.nrrd"  # Survey files
+    - "*COLSAG*.nrrd"  # Localizer files
+    - "*VsT1W*.nrrd"  # Previous T1-weighted files
+    - "*disc*" # Hand-selected discards
+
+  # Output folder structure template
+  output_structure: "{output_root}/MenGrowth-2025/P{patient_id}/{study_number}"
+
+  # Input data source types
+  input_sources:
+    - source/baseline/RM     # Resonancia Magnética with modality subfolders
+    - source/baseline/TC     # Tomografía Computarizada (or Contrast)
+    - source/controls        # Control/follow-up studies
+    - extension_1            # Extension cohort
