@@ -6,7 +6,7 @@ for the preprocessing pipeline, following PEP 484 and PEP 257 standards.
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import yaml
 
@@ -87,14 +87,49 @@ class RawDataConfig:
 
 
 @dataclass
+class FilteringConfig:
+    """Configuration for study filtering.
+
+    Attributes:
+        sequences: List of required sequences for the final dataset.
+            E.g., ['t1c', 't1n', 't2f', 't2w']
+        allowed_missing_sequences_per_study: Maximum number of sequences that can be
+            missing from a study while still being accepted.
+            E.g., 1 means a study can be missing at most 1 sequence from the required list.
+        min_studies_per_patient: Minimum number of longitudinal studies required per patient.
+            Patients with fewer studies will be removed entirely.
+        orientation_priority: Priority order for selecting sequence orientations.
+            Format: list ordered from highest to lowest priority.
+            'none' means exact match (e.g., 't1c.nrrd'),
+            other values match suffixed versions (e.g., 't1c-axial.nrrd').
+            E.g., ['none', 'axial', 'sagital', 'coronal']
+        keep_only_required_sequences: If True, delete all sequences not in the required list.
+            E.g., if True and sequences=['t1c', 't1n', 't2f', 't2w'], delete dwi, swi, etc.
+        reid_patients: If True, rename patients to MenGrowth-XXXX format and create id_mapping.json.
+            E.g., P1 -> MenGrowth-0001, P42 -> MenGrowth-0002, etc.
+            Studies are also renamed: MenGrowth-0001-000, MenGrowth-0001-001, etc.
+            The id_mapping.json tracks both patient and study ID mappings.
+    """
+
+    sequences: List[str]
+    allowed_missing_sequences_per_study: int
+    min_studies_per_patient: int
+    orientation_priority: List[str]
+    keep_only_required_sequences: bool = False
+    reid_patients: bool = False
+
+
+@dataclass
 class PreprocessingConfig:
     """Top-level configuration for preprocessing pipeline.
 
     Attributes:
         raw_data: Configuration for raw data reorganization tasks.
+        filtering: Configuration for study filtering tasks (optional).
     """
 
     raw_data: RawDataConfig
+    filtering: Optional[FilteringConfig] = None
 
 
 def load_preprocessing_config(config_path: Path) -> PreprocessingConfig:
@@ -159,4 +194,35 @@ def load_preprocessing_config(config_path: Path) -> PreprocessingConfig:
         input_sources=raw_data_dict.get("input_sources", []),
     )
 
-    return PreprocessingConfig(raw_data=raw_data_config)
+    # Parse optional filtering configuration
+    filtering_config = None
+    if "filtering" in raw_data_dict:
+        filtering_dict = raw_data_dict["filtering"]
+
+        # Validate required filtering fields
+        filtering_required_fields = [
+            "sequences",
+            "allowed_missing_sequences_per_study",
+            "min_studies_per_patient",
+            "orientation_priority",
+        ]
+        for field_name in filtering_required_fields:
+            if field_name not in filtering_dict:
+                raise KeyError(
+                    f"Missing required field '{field_name}' in filtering configuration"
+                )
+
+        filtering_config = FilteringConfig(
+            sequences=filtering_dict["sequences"],
+            allowed_missing_sequences_per_study=filtering_dict[
+                "allowed_missing_sequences_per_study"
+            ],
+            min_studies_per_patient=filtering_dict["min_studies_per_patient"],
+            orientation_priority=filtering_dict["orientation_priority"],
+            keep_only_required_sequences=filtering_dict.get(
+                "keep_only_required_sequences", False
+            ),
+            reid_patients=filtering_dict.get("reid_patients", False),
+        )
+
+    return PreprocessingConfig(raw_data=raw_data_config, filtering=filtering_config)

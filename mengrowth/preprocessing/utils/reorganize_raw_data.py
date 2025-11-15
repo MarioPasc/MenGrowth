@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class RejectedFile:
-    """Record of a file that was rejected during reorganization.
+    """Record of a file that was rejected during reorganization or filtering.
 
     Attributes:
         source_path: Original file path.
@@ -37,6 +37,7 @@ class RejectedFile:
         study_name: Original study directory name (if applicable).
         rejection_reason: Explanation for why the file was rejected.
         source_type: Type of source (baseline_RM, baseline_TC, controls, extension).
+        stage: Processing stage where rejection occurred (0=reorganization, 1=filtering).
     """
 
     source_path: str
@@ -45,6 +46,7 @@ class RejectedFile:
     study_name: str
     rejection_reason: str
     source_type: str
+    stage: int = 0
 
 
 def should_exclude_file(filepath: Path, exclusion_patterns: List[str]) -> Tuple[bool, str]:
@@ -497,6 +499,7 @@ def write_rejected_files_csv(
             "study_name",
             "rejection_reason",
             "source_type",
+            "stage",
         ]
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
@@ -510,6 +513,7 @@ def write_rejected_files_csv(
                     "study_name": rejected.study_name,
                     "rejection_reason": rejected.rejection_reason,
                     "source_type": rejected.source_type,
+                    "stage": rejected.stage,
                 }
             )
 

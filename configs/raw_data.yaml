@@ -179,3 +179,26 @@ raw_data:
     - source/baseline/TC     # Tomografía Computarizada (or Contrast)
     - source/controls        # Control/follow-up studies
     - extension_1            # Extension cohort
+
+  # Filtering configuration
+  # Applied after reorganization to ensure data quality and completeness
+  filtering:
+    # Required sequences for final dataset
+    sequences: [t1c, t1n, t2f, t2w]
+
+    # Maximum number of missing sequences allowed per study
+    # Example: if 1, studies can be missing at most 1 sequence from the required list
+    allowed_missing_sequences_per_study: 1
+
+    # Minimum number of longitudinal studies required per patient
+    # Patients with fewer studies will be removed entirely
+    min_studies_per_patient: 2
+
+    # Orientation priority for selecting sequences when multiple orientations exist
+    # Format: priority order from highest to lowest
+    # 'none' = exact match (e.g., t1c.nrrd), others match suffixed versions (e.g., t1c-axial.nrrd)
+    # Example: if t1c is missing but t1c-axial and t1c-sagital exist, t1c-axial is selected and renamed to t1c
+    orientation_priority: [none, axial, sagital, coronal]
+
+    keep_only_required_sequences: true
+    reid_patients: true

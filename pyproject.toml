@@ -48,6 +48,7 @@ Changelog = "https://github.com/MarioPasc/MenGrowth/releases"
 
 [project.scripts]
 mengrowth-reorganize = "mengrowth.cli.reorganize_raw_data:main"
+mengrowth-filter = "mengrowth.cli.filter_raw_data:main"
 
 [tool.setuptools]
 packages = [
