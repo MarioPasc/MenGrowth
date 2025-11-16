@@ -39,8 +39,10 @@ class BackgroundZeroingConfig:
         fallback_threshold: Min coverage for SELF before fallback (default: 0.05)
         fill_value: Value to set for background voxels (default: 0.0)
 
-        # Common parameter
-        air_border_margin: Voxels to erode air mask (not anatomy) for conservativeness
+        # Common parameters for controlling conservativeness
+        air_border_margin: Voxels to erode air mask (MORE conservative - shrinks air) (default: 1)
+        expand_air_mask: Voxels to dilate air mask (LESS conservative - expands air) (default: 0)
+        Note: Use either air_border_margin OR expand_air_mask, not both > 0
     """
     method: Literal["border_connected_percentile", "self_head_mask"] = "border_connected_percentile"
 
@@ -54,8 +56,9 @@ class BackgroundZeroingConfig:
     fallback_threshold: float = 0.05
     fill_value: float = 0.0
 
-    # Common parameter
+    # Common parameters
     air_border_margin: int = 1
+    expand_air_mask: int = 0
 
     def __post_init__(self) -> None:
         """Validate configuration values."""
@@ -91,6 +94,18 @@ class BackgroundZeroingConfig:
         if self.air_border_margin < 0:
             raise ConfigurationError(
                 f"air_border_margin must be non-negative, got {self.air_border_margin}"
+            )
+        if self.expand_air_mask < 0:
+            raise ConfigurationError(
+                f"expand_air_mask must be non-negative, got {self.expand_air_mask}"
+            )
+
+        # Warn if both erosion and dilation are enabled (conflicting intentions)
+        if self.air_border_margin > 0 and self.expand_air_mask > 0:
+            import logging
+            logging.getLogger(__name__).warning(
+                f"Both air_border_margin ({self.air_border_margin}) and expand_air_mask ({self.expand_air_mask}) "
+                "are > 0. These have opposite effects. Consider using only one."
             )
 
 

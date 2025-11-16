@@ -9,7 +9,7 @@ from typing import Any, Dict
 import logging
 import nibabel as nib
 import numpy as np
-from scipy.ndimage import gaussian_filter, label, binary_erosion, generate_binary_structure
+from scipy.ndimage import gaussian_filter, label, binary_erosion, binary_dilation, generate_binary_structure
 
 from mengrowth.preprocessing.src.data_harmonization.base import BaseBackgroundRemover
 from mengrowth.preprocessing.src.config import BackgroundZeroingConfig
@@ -140,10 +140,10 @@ class ConservativeBackgroundRemover(BaseBackgroundRemover):
 
         air_mask = labeled == largest_label
 
-        # Step 7: Optionally erode air mask to be extra conservative
+        # Step 7a: Optionally erode air mask to be MORE conservative
         # (shrink the air region, not the anatomy)
         if self.bg_config.air_border_margin > 0:
-            self.logger.debug(f"Eroding air mask by {self.bg_config.air_border_margin} voxels")
+            self.logger.debug(f"Eroding air mask by {self.bg_config.air_border_margin} voxels (MORE conservative)")
             erosion_struct = generate_binary_structure(3, 1)  # 6-connectivity
             for _ in range(self.bg_config.air_border_margin):
                 air_mask = binary_erosion(air_mask, structure=erosion_struct)
@@ -151,6 +151,20 @@ class ConservativeBackgroundRemover(BaseBackgroundRemover):
             eroded_size = air_mask.sum()
             self.logger.debug(
                 f"After erosion: {eroded_size} air voxels ({100 * eroded_size / volume.size:.2f}%)"
+            )
+
+        # Step 7b: Optionally dilate air mask to be LESS conservative
+        # (expand the air region to remove more background)
+        expand_param = getattr(self.bg_config, "expand_air_mask", 0)
+        if expand_param > 0:
+            self.logger.debug(f"Dilating air mask by {expand_param} voxels (LESS conservative)")
+            dilation_struct = generate_binary_structure(3, 1)  # 6-connectivity
+            for _ in range(expand_param):
+                air_mask = binary_dilation(air_mask, structure=dilation_struct)
+
+            dilated_size = air_mask.sum()
+            self.logger.debug(
+                f"After dilation: {dilated_size} air voxels ({100 * dilated_size / volume.size:.2f}%)"
             )
 
         final_size = air_mask.sum()

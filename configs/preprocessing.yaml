@@ -37,4 +37,6 @@ preprocessing:
           fill_value: 0.0            # intensidad de fondo
 
           # if method is either one or the other
-          air_border_margin: 0             # voxels to erode the air mask (not anatomy)
+          air_border_margin: 0             # voxels to erode the air mask (MORE conservative - shrinks air region)
+          expand_air_mask: 3               # voxels to dilate the air mask (LESS conservative - expands air region)
+          # Note: Use EITHER air_border_margin OR expand_air_mask, not both > 0
