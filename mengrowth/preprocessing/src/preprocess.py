@@ -11,7 +11,8 @@ import logging
 from mengrowth.preprocessing.src.config import PreprocessingPipelineConfig, DataHarmonizationConfig
 from mengrowth.preprocessing.src.data_harmonization.io import NRRDtoNIfTIConverter
 from mengrowth.preprocessing.src.data_harmonization.orient import Reorienter
-from mengrowth.preprocessing.src.data_harmonization.background import ConservativeBackgroundRemover
+from mengrowth.preprocessing.src.data_harmonization.head_masking.conservative import ConservativeBackgroundRemover
+from mengrowth.preprocessing.src.data_harmonization.head_masking.self import SELFBackgroundRemover
 
 logger = logging.getLogger(__name__)
 
@@ -43,12 +44,26 @@ class PreprocessingOrchestrator:
             target_orientation=config.step0_data_harmonization.reorient_to,
             verbose=verbose
         )
-        self.background_remover = ConservativeBackgroundRemover(
-            config=config.step0_data_harmonization.background_zeroing,
-            verbose=verbose
-        )
 
-        self.logger.info("Preprocessing orchestrator initialized")
+        # Select background removal algorithm based on method
+        bg_method = config.step0_data_harmonization.background_zeroing.method
+        if bg_method == "border_connected_percentile":
+            self.background_remover = ConservativeBackgroundRemover(
+                config=config.step0_data_harmonization.background_zeroing,
+                verbose=verbose
+            )
+        elif bg_method == "self_head_mask":
+            self.background_remover = SELFBackgroundRemover(
+                config=config.step0_data_harmonization.background_zeroing,
+                verbose=verbose
+            )
+        else:
+            raise ValueError(
+                f"Unknown background removal method: {bg_method}. "
+                "Must be 'border_connected_percentile' or 'self_head_mask'"
+            )
+
+        self.logger.info(f"Preprocessing orchestrator initialized with background method: {bg_method}")
 
     def _get_study_directories(self, patient_id: str) -> List[Path]:
         """Get list of study directories for a patient.
@@ -189,7 +204,7 @@ class PreprocessingOrchestrator:
                             total_skipped += 1
                             continue
 
-                    # Step 1: NRRD � NIfTI
+                    # Step 1: NRRD -> NIfTI
                     self.logger.info("    [1/3] Converting NRRD to NIfTI...")
                     self.converter.execute(
                         input_file,
@@ -247,14 +262,14 @@ class PreprocessingOrchestrator:
                     # Replace with masked version
                     temp_masked.replace(paths["nifti"])
 
-                    self.logger.info(f"     Successfully processed {modality}")
+                    self.logger.info(f"    Successfully processed {modality}")
                     total_processed += 1
 
                 except FileExistsError as e:
                     # Re-raise overwrite errors (halt execution)
                     raise
                 except Exception as e:
-                    self.logger.error(f"     Error processing {modality}: {e}")
+                    self.logger.error(f"   [Error] Processing {modality}: {e}")
                     total_errors += 1
                     # Continue with next modality
 

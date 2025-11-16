@@ -11,7 +11,7 @@ preprocessing:
     dataset_root: "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/raw/MenGrowth-2025"
     output_root: "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/raw/preprocessed"     # used in test mode
     viz_root: "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/viz"              # quick-looks for both modes
-    overwrite: false                                                   # guard rails
+    overwrite: true                                                   # guard rails
 
     # Modalities to include (if present in a study directory)
     modalities: ["t1c", "t1n", "t2w", "t2f"]
@@ -24,8 +24,17 @@ preprocessing:
 
         # Background zeroing (conservative)
         background_zeroing:
-          method: "border_connected_percentile"
-          percentile_low: 0.7              # [0.1-2.0], conservative default
+          method: "border_connected_percentile" # check with "self_head_mask" too
+          
+          # if method == "border_connected_percentile"
+          percentile_low: 2              # [0.1-2.0], conservative default
           gaussian_sigma: 0.5              # smoothing before thresholding (vox)
           min_comp_voxels: 500             # ignore tiny components
-          air_border_margin: 1             # voxels to erode the air mask (not anatomy)
+
+          # if method == "self_head_mask"
+          auto_fallback: true        # dejar en true
+          fallback_threshold: 0.05   # 5% del volumen; no tocar salvo necesidad
+          fill_value: 0.0            # intensidad de fondo
+
+          # if method is either one or the other
+          air_border_margin: 0             # voxels to erode the air mask (not anatomy)

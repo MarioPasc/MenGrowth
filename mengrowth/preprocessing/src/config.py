@@ -20,35 +20,74 @@ class ConfigurationError(Exception):
 
 @dataclass
 class BackgroundZeroingConfig:
-    """Configuration for conservative background removal.
+    """Configuration for background removal.
+
+    Supports two methods:
+    - "border_connected_percentile": Conservative percentile-based approach
+    - "self_head_mask": SELF algorithm for head-air separation
 
     Attributes:
-        method: Background removal method (currently only "border_connected_percentile")
+        method: Background removal method
+
+        # Parameters for "border_connected_percentile"
         percentile_low: Low percentile threshold for background detection [0.1-2.0]
         gaussian_sigma: Gaussian smoothing sigma before thresholding (voxels)
         min_comp_voxels: Minimum component size to consider (voxels)
+
+        # Parameters for "self_head_mask"
+        auto_fallback: Use simple fallback if SELF fails (default: True)
+        fallback_threshold: Min coverage for SELF before fallback (default: 0.05)
+        fill_value: Value to set for background voxels (default: 0.0)
+
+        # Common parameter
         air_border_margin: Voxels to erode air mask (not anatomy) for conservativeness
     """
-    method: Literal["border_connected_percentile"] = "border_connected_percentile"
+    method: Literal["border_connected_percentile", "self_head_mask"] = "border_connected_percentile"
+
+    # Parameters for border_connected_percentile
     percentile_low: float = 0.7
     gaussian_sigma: float = 0.5
     min_comp_voxels: int = 500
+
+    # Parameters for self_head_mask
+    auto_fallback: bool = True
+    fallback_threshold: float = 0.05
+    fill_value: float = 0.0
+
+    # Common parameter
     air_border_margin: int = 1
 
     def __post_init__(self) -> None:
         """Validate configuration values."""
-        if not 0.1 <= self.percentile_low <= 2.0:
+        # Validate method
+        if self.method not in ["border_connected_percentile", "self_head_mask"]:
             raise ConfigurationError(
-                f"percentile_low must be in [0.1, 2.0], got {self.percentile_low}"
+                f"method must be 'border_connected_percentile' or 'self_head_mask', got {self.method}"
             )
-        if self.gaussian_sigma < 0:
-            raise ConfigurationError(
-                f"gaussian_sigma must be non-negative, got {self.gaussian_sigma}"
-            )
-        if self.min_comp_voxels < 0:
-            raise ConfigurationError(
-                f"min_comp_voxels must be non-negative, got {self.min_comp_voxels}"
-            )
+
+        # Validate border_connected_percentile parameters
+        if self.method == "border_connected_percentile":
+            if not 0.1 <= self.percentile_low <= 2.0:
+                raise ConfigurationError(
+                    f"percentile_low must be in [0.1, 2.0], got {self.percentile_low}"
+                )
+            if self.gaussian_sigma < 0:
+                raise ConfigurationError(
+                    f"gaussian_sigma must be non-negative, got {self.gaussian_sigma}"
+                )
+            if self.min_comp_voxels < 0:
+                raise ConfigurationError(
+                    f"min_comp_voxels must be non-negative, got {self.min_comp_voxels}"
+                )
+
+        # Validate self_head_mask parameters
+        if self.method == "self_head_mask":
+            if not 0.0 <= self.fallback_threshold <= 1.0:
+                raise ConfigurationError(
+                    f"fallback_threshold must be in [0.0, 1.0], got {self.fallback_threshold}"
+                )
+
+        # Validate common parameters
         if self.air_border_margin < 0:
             raise ConfigurationError(
                 f"air_border_margin must be non-negative, got {self.air_border_margin}"

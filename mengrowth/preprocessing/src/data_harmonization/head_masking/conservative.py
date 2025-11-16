@@ -231,16 +231,6 @@ class ConservativeBackgroundRemover(BaseBackgroundRemover):
 
         Displays 4 depth slices for each of 3 orientations, with the computed
         air mask overlaid on the original volume.
-
-        Args:
-            before_path: Path to input file (before background removal)
-            after_path: Path to output file (after background removal)
-            output_path: Path to save visualization (PNG)
-            **kwargs: Additional visualization parameters
-
-        Raises:
-            FileNotFoundError: If input files do not exist
-            RuntimeError: If visualization generation fails
         """
         import matplotlib
         matplotlib.use('Agg')
@@ -256,17 +246,26 @@ class ConservativeBackgroundRemover(BaseBackgroundRemover):
             after_img = nib.load(str(after_path))
             after_data = after_img.get_fdata()
 
-            # Compute air mask from difference
-            air_mask = (before_data != after_data) & (after_data == 0)
+            # Compute air mask directly from the "before" volume
+            # (this is the same algorithm used in execute)
+            air_mask = self._build_air_mask(before_data)
+
+            # Optional: log how many voxels actually changed to zero
+            changed_to_zero = (before_data != after_data) & (after_data == 0)
+            self.logger.info(
+                f"Visualization: air mask={air_mask.sum()} voxels "
+                f"({100 * air_mask.sum() / air_mask.size:.2f}%), "
+                f"newly zeroed={changed_to_zero.sum()} voxels "
+                f"({100 * changed_to_zero.sum() / air_mask.size:.2f}%)"
+            )
 
             # Get 4 depth slices for visualization
             depth_fractions = [0.25, 0.4, 0.5, 0.6]
 
-            # Create figure: 3 rows (orientations) x 4 columns (depth slices)
             fig, axes = plt.subplots(3, 4, figsize=(16, 12))
             fig.suptitle(
                 f'Background Removal: {before_path.stem}\n'
-                f'Air mask overlaid on original (red=removed)',
+                f'Air mask overlaid on original (red=air/background)',
                 fontsize=16,
                 fontweight='bold'
             )
@@ -278,10 +277,9 @@ class ConservativeBackgroundRemover(BaseBackgroundRemover):
                 slice_mask = air_mask[:, :, z_idx].T
 
                 axes[0, col].imshow(slice_data, cmap='gray', origin='lower')
-                # Overlay mask in red
-                mask_overlay = np.zeros((*slice_mask.shape, 4))
-                mask_overlay[slice_mask, :] = [1, 0, 0, 0.3]  # Red with alpha
-                axes[0, col].imshow(mask_overlay, origin='lower')
+                overlay = np.zeros((*slice_mask.shape, 4))
+                overlay[slice_mask, :] = [1, 0, 0, 0.3]  # red with alpha
+                axes[0, col].imshow(overlay, origin='lower')
                 axes[0, col].set_title(f'Axial z={z_idx}')
                 axes[0, col].axis('off')
 
@@ -292,9 +290,9 @@ class ConservativeBackgroundRemover(BaseBackgroundRemover):
                 slice_mask = air_mask[x_idx, :, :].T
 
                 axes[1, col].imshow(slice_data, cmap='gray', origin='lower')
-                mask_overlay = np.zeros((*slice_mask.shape, 4))
-                mask_overlay[slice_mask, :] = [1, 0, 0, 0.3]
-                axes[1, col].imshow(mask_overlay, origin='lower')
+                overlay = np.zeros((*slice_mask.shape, 4))
+                overlay[slice_mask, :] = [1, 0, 0, 0.3]
+                axes[1, col].imshow(overlay, origin='lower')
                 axes[1, col].set_title(f'Sagittal x={x_idx}')
                 axes[1, col].axis('off')
 
@@ -305,18 +303,14 @@ class ConservativeBackgroundRemover(BaseBackgroundRemover):
                 slice_mask = air_mask[:, y_idx, :].T
 
                 axes[2, col].imshow(slice_data, cmap='gray', origin='lower')
-                mask_overlay = np.zeros((*slice_mask.shape, 4))
-                mask_overlay[slice_mask, :] = [1, 0, 0, 0.3]
-                axes[2, col].imshow(mask_overlay, origin='lower')
+                overlay = np.zeros((*slice_mask.shape, 4))
+                overlay[slice_mask, :] = [1, 0, 0, 0.3]
+                axes[2, col].imshow(overlay, origin='lower')
                 axes[2, col].set_title(f'Coronal y={y_idx}')
                 axes[2, col].axis('off')
 
             plt.tight_layout()
-
-            # Ensure output directory exists
             output_path.parent.mkdir(parents=True, exist_ok=True)
-
-            # Save figure
             plt.savefig(output_path, dpi=150, bbox_inches='tight')
             plt.close(fig)
 
@@ -325,3 +319,4 @@ class ConservativeBackgroundRemover(BaseBackgroundRemover):
         except Exception as e:
             self.logger.error(f"Visualization generation failed: {e}")
             raise RuntimeError(f"Visualization failed: {e}") from e
+
