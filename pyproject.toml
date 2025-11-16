@@ -42,6 +42,10 @@ dependencies = [
     "pandas",
     "matplotlib",
     "seaborn",
+    "nibabel",
+    "pynrrd",
+    "scipy",
+    "scikit-image"
 ]
 
 [project.urls]
@@ -56,6 +60,7 @@ mengrowth-reorganize = "mengrowth.cli.reorganize_raw_data:main"
 mengrowth-filter = "mengrowth.cli.filter_raw_data:main"
 mengrowth-analyze-dataset = "mengrowth.cli.analyze_dataset:main"
 mengrowth-visualize-analysis = "mengrowth.cli.visualize_analysis:main"
+mengrowth-preprocess = "mengrowth.cli.preprocess:main"
 
 [tool.setuptools]
 packages = [
@@ -89,5 +94,7 @@ module = [
     "matplotlib.*",
     "seaborn.*",
     "numpy.*",
+    "nibabel.*",
+    "nrrd.*",
 ]
 ignore_missing_imports = true

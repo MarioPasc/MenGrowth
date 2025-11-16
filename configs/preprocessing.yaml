@@ -1,0 +1,31 @@
+preprocessing:
+  data_harmonization:
+    enabled: true
+
+    # Selection
+    patient_selector: "single"        # "single" | "all"
+    patient_id: "MenGrowth-0015"      # used only if patient_selector == "single"
+
+    # I/O mode
+    mode: "test"                       # "test" | "pipeline"
+    dataset_root: "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/raw/MenGrowth-2025"
+    output_root: "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/raw/preprocessed"     # used in test mode
+    viz_root: "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/viz"              # quick-looks for both modes
+    overwrite: false                                                   # guard rails
+
+    # Modalities to include (if present in a study directory)
+    modalities: ["t1c", "t1n", "t2w", "t2f"]
+
+    step0_data_harmonization:
+        save_visualization: true # Save this step's visualization for the method used
+
+        # Orientation
+        reorient_to: "RAS"                 # "RAS" | "LPS"
+
+        # Background zeroing (conservative)
+        background_zeroing:
+          method: "border_connected_percentile"
+          percentile_low: 0.7              # [0.1-2.0], conservative default
+          gaussian_sigma: 0.5              # smoothing before thresholding (vox)
+          min_comp_voxels: 500             # ignore tiny components
+          air_border_margin: 1             # voxels to erode the air mask (not anatomy)
