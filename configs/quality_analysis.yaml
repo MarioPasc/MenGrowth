@@ -1,0 +1,107 @@
+# Quality Analysis Configuration
+# This configuration defines parameters for analyzing MRI dataset quality before and after preprocessing
+
+quality_analysis:
+  # Dataset paths
+  # Input directory containing patient folders (MenGrowth-XXXX/MenGrowth-XXXX-YYY/*.nrrd or *.nii.gz)
+  input_dir: "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/raw/MenGrowth-2025"
+
+  # Output directory for analysis results (CSV, NPZ, JSON files)
+  output_dir: "/home/mpascual/PortableSSD/Meningiomas/MenGrowth/results/quality_analysis"
+
+  # File format: "auto" (detect from extension), "nrrd", or "nifti"
+  # Before preprocessing: .nrrd files
+  # After preprocessing: .nii.gz files
+  file_format: "auto"
+
+  # Expected sequence names (modality identifiers)
+  # Used to detect missing sequences and compute per-sequence statistics
+  expected_sequences:
+    - "t1c"  # T1-weighted contrast-enhanced
+    - "t1n"  # T1-weighted native
+    - "t2w"  # T2-weighted
+    - "t2f"  # T2-weighted FLAIR
+
+  # Metrics to compute (set to false to disable specific metrics)
+  metrics:
+    patient_statistics: true          # Studies per patient (count, mean, std)
+    missing_sequences: true           # Per-sequence missing counts and percentages
+    voxel_spacing: true               # Physical spacing (x, y, z) in mm per sequence
+    intensity_statistics: true        # Min/max/mean/std/percentiles, outlier detection
+    image_dimensions: true            # Image shape (width, height, slices) per sequence
+    acquisition_consistency: true    # Variability of spacing/dimensions within patients
+    snr_estimation: true              # Signal-to-noise ratio approximation
+
+  # Intensity outlier detection
+  outlier_detection:
+    enabled: true
+    method: "iqr"  # "iqr" (interquartile range) or "zscore"
+    iqr_multiplier: 1.5  # Values beyond Q1-1.5*IQR or Q3+1.5*IQR are outliers
+    zscore_threshold: 3.0  # Values beyond mean�3*std are outliers
+
+  # Percentiles to compute for intensity distributions
+  intensity_percentiles:
+    - 1
+    - 5
+    - 25
+    - 50
+    - 75
+    - 95
+    - 99
+
+  # Parallel processing settings
+  parallel:
+    enabled: true
+    n_workers: 8  # Number of parallel workers (set to 1 to disable parallelization)
+    # If null or -1, uses all available CPU cores
+
+  # Visualization settings (used by visualize_analysis.py)
+  visualization:
+    enabled: true
+
+    # Plot types to generate
+    plots:
+      studies_per_patient_histogram: true
+      missing_sequences_heatmap: true
+      spacing_violin_plots: true
+      intensity_boxplots: true
+      dimension_consistency_scatter: true
+      snr_distribution: true
+
+    # Figure settings
+    figure:
+      dpi: 150
+      format: "png"  # "png", "pdf", "svg"
+      width: 10  # inches
+      height: 6  # inches
+
+    # Color scheme
+    palette: "Set2"  # Seaborn color palette
+
+    # HTML report generation
+    html_report:
+      enabled: true
+      title: "MenGrowth Dataset Quality Analysis"
+      include_summary_tables: true
+      include_all_plots: true
+
+  # Output file settings
+  output:
+    # Save detailed per-study metrics to CSV
+    save_per_study_csv: true
+
+    # Save per-patient summary statistics to CSV
+    save_per_patient_csv: true
+
+    # Save intensity distributions and histograms to NPZ (NumPy compressed)
+    save_intensity_distributions_npz: true
+
+    # Save overall summary statistics to JSON
+    save_summary_json: true
+
+    # Save analysis metadata (timestamp, config, dataset info)
+    save_metadata: true
+
+  # Logging and debugging
+  verbose: true  # Enable debug-level logging
+  dry_run: false  # If true, scan dataset but skip image loading and metric computation

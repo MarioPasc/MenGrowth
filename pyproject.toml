@@ -37,6 +37,11 @@ classifiers = [
 
 dependencies = [
     "PyYAML",
+    "SimpleITK",
+    "numpy",
+    "pandas",
+    "matplotlib",
+    "seaborn",
 ]
 
 [project.urls]
@@ -49,6 +54,8 @@ Changelog = "https://github.com/MarioPasc/MenGrowth/releases"
 [project.scripts]
 mengrowth-reorganize = "mengrowth.cli.reorganize_raw_data:main"
 mengrowth-filter = "mengrowth.cli.filter_raw_data:main"
+mengrowth-analyze-dataset = "mengrowth.cli.analyze_dataset:main"
+mengrowth-visualize-analysis = "mengrowth.cli.visualize_analysis:main"
 
 [tool.setuptools]
 packages = [
@@ -78,5 +85,9 @@ module = [
     "torchvision.*",
     "yaml",
     "pandas",
+    "SimpleITK.*",
+    "matplotlib.*",
+    "seaborn.*",
+    "numpy.*",
 ]
 ignore_missing_imports = true

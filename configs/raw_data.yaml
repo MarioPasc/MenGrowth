@@ -200,5 +200,8 @@ raw_data:
     # Example: if t1c is missing but t1c-axial and t1c-sagital exist, t1c-axial is selected and renamed to t1c
     orientation_priority: [none, axial, sagital, coronal]
 
+    # Whether to keep only the required sequences in the final dataset
     keep_only_required_sequences: true
+
+    # Whether to re-identify patients with new anonymized IDs, we will also save a JSON mapping file from old to new IDs
     reid_patients: true

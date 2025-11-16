@@ -226,3 +226,330 @@ def load_preprocessing_config(config_path: Path) -> PreprocessingConfig:
         )
 
     return PreprocessingConfig(raw_data=raw_data_config, filtering=filtering_config)
+
+
+@dataclass
+class MetricsConfig:
+    """Configuration for quality metrics computation.
+
+    Attributes:
+        patient_statistics: Compute studies per patient statistics.
+        missing_sequences: Compute missing sequence counts and percentages.
+        voxel_spacing: Compute physical voxel spacing (x, y, z) in mm.
+        intensity_statistics: Compute intensity value statistics and outliers.
+        image_dimensions: Compute image shape statistics.
+        acquisition_consistency: Compute variability within patients.
+        snr_estimation: Compute signal-to-noise ratio approximations.
+    """
+
+    patient_statistics: bool = True
+    missing_sequences: bool = True
+    voxel_spacing: bool = True
+    intensity_statistics: bool = True
+    image_dimensions: bool = True
+    acquisition_consistency: bool = True
+    snr_estimation: bool = True
+
+
+@dataclass
+class OutlierDetectionConfig:
+    """Configuration for intensity outlier detection.
+
+    Attributes:
+        enabled: Enable outlier detection.
+        method: Detection method ('iqr' or 'zscore').
+        iqr_multiplier: IQR multiplier for IQR method (typically 1.5).
+        zscore_threshold: Z-score threshold for zscore method (typically 3.0).
+    """
+
+    enabled: bool = True
+    method: str = "iqr"
+    iqr_multiplier: float = 1.5
+    zscore_threshold: float = 3.0
+
+
+@dataclass
+class ParallelConfig:
+    """Configuration for parallel processing.
+
+    Attributes:
+        enabled: Enable parallel processing.
+        n_workers: Number of parallel workers (None uses all CPUs).
+    """
+
+    enabled: bool = True
+    n_workers: Optional[int] = None
+
+
+@dataclass
+class FigureConfig:
+    """Configuration for figure generation.
+
+    Attributes:
+        dpi: Resolution in dots per inch.
+        format: Output format ('png', 'pdf', 'svg').
+        width: Figure width in inches.
+        height: Figure height in inches.
+    """
+
+    dpi: int = 150
+    format: str = "png"
+    width: float = 10.0
+    height: float = 6.0
+
+
+@dataclass
+class PlotConfig:
+    """Configuration for plot types to generate.
+
+    Attributes:
+        studies_per_patient_histogram: Generate studies per patient histogram.
+        missing_sequences_heatmap: Generate missing sequences heatmap.
+        spacing_violin_plots: Generate spacing distribution violin plots.
+        intensity_boxplots: Generate intensity distribution box plots.
+        dimension_consistency_scatter: Generate dimension consistency scatter plots.
+        snr_distribution: Generate SNR distribution plots.
+    """
+
+    studies_per_patient_histogram: bool = True
+    missing_sequences_heatmap: bool = True
+    spacing_violin_plots: bool = True
+    intensity_boxplots: bool = True
+    dimension_consistency_scatter: bool = True
+    snr_distribution: bool = True
+
+
+@dataclass
+class HtmlReportConfig:
+    """Configuration for HTML report generation.
+
+    Attributes:
+        enabled: Enable HTML report generation.
+        title: Report title.
+        include_summary_tables: Include summary statistics tables.
+        include_all_plots: Include all generated plots in the report.
+    """
+
+    enabled: bool = True
+    title: str = "MenGrowth Dataset Quality Analysis"
+    include_summary_tables: bool = True
+    include_all_plots: bool = True
+
+
+@dataclass
+class VisualizationConfig:
+    """Configuration for visualization settings.
+
+    Attributes:
+        enabled: Enable visualization generation.
+        plots: Plot types to generate.
+        figure: Figure display settings.
+        palette: Seaborn color palette name.
+        html_report: HTML report generation settings.
+    """
+
+    enabled: bool = True
+    plots: PlotConfig = field(default_factory=PlotConfig)
+    figure: FigureConfig = field(default_factory=FigureConfig)
+    palette: str = "Set2"
+    html_report: HtmlReportConfig = field(default_factory=HtmlReportConfig)
+
+
+@dataclass
+class OutputConfig:
+    """Configuration for output file generation.
+
+    Attributes:
+        save_per_study_csv: Save detailed per-study metrics to CSV.
+        save_per_patient_csv: Save per-patient summary to CSV.
+        save_intensity_distributions_npz: Save intensity distributions to NPZ.
+        save_summary_json: Save overall summary to JSON.
+        save_metadata: Save analysis metadata (timestamp, config).
+    """
+
+    save_per_study_csv: bool = True
+    save_per_patient_csv: bool = True
+    save_intensity_distributions_npz: bool = True
+    save_summary_json: bool = True
+    save_metadata: bool = True
+
+
+@dataclass
+class QualityAnalysisConfig:
+    """Configuration for dataset quality analysis.
+
+    Attributes:
+        input_dir: Path to input dataset directory.
+        output_dir: Path to output directory for analysis results.
+        file_format: File format ('auto', 'nrrd', 'nifti').
+        expected_sequences: List of expected sequence names.
+        metrics: Metrics computation settings.
+        outlier_detection: Outlier detection settings.
+        intensity_percentiles: Percentiles to compute for intensity distributions.
+        parallel: Parallel processing settings.
+        visualization: Visualization settings.
+        output: Output file settings.
+        verbose: Enable debug-level logging.
+        dry_run: Scan dataset without loading images.
+    """
+
+    input_dir: Path
+    output_dir: Path
+    file_format: str = "auto"
+    expected_sequences: List[str] = field(default_factory=lambda: ["t1c", "t1n", "t2w"])
+    metrics: MetricsConfig = field(default_factory=MetricsConfig)
+    outlier_detection: OutlierDetectionConfig = field(
+        default_factory=OutlierDetectionConfig
+    )
+    intensity_percentiles: List[int] = field(
+        default_factory=lambda: [1, 5, 25, 50, 75, 95, 99]
+    )
+    parallel: ParallelConfig = field(default_factory=ParallelConfig)
+    visualization: VisualizationConfig = field(default_factory=VisualizationConfig)
+    output: OutputConfig = field(default_factory=OutputConfig)
+    verbose: bool = False
+    dry_run: bool = False
+
+
+def load_quality_analysis_config(config_path: Path) -> QualityAnalysisConfig:
+    """Load and validate quality analysis configuration from YAML file.
+
+    Args:
+        config_path: Path to quality analysis YAML configuration file.
+
+    Returns:
+        Validated QualityAnalysisConfig object with typed attributes.
+
+    Raises:
+        FileNotFoundError: If config_path does not exist.
+        yaml.YAMLError: If YAML is malformed.
+        KeyError: If required configuration keys are missing.
+        TypeError: If configuration values have incorrect types.
+
+    Examples:
+        >>> config = load_quality_analysis_config(Path('configs/quality_analysis.yaml'))
+        >>> print(config.input_dir)
+        PosixPath('/path/to/dataset')
+    """
+    if not config_path.exists():
+        raise FileNotFoundError(f"Configuration file not found: {config_path}")
+
+    with open(config_path, "r", encoding="utf-8") as f:
+        yaml_data = yaml.safe_load(f)
+
+    if not yaml_data:
+        raise ValueError(f"Empty configuration file: {config_path}")
+
+    # Extract quality_analysis section
+    if "quality_analysis" not in yaml_data:
+        raise KeyError(
+            "Missing required 'quality_analysis' section in configuration"
+        )
+
+    qa_dict = yaml_data["quality_analysis"]
+
+    # Validate required top-level fields
+    required_fields = ["input_dir", "output_dir"]
+    for field_name in required_fields:
+        if field_name not in qa_dict:
+            raise KeyError(
+                f"Missing required field '{field_name}' in quality_analysis configuration"
+            )
+
+    # Parse nested configurations with defaults
+    metrics_dict = qa_dict.get("metrics", {})
+    metrics_config = MetricsConfig(
+        patient_statistics=metrics_dict.get("patient_statistics", True),
+        missing_sequences=metrics_dict.get("missing_sequences", True),
+        voxel_spacing=metrics_dict.get("voxel_spacing", True),
+        intensity_statistics=metrics_dict.get("intensity_statistics", True),
+        image_dimensions=metrics_dict.get("image_dimensions", True),
+        acquisition_consistency=metrics_dict.get("acquisition_consistency", True),
+        snr_estimation=metrics_dict.get("snr_estimation", True),
+    )
+
+    outlier_dict = qa_dict.get("outlier_detection", {})
+    outlier_config = OutlierDetectionConfig(
+        enabled=outlier_dict.get("enabled", True),
+        method=outlier_dict.get("method", "iqr"),
+        iqr_multiplier=outlier_dict.get("iqr_multiplier", 1.5),
+        zscore_threshold=outlier_dict.get("zscore_threshold", 3.0),
+    )
+
+    parallel_dict = qa_dict.get("parallel", {})
+    n_workers = parallel_dict.get("n_workers")
+    if n_workers == -1:
+        n_workers = None
+    parallel_config = ParallelConfig(
+        enabled=parallel_dict.get("enabled", True), n_workers=n_workers
+    )
+
+    # Parse visualization configuration
+    viz_dict = qa_dict.get("visualization", {})
+    plots_dict = viz_dict.get("plots", {})
+    plot_config = PlotConfig(
+        studies_per_patient_histogram=plots_dict.get(
+            "studies_per_patient_histogram", True
+        ),
+        missing_sequences_heatmap=plots_dict.get("missing_sequences_heatmap", True),
+        spacing_violin_plots=plots_dict.get("spacing_violin_plots", True),
+        intensity_boxplots=plots_dict.get("intensity_boxplots", True),
+        dimension_consistency_scatter=plots_dict.get(
+            "dimension_consistency_scatter", True
+        ),
+        snr_distribution=plots_dict.get("snr_distribution", True),
+    )
+
+    figure_dict = viz_dict.get("figure", {})
+    figure_config = FigureConfig(
+        dpi=figure_dict.get("dpi", 150),
+        format=figure_dict.get("format", "png"),
+        width=figure_dict.get("width", 10.0),
+        height=figure_dict.get("height", 6.0),
+    )
+
+    html_dict = viz_dict.get("html_report", {})
+    html_config = HtmlReportConfig(
+        enabled=html_dict.get("enabled", True),
+        title=html_dict.get("title", "MenGrowth Dataset Quality Analysis"),
+        include_summary_tables=html_dict.get("include_summary_tables", True),
+        include_all_plots=html_dict.get("include_all_plots", True),
+    )
+
+    visualization_config = VisualizationConfig(
+        enabled=viz_dict.get("enabled", True),
+        plots=plot_config,
+        figure=figure_config,
+        palette=viz_dict.get("palette", "Set2"),
+        html_report=html_config,
+    )
+
+    # Parse output configuration
+    output_dict = qa_dict.get("output", {})
+    output_config = OutputConfig(
+        save_per_study_csv=output_dict.get("save_per_study_csv", True),
+        save_per_patient_csv=output_dict.get("save_per_patient_csv", True),
+        save_intensity_distributions_npz=output_dict.get(
+            "save_intensity_distributions_npz", True
+        ),
+        save_summary_json=output_dict.get("save_summary_json", True),
+        save_metadata=output_dict.get("save_metadata", True),
+    )
+
+    # Create main configuration
+    return QualityAnalysisConfig(
+        input_dir=Path(qa_dict["input_dir"]),
+        output_dir=Path(qa_dict["output_dir"]),
+        file_format=qa_dict.get("file_format", "auto"),
+        expected_sequences=qa_dict.get("expected_sequences", ["t1c", "t1n", "t2w"]),
+        metrics=metrics_config,
+        outlier_detection=outlier_config,
+        intensity_percentiles=qa_dict.get(
+            "intensity_percentiles", [1, 5, 25, 50, 75, 95, 99]
+        ),
+        parallel=parallel_config,
+        visualization=visualization_config,
+        output=output_config,
+        verbose=qa_dict.get("verbose", False),
+        dry_run=qa_dict.get("dry_run", False),
+    )
