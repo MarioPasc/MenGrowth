@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Dict, Any
 import logging
 
-from mengrowth.preprocessing.src.step0_data_harmonization.base import BasePreprocessingStep
+from mengrowth.preprocessing.src.base import BasePreprocessingStep
 
 logger = logging.getLogger(__name__)
 
