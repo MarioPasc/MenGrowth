@@ -25,13 +25,21 @@ For each study $S_i$ (time-point) of each patient, execute the following steps:
 
 3. **Resampling to Isotropic Resolution**
     - Resample the volumes to match 1x1x1 mm³ resolution. This part will leverage either interpolator or deep-learning algorithms through an easy-to-use interface.
+4. **Light per-volume normalisation (before registration).**
+   - For each modality (m), and using all in-head voxels (or a coarse brain mask if available), apply a simple robust scaling, e.g.
+      $$
+      I_m'(\mathbf{x}) = \frac{I_m(\mathbf{x}) - P_{m,,p_1}}{P_{m,,p_2} - P_{m,,p_1}},
+      $$
+      where $P_{m,,p_1}$ and $P_{m,,p_2}$ are, for instance, the 0.5th and 99.5th percentiles of in-head intensities. This maps intensities into a comparable dynamic range across scans, while preserving monotonicity and tissue ordering. This step is cheap, monotonic, and primarily serves to:
+      * reduce the influence of outliers on MI/NMI;
+      * stabilise the joint histograms across scanners and time-points.
 
-4. **Intra-study rigid registration to T1c (native space)**  
+5. **Intra-study rigid registration to T1c (native space)**  
    - Choose T1c as the reference modality due to typically higher resolution and tumour-contrast. (but could be tunable in the `configs/preprocessing.yaml` file) 
    - Register T1n → T1c, T2w → T1c, T2-FLAIR → T1c using rigid (6 d.o.f) transform with mutual-information metric (parameters tunable in the `configs/preprocessing.yaml` file, but we only contemplate rigid registration).  
    - Store transform matrices (artifacts folder).
 
-5. **Transform into atlas space + resample to 1 mm³ isotropic**  
+6. **Transform into atlas space + resample to 1 mm³ isotropic**  
    - Register T1c (native) → SRI24-atlas (or chosen standard) with a rigid/affine transform (ATLAS path tunable in the `configs/preprocessing.yaml`).  
    - For each other modality, compute composed transform:  
      $$
@@ -39,29 +47,41 @@ For each study $S_i$ (time-point) of each patient, execute the following steps:
      $$  
    - Ensures uniform geometry across subjects and studies.
 
-6. **Skull-stripping in atlas space + mask propagation**  
+7. **Skull-stripping in atlas space + mask propagation**  
    - On the resampled T1c in atlas space (or not T1C, but the reference modality set in the `configs/preprocessing.yaml` file), apply a skull-stripping algorithm to extract intracranial brain mask.  
    - Propagate this mask to T1n, T2w, T2-FLAIR of the same study.  
    - Set voxels outside brain mask to zero.
+   - At this point we have geometry harmonised and brain-extracted, with only a *light* per-volume scaling having influenced the registration.
 
-7. **Intensity normalisation (multi-modal)**  
-   - For each modality $m$, apply a two-step normalisation:  
-     a) Global inter-subject scale normalisation (e.g., Nyúl or WhiteStripe) using training-set landmarks.  
-     b) Per-volume robust z-score normalisation (using brain-mask voxels, clipping e.g. at 0.5–99.5 percentiles).  
-   - Produce harmonised intensity volumes ready for downstream processing.
+8. **Intensity normalisation (multi-modal)**  
+   - Per study (S_i), now in atlas space and brain-only:
+      1. Global inter-subject intensity standardisation (Nyúl/WhiteStripe). For each modality (m), apply Nyúl-style standardisation or WhiteStripe-based mapping using landmarks learned from a training cohort, so that similar tissues (e.g. NAWM, CSF) occupy similar positions in the intensity scale across subjects and sites.([PubMed][1])
+      2. Per-volume robust z-score normalisation. Within the brain mask, compute robust mean and standard deviation (e.g. after clipping at 0.5–99.5% percentiles) and map
+      $$
+      \tilde{I}_m(\mathbf{x}) = \frac{I_m^{\text{std}}(\mathbf{x}) - \mu_m}{\sigma_m}.
+      $$
+
+
+This ordering is aligned with many multi-centre pipelines where images are first bias-corrected and registered to a standard space, and only then undergo intensity normalisation and harmonisation for quantitative analysis.([PubMed Central][4])
 
 ---
 
 ## Longitudinal alignment pipeline  
 For each patient with baseline study $S_0$ and follow-up studies $S_i$ ($i\ge1$):
 
-7. **Longitudinal registration (atlas space)**  
+8. **Longitudinal registration (atlas space)**  
    - Using the T1c volumes of each follow-up $S_i$ and baseline $S_0$ (both in atlas space), compute a rigid or affine (optionally deformable) transform  
      $$
        T^{\mathrm{long}}_{S_i\to S_0}: T1c_{S_i} \to T1c_{S_0}
      $$  
    - Apply $T^{\mathrm{long}}_{S_i\to S_0}$ to the follow-up T1n, T2w, T2-FLAIR and any tumour/tissue/mask volumes of $S_i$.  
    - As result, all time-points are aligned to the baseline T1c geometry.
+
+Longitudinal registration will operate on the fully standardised $\tilde{I}_m$ volumes, since we want maximum robustness to scanner changes between time-points. Leveraging the *fully standardised* atlas-space T1c for estimating the longitudinal transform
+$$
+T^{\text{long}}*{S_i \to S_0}: \ T1c*{S_i} \to T1c_{S_0},
+$$
+reduces the chance that differences in scanner protocol are mistaken for anatomical changes. This is conceptually similar to using intensity standardisation to improve longitudinal atrophy quantification, as explored for SIENA-like pipelines.([MDPI][6])
 
 ---
 
@@ -72,12 +92,10 @@ For each patient with baseline study $S_0$ and follow-up studies $S_i$ ($i\ge1$)
 - If any step can log metadata about the quality of it, it should store it in `artifacts/` folder specified in `configs/preprocessing.yaml`
 - All steps must be robust to variations in scanner, vendor, sequence parameters.
 
----
 
-## References  
-- Bielak et al., “Impact of image preprocessing methods on reproducibility of radiomics” Med. Phys., 2020.  
-- Dorfner F.J. et al., “A review of deep learning for brain tumour analysis in MRI” npj Precision Oncology, 2025.  
-- PREDICT-GBM: “Platform for Robust Evaluation and Development of Individualized Computational Tumor Models in Glioblastoma” arXiv 2025. 
-
----
-
+[1]: https://pubmed.ncbi.nlm.nih.gov/10571928/?utm_source=chatgpt.com "On standardizing the MR image intensity scale - PubMed - NIH"
+[2]: https://ulasbagci.files.wordpress.com/2010/11/printed_prl_effectofintnsitystandardization-0-s0167865509002384-m.pdf?utm_source=chatgpt.com "The role of intensity standardization in medical image registration"
+[3]: https://pmc.ncbi.nlm.nih.gov/articles/PMC4215426/?utm_source=chatgpt.com "Statistical normalization techniques for magnetic ..."
+[4]: https://pmc.ncbi.nlm.nih.gov/articles/PMC6758567/?utm_source=chatgpt.com "Evaluating the Impact of Intensity Normalization on MR ..."
+[5]: https://esmed.org/MRA/bme/article/download/1550/1255/?utm_source=chatgpt.com "A Review of Methods for Bias Correction in Medical Images"
+[6]: https://www.mdpi.com/2076-3417/11/4/1773?utm_source=chatgpt.com "Evaluating the Effect of Intensity Standardisation on ..."
