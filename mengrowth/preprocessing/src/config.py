@@ -215,6 +215,70 @@ class Step1BiasFieldCorrectionConfig:
 
 
 @dataclass
+class ResamplingConfig:
+    """Configuration for resampling to isotropic resolution.
+
+    Attributes:
+        method: Resampling method ("bspline" or None to skip)
+        target_voxel_size: Target voxel size in mm [x, y, z]
+        bspline_order: BSpline interpolation order [0-5] (used if method=="bspline")
+                       0: nearest neighbor, 1: linear, 3: cubic (recommended)
+    """
+    method: Optional[Literal["bspline"]] = "bspline"
+    target_voxel_size: List[float] = field(default_factory=lambda: [1.0, 1.0, 1.0])
+    bspline_order: int = 3
+
+    def __post_init__(self) -> None:
+        """Validate configuration values."""
+        # Validate method
+        if self.method is not None and self.method != "bspline":
+            raise ConfigurationError(
+                f"method must be None or 'bspline', got {self.method}"
+            )
+
+        # Skip validation if method is None (resampling disabled)
+        if self.method is None:
+            return
+
+        # Validate target_voxel_size
+        if not isinstance(self.target_voxel_size, list):
+            raise ConfigurationError(
+                f"target_voxel_size must be a list, got {type(self.target_voxel_size)}"
+            )
+        if len(self.target_voxel_size) != 3:
+            raise ConfigurationError(
+                f"target_voxel_size must have exactly 3 elements [x, y, z], got {len(self.target_voxel_size)}"
+            )
+        if any(size <= 0 for size in self.target_voxel_size):
+            raise ConfigurationError(
+                f"All target_voxel_size values must be > 0, got {self.target_voxel_size}"
+            )
+
+        # Validate bspline_order
+        if not isinstance(self.bspline_order, int) or not (0 <= self.bspline_order <= 5):
+            raise ConfigurationError(
+                f"bspline_order must be an integer in [0, 5], got {self.bspline_order}"
+            )
+
+
+@dataclass
+class Step2ResamplingConfig:
+    """Configuration for Step 2: Resampling to isotropic resolution.
+
+    Attributes:
+        save_visualization: Whether to save visualization outputs for this step
+        resampling: Configuration for resampling method
+    """
+    save_visualization: bool = True
+    resampling: ResamplingConfig = field(default_factory=ResamplingConfig)
+
+    def __post_init__(self) -> None:
+        """Ensure resampling is a ResamplingConfig instance."""
+        if isinstance(self.resampling, dict):
+            self.resampling = ResamplingConfig(**self.resampling)
+
+
+@dataclass
 class DataHarmonizationConfig:
     """Configuration for the data harmonization preprocessing stage.
 
@@ -231,6 +295,7 @@ class DataHarmonizationConfig:
         modalities: List of modalities to process
         step0_data_harmonization: Configuration for harmonization operations
         step1_bias_field_correction: Configuration for bias field correction
+        step2_resampling: Configuration for resampling to isotropic resolution
     """
     enabled: bool = True
     patient_selector: Literal["single", "all"] = "single"
@@ -248,6 +313,9 @@ class DataHarmonizationConfig:
     step1_bias_field_correction: Step1BiasFieldCorrectionConfig = field(
         default_factory=Step1BiasFieldCorrectionConfig
     )
+    step2_resampling: Step2ResamplingConfig = field(
+        default_factory=Step2ResamplingConfig
+    )
 
     def __post_init__(self) -> None:
         """Validate configuration and convert paths."""
@@ -261,6 +329,12 @@ class DataHarmonizationConfig:
         if isinstance(self.step1_bias_field_correction, dict):
             self.step1_bias_field_correction = Step1BiasFieldCorrectionConfig(
                 **self.step1_bias_field_correction
+            )
+
+        # Ensure step2 is a dataclass instance
+        if isinstance(self.step2_resampling, dict):
+            self.step2_resampling = Step2ResamplingConfig(
+                **self.step2_resampling
             )
 
         # Validate dataset_root

@@ -53,3 +53,10 @@ preprocessing:
           max_iterations: [50, 50, 50, 50] # Iterations per resolution level (4 levels)
           bias_field_fwhm: 0.15            # Gaussian smoothing FWHM [0.01-1.0], higher=smoother field
           convergence_threshold: 0.001     # Early stopping threshold (0.0-1.0)
+
+    step2_resampling:
+        save_visualization: true # Save visualization for resampling step, we must see axial, sagittal, and coronal views
+        resampling:
+          method: "bspline"                   # "bspline" | null (null to skip)
+          target_voxel_size: [1.0, 1.0, 1.0]  # in mm (isotropic)
+          bspline_order: 3                    # if method == "bspline", order [0-5]

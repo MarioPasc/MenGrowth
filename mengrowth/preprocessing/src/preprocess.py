@@ -9,11 +9,12 @@ from typing import List, Optional, Union
 import logging
 
 from mengrowth.preprocessing.src.config import PreprocessingPipelineConfig, DataHarmonizationConfig
-from mengrowth.preprocessing.src.data_harmonization.io import NRRDtoNIfTIConverter
-from mengrowth.preprocessing.src.data_harmonization.orient import Reorienter
-from mengrowth.preprocessing.src.data_harmonization.head_masking.conservative import ConservativeBackgroundRemover
-from mengrowth.preprocessing.src.data_harmonization.head_masking.self import SELFBackgroundRemover
-from mengrowth.preprocessing.src.bias_field_correction.n4_sitk import N4BiasFieldCorrector
+from mengrowth.preprocessing.src.step0_data_harmonization.io import NRRDtoNIfTIConverter
+from mengrowth.preprocessing.src.step0_data_harmonization.orient import Reorienter
+from mengrowth.preprocessing.src.step0_data_harmonization.head_masking.conservative import ConservativeBackgroundRemover
+from mengrowth.preprocessing.src.step0_data_harmonization.head_masking.self import SELFBackgroundRemover
+from mengrowth.preprocessing.src.step1_bias_field_correction.n4_sitk import N4BiasFieldCorrector
+from mengrowth.preprocessing.src.step2_resampling.bspline import BSplineResampler
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +91,27 @@ class PreprocessingOrchestrator:
         else:
             raise ValueError(
                 f"Unknown bias field correction method: {bf_method}. Must be None or 'n4'"
+            )
+
+        # Select resampling algorithm based on method
+        resample_method = config.step2_resampling.resampling.method
+        if resample_method is None:
+            self.resampler = None
+            self.logger.info("Preprocessing orchestrator initialized with resampling disabled")
+        elif resample_method == "bspline":
+            # Convert ResamplingConfig to dictionary for initializer
+            resample_config_dict = {
+                "bspline_order": config.step2_resampling.resampling.bspline_order,
+            }
+            self.resampler = BSplineResampler(
+                target_voxel_size=config.step2_resampling.resampling.target_voxel_size,
+                config=resample_config_dict,
+                verbose=verbose
+            )
+            self.logger.info(f"Preprocessing orchestrator initialized with resampling method: {resample_method}")
+        else:
+            raise ValueError(
+                f"Unknown resampling method: {resample_method}. Must be None or 'bspline'"
             )
 
     def _get_study_directories(self, patient_id: str) -> List[Path]:
@@ -174,11 +196,13 @@ class PreprocessingOrchestrator:
             "reoriented": output_base / f"{modality}.nii.gz",  # Same file, in-place
             "masked": output_base / f"{modality}.nii.gz",  # Same file, in-place
             "bias_corrected": output_base / f"{modality}.nii.gz",  # Same file, in-place
+            "resampled": output_base / f"{modality}.nii.gz",  # Same file, in-place
             "bias_field": artifacts_base / f"{modality}_bias_field.nii.gz",  # Artifact: bias field
             "viz_convert": viz_base / f"step0_convert_{modality}.png",
             "viz_reorient": viz_base / f"step0_reorient_{modality}.png",
             "viz_background": viz_base / f"step0_background_{modality}.png",
             "viz_bias_field": viz_base / f"step1_bias_field_{modality}.png",
+            "viz_resampling": viz_base / f"step2_resampling_{modality}.png",
         }
 
     def run_patient(self, patient_id: str) -> None:
@@ -237,9 +261,9 @@ class PreprocessingOrchestrator:
                             total_skipped += 1
                             continue
 
-                    # Determine total steps (Step 0: convert + reorient + background, Step 1: bias field)
+                    # Determine total steps (Step 0: convert + reorient + background, Step 1: bias field, Step 2: resampling)
                     step0_substeps = 2 if self.background_remover is None else 3
-                    total_steps = step0_substeps + (1 if self.bias_corrector is not None else 0)
+                    total_steps = step0_substeps + (1 if self.bias_corrector is not None else 0) + (1 if self.resampler is not None else 0)
 
                     # Step 0.1: NRRD -> NIfTI
                     self.logger.info(f"    [1/{total_steps}] Converting NRRD to NIfTI...")
@@ -304,7 +328,7 @@ class PreprocessingOrchestrator:
 
                     # Step 1: Bias field correction (in-place) - only if enabled
                     if self.bias_corrector is not None:
-                        step_num = total_steps
+                        step_num = step0_substeps + 1
                         self.logger.info(f"    [{step_num}/{total_steps}] Applying N4 bias field correction...")
                         temp_corrected = paths["bias_corrected"].parent / f"_temp_{modality}_bias_corrected.nii.gz"
 
@@ -346,6 +370,35 @@ class PreprocessingOrchestrator:
                                 self.logger.debug("    Temporary bias field artifact deleted")
                     else:
                         self.logger.info("    [Bias field correction skipped - method is None]")
+
+                    # Step 2: Resampling (in-place) - only if enabled
+                    if self.resampler is not None:
+                        step_num = total_steps
+                        self.logger.info(f"    [{step_num}/{total_steps}] Resampling to isotropic resolution...")
+                        temp_resampled = paths["resampled"].parent / f"_temp_{modality}_resampled.nii.gz"
+
+                        # Execute resampling and get results
+                        resample_result = self.resampler.execute(
+                            paths["nifti"],
+                            temp_resampled,
+                            allow_overwrite=True
+                        )
+
+                        if self.config.step2_resampling.save_visualization:
+                            self.resampler.visualize(
+                                paths["nifti"],
+                                temp_resampled,
+                                paths["viz_resampling"],
+                                original_spacing=resample_result["original_spacing"],
+                                target_spacing=resample_result["target_spacing"],
+                                original_shape=resample_result["original_shape"],
+                                resampled_shape=resample_result["resampled_shape"]
+                            )
+
+                        # Replace with resampled version
+                        temp_resampled.replace(paths["nifti"])
+                    else:
+                        self.logger.info("    [Resampling skipped - method is None]")
 
                     self.logger.info(f"    Successfully processed {modality}")
                     total_processed += 1

@@ -22,7 +22,7 @@ import nibabel as nib
 import numpy as np
 from scipy.ndimage import binary_erosion, generate_binary_structure
 
-from mengrowth.preprocessing.src.data_harmonization.base import BaseBackgroundRemover
+from mengrowth.preprocessing.src.step0_data_harmonization.base import BaseBackgroundRemover
 from mengrowth.preprocessing.src.config import BackgroundZeroingConfig
 from mengrowth.preprocessing.src.utils.head_mask import compute_brain_mask
 
