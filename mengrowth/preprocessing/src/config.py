@@ -6,7 +6,7 @@ including data harmonization, normalization, and other preprocessing steps.
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, List
+from typing import Literal, List, Optional
 import yaml
 import logging
 
@@ -22,12 +22,13 @@ class ConfigurationError(Exception):
 class BackgroundZeroingConfig:
     """Configuration for background removal.
 
-    Supports two methods:
+    Supports three options:
+    - None: Skip background removal entirely
     - "border_connected_percentile": Conservative percentile-based approach
     - "self_head_mask": SELF algorithm for head-air separation
 
     Attributes:
-        method: Background removal method
+        method: Background removal method (None to skip)
 
         # Parameters for "border_connected_percentile"
         percentile_low: Low percentile threshold for background detection [0.1-2.0]
@@ -44,7 +45,7 @@ class BackgroundZeroingConfig:
         expand_air_mask: Voxels to dilate air mask (LESS conservative - expands air) (default: 0)
         Note: Use either air_border_margin OR expand_air_mask, not both > 0
     """
-    method: Literal["border_connected_percentile", "self_head_mask"] = "border_connected_percentile"
+    method: Optional[Literal["border_connected_percentile", "self_head_mask"]] = "border_connected_percentile"
 
     # Parameters for border_connected_percentile
     percentile_low: float = 0.7
@@ -63,10 +64,14 @@ class BackgroundZeroingConfig:
     def __post_init__(self) -> None:
         """Validate configuration values."""
         # Validate method
-        if self.method not in ["border_connected_percentile", "self_head_mask"]:
+        if self.method is not None and self.method not in ["border_connected_percentile", "self_head_mask"]:
             raise ConfigurationError(
-                f"method must be 'border_connected_percentile' or 'self_head_mask', got {self.method}"
+                f"method must be None, 'border_connected_percentile', or 'self_head_mask', got {self.method}"
             )
+
+        # Skip validation if method is None (background removal disabled)
+        if self.method is None:
+            return
 
         # Validate border_connected_percentile parameters
         if self.method == "border_connected_percentile":
@@ -110,6 +115,68 @@ class BackgroundZeroingConfig:
 
 
 @dataclass
+class BiasFieldCorrectionConfig:
+    """Configuration for N4 bias field correction.
+
+    Attributes:
+        method: Bias field correction method ("n4" or None to skip)
+        shrink_factor: Downsampling factor for computational efficiency [1-4]
+        max_iterations: Maximum iterations per resolution level (4 levels)
+        bias_field_fwhm: Full-width-at-half-maximum for Gaussian smoothing [0.15-0.5]
+        convergence_threshold: Early stopping convergence threshold
+    """
+    method: Optional[Literal["n4"]] = "n4"
+    shrink_factor: int = 4
+    max_iterations: List[int] = field(default_factory=lambda: [50, 50, 50, 50])
+    bias_field_fwhm: float = 0.15
+    convergence_threshold: float = 0.001
+
+    def __post_init__(self) -> None:
+        """Validate configuration values."""
+        # Validate method
+        if self.method is not None and self.method != "n4":
+            raise ConfigurationError(
+                f"method must be None or 'n4', got {self.method}"
+            )
+
+        # Skip validation if method is None (bias correction disabled)
+        if self.method is None:
+            return
+
+        # Validate shrink_factor
+        if not 1 <= self.shrink_factor <= 8:
+            raise ConfigurationError(
+                f"shrink_factor must be in [1, 8], got {self.shrink_factor}"
+            )
+
+        # Validate max_iterations
+        if not isinstance(self.max_iterations, list):
+            raise ConfigurationError(
+                f"max_iterations must be a list, got {type(self.max_iterations)}"
+            )
+        if len(self.max_iterations) != 4:
+            raise ConfigurationError(
+                f"max_iterations must have exactly 4 elements (one per level), got {len(self.max_iterations)}"
+            )
+        if any(iters < 1 for iters in self.max_iterations):
+            raise ConfigurationError(
+                f"All max_iterations values must be >= 1, got {self.max_iterations}"
+            )
+
+        # Validate bias_field_fwhm
+        if not 0.01 <= self.bias_field_fwhm <= 1.0:
+            raise ConfigurationError(
+                f"bias_field_fwhm must be in [0.01, 1.0], got {self.bias_field_fwhm}"
+            )
+
+        # Validate convergence_threshold
+        if not 0.0 < self.convergence_threshold < 1.0:
+            raise ConfigurationError(
+                f"convergence_threshold must be in (0.0, 1.0), got {self.convergence_threshold}"
+            )
+
+
+@dataclass
 class Step0DataHarmonizationConfig:
     """Configuration for Step 0: Data harmonization (NRRD to NIfTI, reorient, background removal).
 
@@ -129,6 +196,25 @@ class Step0DataHarmonizationConfig:
 
 
 @dataclass
+class Step1BiasFieldCorrectionConfig:
+    """Configuration for Step 1: Bias field correction.
+
+    Attributes:
+        save_visualization: Whether to save visualization outputs for this step
+        save_artifact: Whether to save bias field NIfTI to artifacts directory
+        bias_field_correction: Configuration for bias field correction method
+    """
+    save_visualization: bool = True
+    save_artifact: bool = True
+    bias_field_correction: BiasFieldCorrectionConfig = field(default_factory=BiasFieldCorrectionConfig)
+
+    def __post_init__(self) -> None:
+        """Ensure bias_field_correction is a BiasFieldCorrectionConfig instance."""
+        if isinstance(self.bias_field_correction, dict):
+            self.bias_field_correction = BiasFieldCorrectionConfig(**self.bias_field_correction)
+
+
+@dataclass
 class DataHarmonizationConfig:
     """Configuration for the data harmonization preprocessing stage.
 
@@ -139,10 +225,12 @@ class DataHarmonizationConfig:
         mode: Operating mode - "test" (separate output) or "pipeline" (in-place)
         dataset_root: Root directory of the MenGrowth dataset
         output_root: Output directory for test mode
+        preprocessing_artifacts_path: Directory for intermediate preprocessing artifacts
         viz_root: Directory for visualization outputs
         overwrite: Allow overwriting existing files
         modalities: List of modalities to process
         step0_data_harmonization: Configuration for harmonization operations
+        step1_bias_field_correction: Configuration for bias field correction
     """
     enabled: bool = True
     patient_selector: Literal["single", "all"] = "single"
@@ -150,11 +238,15 @@ class DataHarmonizationConfig:
     mode: Literal["test", "pipeline"] = "test"
     dataset_root: str = ""
     output_root: str = ""
+    preprocessing_artifacts_path: str = ""
     viz_root: str = ""
     overwrite: bool = False
     modalities: List[str] = field(default_factory=lambda: ["t1c", "t1n", "t2w", "t2f"])
     step0_data_harmonization: Step0DataHarmonizationConfig = field(
         default_factory=Step0DataHarmonizationConfig
+    )
+    step1_bias_field_correction: Step1BiasFieldCorrectionConfig = field(
+        default_factory=Step1BiasFieldCorrectionConfig
     )
 
     def __post_init__(self) -> None:
@@ -163,6 +255,12 @@ class DataHarmonizationConfig:
         if isinstance(self.step0_data_harmonization, dict):
             self.step0_data_harmonization = Step0DataHarmonizationConfig(
                 **self.step0_data_harmonization
+            )
+
+        # Ensure step1 is a dataclass instance
+        if isinstance(self.step1_bias_field_correction, dict):
+            self.step1_bias_field_correction = Step1BiasFieldCorrectionConfig(
+                **self.step1_bias_field_correction
             )
 
         # Validate dataset_root
@@ -185,6 +283,10 @@ class DataHarmonizationConfig:
         # Validate viz_root
         if not self.viz_root:
             raise ConfigurationError("viz_root must be specified")
+
+        # Validate preprocessing_artifacts_path
+        if not self.preprocessing_artifacts_path:
+            raise ConfigurationError("preprocessing_artifacts_path must be specified")
 
         # Validate patient_id for single mode
         if self.patient_selector == "single" and not self.patient_id:

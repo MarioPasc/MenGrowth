@@ -5,7 +5,7 @@ managing file paths, mode semantics, and visualization outputs.
 """
 
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Union
 import logging
 
 from mengrowth.preprocessing.src.config import PreprocessingPipelineConfig, DataHarmonizationConfig
@@ -13,6 +13,7 @@ from mengrowth.preprocessing.src.data_harmonization.io import NRRDtoNIfTIConvert
 from mengrowth.preprocessing.src.data_harmonization.orient import Reorienter
 from mengrowth.preprocessing.src.data_harmonization.head_masking.conservative import ConservativeBackgroundRemover
 from mengrowth.preprocessing.src.data_harmonization.head_masking.self import SELFBackgroundRemover
+from mengrowth.preprocessing.src.bias_field_correction.n4_sitk import N4BiasFieldCorrector
 
 logger = logging.getLogger(__name__)
 
@@ -47,23 +48,49 @@ class PreprocessingOrchestrator:
 
         # Select background removal algorithm based on method
         bg_method = config.step0_data_harmonization.background_zeroing.method
-        if bg_method == "border_connected_percentile":
+        if bg_method is None:
+            self.background_remover = None
+            self.logger.info("Preprocessing orchestrator initialized with background removal disabled")
+        elif bg_method == "border_connected_percentile":
             self.background_remover = ConservativeBackgroundRemover(
                 config=config.step0_data_harmonization.background_zeroing,
                 verbose=verbose
             )
+            self.logger.info(f"Preprocessing orchestrator initialized with background method: {bg_method}")
         elif bg_method == "self_head_mask":
             self.background_remover = SELFBackgroundRemover(
                 config=config.step0_data_harmonization.background_zeroing,
                 verbose=verbose
             )
+            self.logger.info(f"Preprocessing orchestrator initialized with background method: {bg_method}")
         else:
             raise ValueError(
                 f"Unknown background removal method: {bg_method}. "
-                "Must be 'border_connected_percentile' or 'self_head_mask'"
+                "Must be None, 'border_connected_percentile', or 'self_head_mask'"
             )
 
-        self.logger.info(f"Preprocessing orchestrator initialized with background method: {bg_method}")
+        # Select bias field correction algorithm based on method
+        bf_method = config.step1_bias_field_correction.bias_field_correction.method
+        if bf_method is None:
+            self.bias_corrector = None
+            self.logger.info("Preprocessing orchestrator initialized with bias field correction disabled")
+        elif bf_method == "n4":
+            # Convert BiasFieldCorrectionConfig to dictionary for initializer
+            bf_config_dict = {
+                "shrink_factor": config.step1_bias_field_correction.bias_field_correction.shrink_factor,
+                "max_iterations": config.step1_bias_field_correction.bias_field_correction.max_iterations,
+                "bias_field_fwhm": config.step1_bias_field_correction.bias_field_correction.bias_field_fwhm,
+                "convergence_threshold": config.step1_bias_field_correction.bias_field_correction.convergence_threshold,
+            }
+            self.bias_corrector = N4BiasFieldCorrector(
+                config=bf_config_dict,
+                verbose=verbose
+            )
+            self.logger.info(f"Preprocessing orchestrator initialized with bias correction method: {bf_method}")
+        else:
+            raise ValueError(
+                f"Unknown bias field correction method: {bf_method}. Must be None or 'n4'"
+            )
 
     def _get_study_directories(self, patient_id: str) -> List[Path]:
         """Get list of study directories for a patient.
@@ -130,22 +157,28 @@ class PreprocessingOrchestrator:
             # Test mode: write to separate output directory
             output_base = Path(self.config.output_root) / patient_id / study_name
             viz_base = Path(self.config.viz_root) / patient_id / study_name
+            artifacts_base = Path(self.config.preprocessing_artifacts_path) / patient_id / study_name
         else:
             # Pipeline mode: write in-place
             output_base = study_dir
             viz_base = Path(self.config.viz_root) / patient_id / study_name
+            artifacts_base = Path(self.config.preprocessing_artifacts_path) / patient_id / study_name
 
         # Ensure directories exist
         output_base.mkdir(parents=True, exist_ok=True)
         viz_base.mkdir(parents=True, exist_ok=True)
+        artifacts_base.mkdir(parents=True, exist_ok=True)
 
         return {
             "nifti": output_base / f"{modality}.nii.gz",
             "reoriented": output_base / f"{modality}.nii.gz",  # Same file, in-place
             "masked": output_base / f"{modality}.nii.gz",  # Same file, in-place
+            "bias_corrected": output_base / f"{modality}.nii.gz",  # Same file, in-place
+            "bias_field": artifacts_base / f"{modality}_bias_field.nii.gz",  # Artifact: bias field
             "viz_convert": viz_base / f"step0_convert_{modality}.png",
             "viz_reorient": viz_base / f"step0_reorient_{modality}.png",
             "viz_background": viz_base / f"step0_background_{modality}.png",
+            "viz_bias_field": viz_base / f"step1_bias_field_{modality}.png",
         }
 
     def run_patient(self, patient_id: str) -> None:
@@ -204,8 +237,12 @@ class PreprocessingOrchestrator:
                             total_skipped += 1
                             continue
 
-                    # Step 1: NRRD -> NIfTI
-                    self.logger.info("    [1/3] Converting NRRD to NIfTI...")
+                    # Determine total steps (Step 0: convert + reorient + background, Step 1: bias field)
+                    step0_substeps = 2 if self.background_remover is None else 3
+                    total_steps = step0_substeps + (1 if self.bias_corrector is not None else 0)
+
+                    # Step 0.1: NRRD -> NIfTI
+                    self.logger.info(f"    [1/{total_steps}] Converting NRRD to NIfTI...")
                     self.converter.execute(
                         input_file,
                         paths["nifti"],
@@ -219,9 +256,9 @@ class PreprocessingOrchestrator:
                             paths["viz_convert"]
                         )
 
-                    # Step 2: Reorient (in-place)
+                    # Step 0.2: Reorient (in-place)
                     self.logger.info(
-                        f"    [2/3] Reorienting to {self.config.step0_data_harmonization.reorient_to}..."
+                        f"    [2/{total_steps}] Reorienting to {self.config.step0_data_harmonization.reorient_to}..."
                     )
                     # Create temp path for reorientation
                     temp_reoriented = paths["reoriented"].parent / f"_temp_{modality}_reoriented.nii.gz"
@@ -242,25 +279,73 @@ class PreprocessingOrchestrator:
                     # Replace original with reoriented
                     temp_reoriented.replace(paths["nifti"])
 
-                    # Step 3: Background removal (in-place)
-                    self.logger.info("    [3/3] Removing background...")
-                    temp_masked = paths["masked"].parent / f"_temp_{modality}_masked.nii.gz"
+                    # Step 0.3: Background removal (in-place) - only if enabled
+                    if self.background_remover is not None:
+                        self.logger.info(f"    [3/{total_steps}] Removing background...")
+                        temp_masked = paths["masked"].parent / f"_temp_{modality}_masked.nii.gz"
 
-                    self.background_remover.execute(
-                        paths["nifti"],
-                        temp_masked,
-                        allow_overwrite=True
-                    )
-
-                    if self.config.step0_data_harmonization.save_visualization:
-                        self.background_remover.visualize(
+                        self.background_remover.execute(
                             paths["nifti"],
                             temp_masked,
-                            paths["viz_background"]
+                            allow_overwrite=True
                         )
 
-                    # Replace with masked version
-                    temp_masked.replace(paths["nifti"])
+                        if self.config.step0_data_harmonization.save_visualization:
+                            self.background_remover.visualize(
+                                paths["nifti"],
+                                temp_masked,
+                                paths["viz_background"]
+                            )
+
+                        # Replace with masked version
+                        temp_masked.replace(paths["nifti"])
+                    else:
+                        self.logger.info("    [Background removal skipped - method is None]")
+
+                    # Step 1: Bias field correction (in-place) - only if enabled
+                    if self.bias_corrector is not None:
+                        step_num = total_steps
+                        self.logger.info(f"    [{step_num}/{total_steps}] Applying N4 bias field correction...")
+                        temp_corrected = paths["bias_corrected"].parent / f"_temp_{modality}_bias_corrected.nii.gz"
+
+                        # Determine where to save bias field artifact
+                        if self.config.step1_bias_field_correction.save_artifact:
+                            bias_field_path = paths["bias_field"]
+                            self.logger.debug(f"    Saving bias field artifact to: {bias_field_path}")
+                        else:
+                            # Use temporary file that will be deleted
+                            import tempfile
+                            temp_dir = Path(tempfile.gettempdir())
+                            bias_field_path = temp_dir / f"_temp_{modality}_bias_field.nii.gz"
+                            self.logger.debug("    Bias field artifact will not be saved (save_artifact=False)")
+
+                        # Execute bias correction and get results
+                        result = self.bias_corrector.execute(
+                            paths["nifti"],
+                            temp_corrected,
+                            allow_overwrite=True,
+                            bias_field_output_path=bias_field_path
+                        )
+
+                        if self.config.step1_bias_field_correction.save_visualization:
+                            self.bias_corrector.visualize(
+                                paths["nifti"],
+                                temp_corrected,
+                                paths["viz_bias_field"],
+                                bias_field_path=result["bias_field_path"],
+                                convergence_data=result["convergence_data"]
+                            )
+
+                        # Replace with bias-corrected version
+                        temp_corrected.replace(paths["nifti"])
+
+                        # Clean up temporary bias field if not saving
+                        if not self.config.step1_bias_field_correction.save_artifact:
+                            if result["bias_field_path"].exists():
+                                result["bias_field_path"].unlink()
+                                self.logger.debug("    Temporary bias field artifact deleted")
+                    else:
+                        self.logger.info("    [Bias field correction skipped - method is None]")
 
                     self.logger.info(f"    Successfully processed {modality}")
                     total_processed += 1

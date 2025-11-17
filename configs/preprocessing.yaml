@@ -9,8 +9,9 @@ preprocessing:
     # I/O mode
     mode: "test"                       # "test" | "pipeline"
     dataset_root: "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/raw/MenGrowth-2025"
-    output_root: "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/raw/preprocessed"     # used in test mode
-    viz_root: "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/viz"              # quick-looks for both modes
+    output_root: "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/preprocessed/MenGrowth-2025"     # used in test mode
+    preprocessing_artifacts_path: "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/preprocessed/artifacts"  # intermediate artifacts
+    viz_root: "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/preprocessed/viz"              # quick-looks for both modes
     overwrite: true                                                   # guard rails
 
     # Modalities to include (if present in a study directory)
@@ -24,8 +25,8 @@ preprocessing:
 
         # Background zeroing (conservative)
         background_zeroing:
-          method: "border_connected_percentile" # check with "self_head_mask" too
-          
+          method: null # "border_connected_percentile" | "self_head_mask" | null
+
           # if method == "border_connected_percentile"
           percentile_low: 2              # [0.1-2.0], conservative default
           gaussian_sigma: 0.5              # smoothing before thresholding (vox)
@@ -40,3 +41,15 @@ preprocessing:
           air_border_margin: 0             # voxels to erode the air mask (MORE conservative - shrinks air region)
           expand_air_mask: 3               # voxels to dilate the air mask (LESS conservative - expands air region)
           # Note: Use EITHER air_border_margin OR expand_air_mask, not both > 0
+
+    step1_bias_field_correction:
+        save_visualization: true # Save visualization for bias field correction
+        save_artifact: true      # Save bias field NIfTI to artifacts directory
+
+        # Bias field correction parameters
+        bias_field_correction:
+          method: "n4"                     # "n4" | null (null to skip)
+          shrink_factor: 4                 # Downsampling factor [1-8], higher=faster but coarser
+          max_iterations: [50, 50, 50, 50] # Iterations per resolution level (4 levels)
+          bias_field_fwhm: 0.15            # Gaussian smoothing FWHM [0.01-1.0], higher=smoother field
+          convergence_threshold: 0.001     # Early stopping threshold (0.0-1.0)
