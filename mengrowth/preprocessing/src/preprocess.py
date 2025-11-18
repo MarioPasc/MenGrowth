@@ -14,6 +14,9 @@ from mengrowth.preprocessing.src.data_harmonization.orient import Reorienter
 from mengrowth.preprocessing.src.data_harmonization.head_masking.conservative import ConservativeBackgroundRemover
 from mengrowth.preprocessing.src.data_harmonization.head_masking.self import SELFBackgroundRemover
 from mengrowth.preprocessing.src.bias_field_correction.n4_sitk import N4BiasFieldCorrector
+from mengrowth.preprocessing.src.normalization.zscore import ZScoreNormalizer
+from mengrowth.preprocessing.src.normalization.kde import KDENormalizer
+from mengrowth.preprocessing.src.normalization.percentile_minmax import PercentileMinMaxNormalizer
 from mengrowth.preprocessing.src.resampling.bspline import BSplineResampler
 from mengrowth.preprocessing.src.resampling.eclare import EclareResampler
 
@@ -92,6 +95,48 @@ class PreprocessingOrchestrator:
         else:
             raise ValueError(
                 f"Unknown bias field correction method: {bf_method}. Must be None or 'n4'"
+            )
+
+        # Select normalization algorithm based on method (applied before resampling)
+        norm_method = config.step2_resampling.resampling.normalize_method
+        if norm_method is None:
+            self.normalizer = None
+            self.logger.info("Preprocessing orchestrator initialized with normalization disabled")
+        elif norm_method == "zscore":
+            # Convert config to dictionary for initializer
+            norm_config_dict = {
+                "norm_value": config.step2_resampling.resampling.norm_value,
+            }
+            self.normalizer = ZScoreNormalizer(
+                config=norm_config_dict,
+                verbose=verbose
+            )
+            self.logger.info(f"Preprocessing orchestrator initialized with normalization method: {norm_method}")
+        elif norm_method == "kde":
+            # Convert config to dictionary for initializer
+            norm_config_dict = {
+                "norm_value": config.step2_resampling.resampling.norm_value,
+            }
+            self.normalizer = KDENormalizer(
+                config=norm_config_dict,
+                verbose=verbose
+            )
+            self.logger.info(f"Preprocessing orchestrator initialized with normalization method: {norm_method}")
+        elif norm_method == "percentile_minmax":
+            # Convert config to dictionary for initializer
+            norm_config_dict = {
+                "p1": config.step2_resampling.resampling.p1,
+                "p2": config.step2_resampling.resampling.p2,
+            }
+            self.normalizer = PercentileMinMaxNormalizer(
+                config=norm_config_dict,
+                verbose=verbose
+            )
+            self.logger.info(f"Preprocessing orchestrator initialized with normalization method: {norm_method}")
+        else:
+            raise ValueError(
+                f"Unknown normalization method: {norm_method}. "
+                "Must be None, 'zscore', 'kde', or 'percentile_minmax'"
             )
 
         # Select resampling algorithm based on method
@@ -222,6 +267,210 @@ class PreprocessingOrchestrator:
             "viz_bias_field": viz_base / f"step1_bias_field_{modality}.png",
             "viz_resampling": viz_base / f"step2_resampling_{modality}.png",
         }
+
+    def _visualize_normalization_and_resampling(
+        self,
+        original_path: Path,
+        normalized_path: Path,
+        resampled_path: Path,
+        output_path: Path,
+        norm_result: dict,
+        resample_result: dict
+    ) -> None:
+        """Generate 3-row visualization: original → normalized → resampled.
+
+        Creates a comprehensive visualization showing all three stages of processing
+        when normalization is enabled before resampling. Each row shows:
+        - 3 anatomical views (axial, sagittal, coronal)
+        - 1 intensity histogram
+
+        Args:
+            original_path: Path to original image
+            normalized_path: Path to normalized image
+            resampled_path: Path to resampled image
+            output_path: Path to save visualization (PNG)
+            norm_result: Normalization metadata from normalizer.execute()
+            resample_result: Resampling metadata from resampler.execute()
+
+        Raises:
+            RuntimeError: If visualization generation fails
+        """
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        import nibabel as nib
+
+        self.logger.info(f"Generating combined normalization + resampling visualization: {output_path}")
+
+        try:
+            # Load all three images
+            original_img = nib.load(str(original_path))
+            original_data = original_img.get_fdata()
+
+            normalized_img = nib.load(str(normalized_path))
+            normalized_data = normalized_img.get_fdata()
+
+            resampled_img = nib.load(str(resampled_path))
+            resampled_data = resampled_img.get_fdata()
+
+            # Get middle slices for each view - using original image dimensions
+            # Axial (XY plane, slice along Z)
+            mid_z_orig = original_data.shape[2] // 2
+            axial_orig = original_data[:, :, mid_z_orig].T
+
+            mid_z_norm = normalized_data.shape[2] // 2
+            axial_norm = normalized_data[:, :, mid_z_norm].T
+
+            mid_z_resamp = resampled_data.shape[2] // 2
+            axial_resamp = resampled_data[:, :, mid_z_resamp].T
+
+            # Sagittal (YZ plane, slice along X)
+            mid_x_orig = original_data.shape[0] // 2
+            sagittal_orig = original_data[mid_x_orig, :, :].T
+
+            mid_x_norm = normalized_data.shape[0] // 2
+            sagittal_norm = normalized_data[mid_x_norm, :, :].T
+
+            mid_x_resamp = resampled_data.shape[0] // 2
+            sagittal_resamp = resampled_data[mid_x_resamp, :, :].T
+
+            # Coronal (XZ plane, slice along Y)
+            mid_y_orig = original_data.shape[1] // 2
+            coronal_orig = original_data[:, mid_y_orig, :].T
+
+            mid_y_norm = normalized_data.shape[1] // 2
+            coronal_norm = normalized_data[:, mid_y_norm, :].T
+
+            mid_y_resamp = resampled_data.shape[1] // 2
+            coronal_resamp = resampled_data[:, mid_y_resamp, :].T
+
+            # Create figure: 3 rows x 4 columns (3 views + 1 histogram per row)
+            fig, axes = plt.subplots(3, 4, figsize=(20, 15))
+
+            # Determine normalization method for title
+            norm_method = type(self.normalizer).__name__.replace("Normalizer", "")
+            resample_method = type(self.resampler).__name__.replace("Resampler", "")
+
+            fig.suptitle(
+                f'Normalization ({norm_method}) + Resampling ({resample_method}): {original_path.stem}',
+                fontsize=16,
+                fontweight='bold'
+            )
+
+            # Row 1: Original image
+            vmin_orig = original_data.min()
+            vmax_orig = original_data.max()
+
+            axes[0, 0].imshow(axial_orig, cmap='gray', origin='lower', vmin=vmin_orig, vmax=vmax_orig)
+            axes[0, 0].set_title('Original - Axial', fontsize=11)
+            axes[0, 0].axis('off')
+
+            axes[0, 1].imshow(sagittal_orig, cmap='gray', origin='lower', vmin=vmin_orig, vmax=vmax_orig)
+            axes[0, 1].set_title('Original - Sagittal', fontsize=11)
+            axes[0, 1].axis('off')
+
+            axes[0, 2].imshow(coronal_orig, cmap='gray', origin='lower', vmin=vmin_orig, vmax=vmax_orig)
+            axes[0, 2].set_title('Original - Coronal', fontsize=11)
+            axes[0, 2].axis('off')
+
+            # Histogram for original
+            orig_nonzero = original_data[original_data > 0]
+            axes[0, 3].hist(orig_nonzero, bins=100, alpha=0.7, color='blue', density=True)
+            axes[0, 3].set_xlabel('Intensity', fontsize=9)
+            axes[0, 3].set_ylabel('Density', fontsize=9)
+            axes[0, 3].set_title('Original Histogram', fontsize=11)
+            axes[0, 3].grid(True, alpha=0.3)
+
+            # Row 2: Normalized image
+            vmin_norm = normalized_data.min()
+            vmax_norm = normalized_data.max()
+
+            axes[1, 0].imshow(axial_norm, cmap='gray', origin='lower', vmin=vmin_norm, vmax=vmax_norm)
+            axes[1, 0].set_title('Normalized - Axial', fontsize=11)
+            axes[1, 0].axis('off')
+
+            axes[1, 1].imshow(sagittal_norm, cmap='gray', origin='lower', vmin=vmin_norm, vmax=vmax_norm)
+            axes[1, 1].set_title('Normalized - Sagittal', fontsize=11)
+            axes[1, 1].axis('off')
+
+            axes[1, 2].imshow(coronal_norm, cmap='gray', origin='lower', vmin=vmin_norm, vmax=vmax_norm)
+            axes[1, 2].set_title('Normalized - Coronal', fontsize=11)
+            axes[1, 2].axis('off')
+
+            # Histogram for normalized
+            norm_nonzero = normalized_data[normalized_data > vmin_norm]
+            axes[1, 3].hist(norm_nonzero, bins=100, alpha=0.7, color='green', density=True)
+            axes[1, 3].set_xlabel('Intensity', fontsize=9)
+            axes[1, 3].set_ylabel('Density', fontsize=9)
+            axes[1, 3].set_title('Normalized Histogram', fontsize=11)
+            axes[1, 3].grid(True, alpha=0.3)
+
+            # Row 3: Resampled image
+            vmin_resamp = resampled_data.min()
+            vmax_resamp = resampled_data.max()
+
+            axes[2, 0].imshow(axial_resamp, cmap='gray', origin='lower', vmin=vmin_resamp, vmax=vmax_resamp)
+            axes[2, 0].set_title('Resampled - Axial', fontsize=11)
+            axes[2, 0].axis('off')
+
+            axes[2, 1].imshow(sagittal_resamp, cmap='gray', origin='lower', vmin=vmin_resamp, vmax=vmax_resamp)
+            axes[2, 1].set_title('Resampled - Sagittal', fontsize=11)
+            axes[2, 1].axis('off')
+
+            axes[2, 2].imshow(coronal_resamp, cmap='gray', origin='lower', vmin=vmin_resamp, vmax=vmax_resamp)
+            axes[2, 2].set_title('Resampled - Coronal', fontsize=11)
+            axes[2, 2].axis('off')
+
+            # Histogram for resampled
+            resamp_nonzero = resampled_data[resampled_data > vmin_resamp]
+            axes[2, 3].hist(resamp_nonzero, bins=100, alpha=0.7, color='orange', density=True)
+            axes[2, 3].set_xlabel('Intensity', fontsize=9)
+            axes[2, 3].set_ylabel('Density', fontsize=9)
+            axes[2, 3].set_title('Resampled Histogram', fontsize=11)
+            axes[2, 3].grid(True, alpha=0.3)
+
+            # Add metadata text
+            # Build metadata string based on normalization method
+            norm_info = f"Normalization: {norm_method}\n"
+            if 'mean' in norm_result:
+                norm_info += f"  Mean={norm_result['mean']:.3f}, Std={norm_result['std']:.3f}\n"
+            elif 'mode' in norm_result:
+                norm_info += f"  Mode={norm_result['mode']:.3f}\n"
+            elif 'p1_value' in norm_result:
+                norm_info += f"  P{norm_result['p1_percentile']}={norm_result['p1_value']:.3f}, P{norm_result['p2_percentile']}={norm_result['p2_value']:.3f}\n"
+
+            metadata_text = (
+                f"{norm_info}\n"
+                f"Resampling: {resample_method}\n"
+                f"  Original Spacing: {resample_result['original_spacing']}\n"
+                f"  Target Spacing: {resample_result['target_spacing']}\n"
+                f"  Original Shape: {resample_result['original_shape']}\n"
+                f"  Resampled Shape: {resample_result['resampled_shape']}"
+            )
+
+            fig.text(
+                0.5, 0.01,
+                metadata_text,
+                ha='center',
+                fontsize=9,
+                family='monospace',
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5)
+            )
+
+            plt.tight_layout(rect=[0, 0.08, 1, 0.98])
+
+            # Ensure output directory exists
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Save figure
+            plt.savefig(output_path, dpi=150, bbox_inches='tight')
+            plt.close(fig)
+
+            self.logger.info(f"Visualization saved to {output_path}")
+
+        except Exception as e:
+            self.logger.error(f"Visualization generation failed: {e}")
+            raise RuntimeError(f"Visualization failed: {e}") from e
 
     def run_patient(self, patient_id: str) -> None:
         """Run preprocessing pipeline for a single patient.
@@ -389,34 +638,79 @@ class PreprocessingOrchestrator:
                     else:
                         self.logger.info("    [Bias field correction skipped - method is None]")
 
-                    # Step 2: Resampling (in-place) - only if enabled
+                    # Step 2a: Normalization (before resampling) - only if enabled
+                    norm_result = None
+                    temp_normalized = None
+                    if self.normalizer is not None:
+                        step_num = total_steps - 1 if self.resampler is not None else total_steps
+                        self.logger.info(f"    [{step_num}/{total_steps}] Applying intensity normalization...")
+                        temp_normalized = paths["resampled"].parent / f"_temp_{modality}_normalized.nii.gz"
+
+                        # Execute normalization and get results
+                        norm_result = self.normalizer.execute(
+                            paths["nifti"],
+                            temp_normalized,
+                            allow_overwrite=True
+                        )
+
+                        # Note: Visualization will be done after resampling (if both are enabled)
+                        # to show original → normalized → resampled in one figure
+
+                    # Step 2b: Resampling (in-place) - only if enabled
                     if self.resampler is not None:
                         step_num = total_steps
                         self.logger.info(f"    [{step_num}/{total_steps}] Resampling to isotropic resolution...")
                         temp_resampled = paths["resampled"].parent / f"_temp_{modality}_resampled.nii.gz"
 
+                        # Use normalized image if normalization was applied, otherwise use original
+                        input_for_resampling = temp_normalized if temp_normalized is not None else paths["nifti"]
+
                         # Execute resampling and get results
                         resample_result = self.resampler.execute(
-                            paths["nifti"],
+                            input_for_resampling,
                             temp_resampled,
                             allow_overwrite=True
                         )
 
+                        # Generate visualization
                         if self.config.step2_resampling.save_visualization:
-                            self.resampler.visualize(
-                                paths["nifti"],
-                                temp_resampled,
-                                paths["viz_resampling"],
-                                original_spacing=resample_result["original_spacing"],
-                                target_spacing=resample_result["target_spacing"],
-                                original_shape=resample_result["original_shape"],
-                                resampled_shape=resample_result["resampled_shape"]
-                            )
+                            if self.normalizer is not None:
+                                # Combined visualization: original → normalized → resampled
+                                self._visualize_normalization_and_resampling(
+                                    original_path=paths["nifti"],
+                                    normalized_path=temp_normalized,
+                                    resampled_path=temp_resampled,
+                                    output_path=paths["viz_resampling"],
+                                    norm_result=norm_result,
+                                    resample_result=resample_result
+                                )
+                            else:
+                                # Standard 2-row visualization: original → resampled
+                                self.resampler.visualize(
+                                    paths["nifti"],
+                                    temp_resampled,
+                                    paths["viz_resampling"],
+                                    original_spacing=resample_result["original_spacing"],
+                                    target_spacing=resample_result["target_spacing"],
+                                    original_shape=resample_result["original_shape"],
+                                    resampled_shape=resample_result["resampled_shape"]
+                                )
 
                         # Replace with resampled version
                         temp_resampled.replace(paths["nifti"])
+
+                        # Clean up temporary normalized file if it exists
+                        if temp_normalized is not None and temp_normalized.exists():
+                            temp_normalized.unlink()
+                            self.logger.debug("    Temporary normalized file deleted")
                     else:
-                        self.logger.info("    [Resampling skipped - method is None]")
+                        if self.normalizer is not None:
+                            # Only normalization, no resampling
+                            # Replace with normalized version
+                            temp_normalized.replace(paths["nifti"])
+                            self.logger.info("    [Resampling skipped - method is None]")
+                        else:
+                            self.logger.info("    [Normalization and resampling skipped - methods are None]")
 
                     self.logger.info(f"    Successfully processed {modality}")
                     total_processed += 1

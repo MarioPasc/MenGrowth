@@ -275,6 +275,14 @@ class ResamplingConfig:
     Attributes:
         method: Resampling method ("bspline", "eclare", or None to skip)
         target_voxel_size: Target voxel size in mm [x, y, z]
+
+        # Normalization parameters (applied BEFORE resampling)
+        normalize_method: Normalization method to apply before resampling
+                         ("zscore", "kde", "percentile_minmax", or None to skip)
+        p1: Lower percentile for "percentile_minmax" normalization (default=1.0)
+        p2: Upper percentile for "percentile_minmax" normalization (default=99.0)
+        norm_value: Scaling factor for "zscore" and "kde" normalization (default=1.0)
+
         bspline_order: BSpline interpolation order [0-5] (used if method=="bspline")
                        0: nearest neighbor, 1: linear, 3: cubic (recommended)
         conda_environment_eclare: Conda environment with ECLARE installed (used if method=="eclare")
@@ -286,6 +294,12 @@ class ResamplingConfig:
     """
     method: Optional[Literal["bspline", "eclare"]] = "bspline"
     target_voxel_size: List[float] = field(default_factory=lambda: [1.0, 1.0, 1.0])
+
+    # Normalization parameters (applied before resampling)
+    normalize_method: Optional[Literal["zscore", "kde", "percentile_minmax"]] = None
+    p1: float = 1.0
+    p2: float = 99.0
+    norm_value: float = 1.0
 
     # BSpline parameters
     bspline_order: int = 3
@@ -305,6 +319,26 @@ class ResamplingConfig:
             raise ConfigurationError(
                 f"method must be None, 'bspline', or 'eclare', got {self.method}"
             )
+
+        # Validate normalization parameters
+        if self.normalize_method is not None:
+            if self.normalize_method not in ["zscore", "kde", "percentile_minmax"]:
+                raise ConfigurationError(
+                    f"normalize_method must be None, 'zscore', 'kde', or 'percentile_minmax', "
+                    f"got {self.normalize_method}"
+                )
+
+            # Validate percentile parameters (used by percentile_minmax)
+            if not 0.0 <= self.p1 < self.p2 <= 100.0:
+                raise ConfigurationError(
+                    f"Percentiles must satisfy 0 <= p1 < p2 <= 100, got p1={self.p1}, p2={self.p2}"
+                )
+
+            # Validate norm_value (used by zscore and kde)
+            if self.norm_value <= 0:
+                raise ConfigurationError(
+                    f"norm_value must be positive, got {self.norm_value}"
+                )
 
         # Skip validation if method is None (resampling disabled)
         if self.method is None:

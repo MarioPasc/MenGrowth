@@ -69,14 +69,20 @@ preprocessing:
           method: eclare                   # "bspline" | "eclare" | null (null to skip)
           target_voxel_size: [1.0, 1.0, 1.0]  # in mm (isotropic)
 
+          # Normalization parameters before resampling
+          normalize_method: "percentile_minmax"  # Normalization before ECLARE: null | "zscore" | "kde" | "percentile_minmax"
+          # if normalize_method == "percentile_minmax"
+          p1: 1.0                                 # for "percentile_minmax" normalization
+          p2: 99.0                                # for "percentile_minmax" normalization 
+
           # BSPLINE parameters
           bspline_order: 3                    # if method == "bspline", order [0-5]
 
           # ECLARE Deep-Learning based super-resolution parameters
-          conda_environment_eclare: "eclare"  # Name of the conda environment with ECLARE installed
-          batch_size: 128                     # Batch size for ECLARE inference
-          n_patches: 50000                    # Number of patches to sample for ECLARE inference
-          patch_sampling: "gradient"          # Patch sampling strategy: "uniform" | "gradient" | "random"
-          suffix: ""                          # Suffix to add to output filename when using ECLARE
-          gpu_id: 0                           # GPU ID(s) to use for ECLARE inference (int or list of ints, e.g., 0 or [0, 1])
+          conda_environment_eclare: "eclare"        # Name of the conda environment with ECLARE installed
+          batch_size: 128                           # Batch size for ECLARE inference
+          n_patches: 50000                          # Number of patches to sample for ECLARE inference
+          patch_sampling: "gradient"                # Patch sampling strategy: "uniform" | "gradient" | "random"
+          suffix: ""                                # Suffix to add to output filename when using ECLARE
+          gpu_id: 0                                 # GPU ID(s) to use for ECLARE inference (int or list of ints, e.g., 0 or [0, 1])
 

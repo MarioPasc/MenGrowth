@@ -45,7 +45,8 @@ dependencies = [
     "nibabel",
     "pynrrd",
     "scipy",
-    "scikit-image"
+    "scikit-image",
+    "intensity-normalization"
 ]
 
 [project.urls]
