@@ -66,11 +66,11 @@ preprocessing:
     step2_resampling:
         save_visualization: true # Save visualization for resampling step, we must see axial, sagittal, and coronal views
         resampling:
-          method: eclare                   # "bspline" | "eclare" | null (null to skip)
+          method: bspline                   # "bspline" | "eclare" | null (null to skip)
           target_voxel_size: [1.0, 1.0, 1.0]  # in mm (isotropic)
 
           # Normalization parameters before resampling
-          normalize_method: "percentile_minmax"  # Normalization before ECLARE: null | "zscore" | "kde" | "percentile_minmax"
+          normalize_method: null  # Normalization before ECLARE: null | "zscore" | "kde" | "percentile_minmax"
           # if normalize_method == "percentile_minmax"
           p1: 1.0                                 # for "percentile_minmax" normalization
           p2: 99.0                                # for "percentile_minmax" normalization 

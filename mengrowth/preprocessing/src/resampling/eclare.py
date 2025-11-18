@@ -113,48 +113,38 @@ class EclareResampler(BaseResampler):
             f"target_spacing={target_voxel_size}"
         )
 
-    def _compute_relative_slice_thickness(self, input_path: Path) -> int:
-        """Compute relative slice thickness from input volume spacing.
-
-        The relative slice thickness is computed as:
-            round(through_plane_spacing / in_plane_spacing)
-        where through_plane = spacing[2] (z-axis) and in_plane = spacing[0] (x-axis).
-
-        Args:
-            input_path: Path to input NIfTI file
-
-        Returns:
-            Relative slice thickness (rounded integer)
-
-        Raises:
-            RuntimeError: If spacing computation fails
+    def _compute_relative_slice_thickness(self, input_path: Path) -> float:
+        """Compute relative slice thickness for ECLARE's Gaussian blur kernel.
+        
+        This represents the FWHM of the slice profile relative to the minimum
+        in-plane resolution.
         """
         try:
             image_sitk = sitk.ReadImage(str(input_path))
             spacing = np.array(image_sitk.GetSpacing())
-
+            
             through_plane = spacing[2]  # Z-axis
-            in_plane = spacing[0]  # X-axis (typically equals Y-axis)
-
-            relative_thickness = round(through_plane / in_plane)
-
+            min_in_plane = min(spacing[0], spacing[1])  # Use minimum
+            
+            # This is the FWHM for the Gaussian kernel
+            relative_thickness = through_plane / min_in_plane
+            
             self.logger.info(
-                f"Computed relative slice thickness: {relative_thickness} "
-                f"(through-plane={through_plane:.3f}mm / in-plane={in_plane:.3f}mm)"
+                f"Computed relative slice thickness: {relative_thickness:.3f} "
+                f"(through-plane={through_plane:.3f}mm / min_in_plane={min_in_plane:.3f}mm)"
             )
-
-            return relative_thickness
-
+            
+            return relative_thickness  # Return as float, not rounded int
+            
         except Exception as e:
             self.logger.error(f"Failed to compute relative slice thickness: {e}")
             raise RuntimeError(f"Slice thickness computation failed: {e}") from e
-
+        
     def _run_eclare_subprocess(
         self,
         input_path: Path,
         output_dir: Path,
-        inplane_acq_res: List[float],
-        relative_slice_thickness: int,
+        relative_slice_thickness: float,
         gpu_id: int
     ) -> None:
         """Run ECLARE as a subprocess via conda run.
@@ -175,9 +165,9 @@ class EclareResampler(BaseResampler):
             "run-eclare",
             "--in-fpath", str(input_path),
             "--out-dir", str(output_dir),
-            "--inplane-acq-res", str(inplane_acq_res[0]), str(inplane_acq_res[1]),
             "--batch-size", str(self.batch_size),
             "--n-patches", str(self.n_patches),
+            "--inplane-acq-res", f"{self.target_voxel_size[0]}", f"{self.target_voxel_size[1]}",
             "--patch-sampling", self.patch_sampling,
             "--relative-slice-thickness", str(relative_slice_thickness),
             "--gpu-id", str(gpu_id)
@@ -283,9 +273,6 @@ class EclareResampler(BaseResampler):
             # Compute relative slice thickness
             relative_slice_thickness = self._compute_relative_slice_thickness(input_path)
 
-            # Extract in-plane acquisition resolution from original spacing
-            inplane_acq_res = [original_spacing[0], original_spacing[1]]
-
             # Select GPU (use first one if multiple GPUs specified)
             if isinstance(self.gpu_id, list):
                 if len(self.gpu_id) > 1:
@@ -311,7 +298,6 @@ class EclareResampler(BaseResampler):
                 self._run_eclare_subprocess(
                     input_path=input_path,
                     output_dir=tmp_output_dir,
-                    inplane_acq_res=inplane_acq_res,
                     relative_slice_thickness=relative_slice_thickness,
                     gpu_id=selected_gpu
                 )
