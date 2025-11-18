@@ -24,7 +24,7 @@ from scipy.ndimage import binary_erosion, generate_binary_structure
 
 from mengrowth.preprocessing.src.step0_data_harmonization.base import BaseBackgroundRemover
 from mengrowth.preprocessing.src.config import BackgroundZeroingConfig
-from mengrowth.preprocessing.src.utils.head_mask import compute_brain_mask
+from mengrowth.preprocessing.src.utils.head_mask import compute_brain_mask, MaskParams
 
 
 logger = logging.getLogger(__name__)
@@ -93,6 +93,8 @@ class SELFBackgroundRemover(BaseBackgroundRemover):
             "air_border_margin": config.air_border_margin,
             "auto_fallback": getattr(config, "auto_fallback", True),
             "fallback_threshold": getattr(config, "fallback_threshold", 0.05),
+            "fallback_method": getattr(config, "fallback_method", "otsu"),
+            "fallback_percentile": getattr(config, "fallback_percentile", 10.0),
             "fill_value": getattr(config, "fill_value", 0.0),
         }
         super().__init__(config=config_dict, verbose=verbose)
@@ -100,16 +102,29 @@ class SELFBackgroundRemover(BaseBackgroundRemover):
         self.bg_config = config
         self.verbose = verbose
 
-        auto_fallback = config_dict["auto_fallback"]
-        fallback_threshold = config_dict["fallback_threshold"]
-        fill_value = config_dict["fill_value"]
+        # Create MaskParams from config
+        self.mask_params = MaskParams(
+            air_p_low=getattr(config, "air_p_low", 1.0),
+            air_p_high=getattr(config, "air_p_high", 25.0),
+            air_p_global=getattr(config, "air_p_global", 0.2),
+            erode_vox=getattr(config, "erode_vox", 0),
+            close_iters=getattr(config, "close_iters", 1),
+            connectivity=getattr(config, "connectivity", 2),
+        )
 
         logger.info(
             "Initialized SELFBackgroundRemover (SELF-based): "
             f"method={config.method}, air_margin={config.air_border_margin}, "
-            f"auto_fallback={auto_fallback}, "
-            f"fallback_threshold={fallback_threshold}, "
-            f"fill_value={fill_value}"
+            f"auto_fallback={config_dict['auto_fallback']}, "
+            f"fallback_threshold={config_dict['fallback_threshold']}, "
+            f"fallback_method={config_dict['fallback_method']}, "
+            f"fill_value={config_dict['fill_value']}, "
+            f"MaskParams(air_p_low={self.mask_params.air_p_low}, "
+            f"air_p_high={self.mask_params.air_p_high}, "
+            f"air_p_global={self.mask_params.air_p_global}, "
+            f"erode_vox={self.mask_params.erode_vox}, "
+            f"close_iters={self.mask_params.close_iters}, "
+            f"connectivity={self.mask_params.connectivity})"
         )
 
     def _build_air_mask(self, volume: np.ndarray) -> np.ndarray:
@@ -135,6 +150,8 @@ class SELFBackgroundRemover(BaseBackgroundRemover):
         # Optional parameters with robust defaults for backward compatibility
         auto_fallback = getattr(self.bg_config, "auto_fallback", True)
         fallback_threshold = getattr(self.bg_config, "fallback_threshold", 0.05)
+        fallback_method = getattr(self.bg_config, "fallback_method", "otsu")
+        fallback_percentile = getattr(self.bg_config, "fallback_percentile", 10.0)
 
         # Compute SELF head mask (True=head, False=air)
         head_mask = compute_brain_mask(
@@ -142,6 +159,9 @@ class SELFBackgroundRemover(BaseBackgroundRemover):
             verbose=self.verbose,
             auto_fallback=auto_fallback,
             fallback_threshold=fallback_threshold,
+            fallback_method=fallback_method,
+            fallback_percentile=fallback_percentile,
+            mask_params=self.mask_params,
         )
 
         if head_mask.dtype != bool:

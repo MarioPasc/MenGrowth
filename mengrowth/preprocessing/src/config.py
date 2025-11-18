@@ -35,10 +35,20 @@ class BackgroundZeroingConfig:
         gaussian_sigma: Gaussian smoothing sigma before thresholding (voxels)
         min_comp_voxels: Minimum component size to consider (voxels)
 
-        # Parameters for "self_head_mask"
+        # Parameters for "self_head_mask" - SELF algorithm
         auto_fallback: Use simple fallback if SELF fails (default: True)
         fallback_threshold: Min coverage for SELF before fallback (default: 0.05)
+        fallback_method: Method for fallback mask: "otsu", "percentile", "zero" (default: "otsu")
+        fallback_percentile: Percentile threshold for fallback when method="percentile" (default: 10.0)
         fill_value: Value to set for background voxels (default: 0.0)
+
+        # SELF algorithm mask parameters (from MaskParams)
+        air_p_low: Percentile threshold for seeding air at dark intensities (default: 1.0)
+        air_p_high: Percentile threshold to permit flood-fill through dark voxels (default: 25.0)
+        air_p_global: Global percentile for darkest voxels as fallback seeds (default: 0.2)
+        erode_vox: Number of erosion iterations on head seed (0=conservative, default: 0)
+        close_iters: Number of iterations for final morphological smoothing (default: 1)
+        connectivity: Connectivity structure: 1=6-conn, 2=18-conn, 3=26-conn (default: 2)
 
         # Common parameters for controlling conservativeness
         air_border_margin: Voxels to erode air mask (MORE conservative - shrinks air) (default: 1)
@@ -52,10 +62,20 @@ class BackgroundZeroingConfig:
     gaussian_sigma: float = 0.5
     min_comp_voxels: int = 500
 
-    # Parameters for self_head_mask
+    # Parameters for self_head_mask - fallback control
     auto_fallback: bool = True
     fallback_threshold: float = 0.05
+    fallback_method: str = "otsu"
+    fallback_percentile: float = 10.0
     fill_value: float = 0.0
+
+    # SELF algorithm mask parameters (from MaskParams)
+    air_p_low: float = 1.0
+    air_p_high: float = 25.0
+    air_p_global: float = 0.2
+    erode_vox: int = 0
+    close_iters: int = 1
+    connectivity: int = 2
 
     # Common parameters
     air_border_margin: int = 1
@@ -93,6 +113,40 @@ class BackgroundZeroingConfig:
             if not 0.0 <= self.fallback_threshold <= 1.0:
                 raise ConfigurationError(
                     f"fallback_threshold must be in [0.0, 1.0], got {self.fallback_threshold}"
+                )
+            if self.fallback_method not in ["otsu", "percentile", "zero"]:
+                raise ConfigurationError(
+                    f"fallback_method must be 'otsu', 'percentile', or 'zero', got {self.fallback_method}"
+                )
+            if not 0.0 <= self.fallback_percentile <= 100.0:
+                raise ConfigurationError(
+                    f"fallback_percentile must be in [0.0, 100.0], got {self.fallback_percentile}"
+                )
+
+            # Validate SELF algorithm mask parameters
+            if not 0.0 <= self.air_p_low <= 100.0:
+                raise ConfigurationError(
+                    f"air_p_low must be in [0.0, 100.0], got {self.air_p_low}"
+                )
+            if not 0.0 <= self.air_p_high <= 100.0:
+                raise ConfigurationError(
+                    f"air_p_high must be in [0.0, 100.0], got {self.air_p_high}"
+                )
+            if not 0.0 <= self.air_p_global <= 100.0:
+                raise ConfigurationError(
+                    f"air_p_global must be in [0.0, 100.0], got {self.air_p_global}"
+                )
+            if self.erode_vox < 0:
+                raise ConfigurationError(
+                    f"erode_vox must be non-negative, got {self.erode_vox}"
+                )
+            if self.close_iters < 0:
+                raise ConfigurationError(
+                    f"close_iters must be non-negative, got {self.close_iters}"
+                )
+            if self.connectivity not in [1, 2, 3]:
+                raise ConfigurationError(
+                    f"connectivity must be 1, 2, or 3, got {self.connectivity}"
                 )
 
         # Validate common parameters

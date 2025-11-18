@@ -34,7 +34,7 @@ class BasePreprocessingStep(ABC):
         input_path: Path,
         output_path: Path,
         **kwargs: Any
-    ) -> None:
+    ) -> Any:
         """Execute the preprocessing operation.
 
         Args:

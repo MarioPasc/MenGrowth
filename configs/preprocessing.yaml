@@ -25,21 +25,30 @@ preprocessing:
 
         # Background zeroing (conservative)
         background_zeroing:
-          method: null # "border_connected_percentile" | "self_head_mask" | null
+          method: "self_head_mask" # "border_connected_percentile" | "self_head_mask" | null
 
           # if method == "border_connected_percentile"
           percentile_low: 2              # [0.1-2.0], conservative default
-          gaussian_sigma: 0.5              # smoothing before thresholding (vox)
-          min_comp_voxels: 500             # ignore tiny components
+          gaussian_sigma: 0.5            # smoothing before thresholding (vox)
+          min_comp_voxels: 500           # ignore tiny components
 
-          # if method == "self_head_mask"
-          auto_fallback: true        # dejar en true
-          fallback_threshold: 0.05   # 5% del volumen; no tocar salvo necesidad
-          fill_value: 0.0            # intensidad de fondo
+          # if method == "self_head_mask" - Fallback control
+          auto_fallback: true            # Use simple fallback if SELF fails
+          fallback_threshold: 0.05       # Min coverage (5%) for SELF before fallback
+          fallback_method: "otsu"        # Fallback method: "otsu" | "percentile" | "zero"
+          fallback_percentile: 10.0      # Percentile threshold for fallback (if method="percentile")
+          fill_value: 0.0                # Value to set for background voxels
 
-          # if method is either one or the other
-          air_border_margin: 0             # voxels to erode the air mask (MORE conservative - shrinks air region)
-          expand_air_mask: 3               # voxels to dilate the air mask (LESS conservative - expands air region)
+          air_p_low: 2.0                 # Percentile threshold for seeding air [0.0-100.0]
+          air_p_high: 20.0               # Percentile threshold for flood-fill through dark voxels
+          air_p_global: 0.2              # Global percentile for darkest voxels as fallback seeds
+          erode_vox: 1                   # Erosion iterations on head seed (0=conservative)
+          close_iters: 2                 # Iterations for final morphological smoothing
+          connectivity: 2                # Connectivity: 1=6-conn, 2=18-conn, 3=26-conn
+
+          # Common parameters (post-processing on air mask)
+          air_border_margin: 0           # Voxels to erode the air mask (MORE conservative - shrinks air region)
+          expand_air_mask: 3             # Voxels to dilate the air mask (LESS conservative - expands air region)
           # Note: Use EITHER air_border_margin OR expand_air_mask, not both > 0
 
     step1_bias_field_correction:

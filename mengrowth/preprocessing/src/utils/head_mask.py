@@ -43,15 +43,23 @@ Array = np.ndarray
 
 
 @dataclass(frozen=True)
-class _MaskParams:
+class MaskParams:
     """
-    Internal parameters for robust head-air separation.
+    Parameters for robust head-air separation in SELF algorithm.
 
     Tuned for conservative behaviour on non-skull-stripped, normalized MRI:
     - air_p_low / air_p_high control how strict the "air" definition is.
       Lower values => only very dark voxels are considered air.
     - erode_vox = 0 to avoid shrinking the head marker before watershed
       (conservative: do not eat into anatomy at the boundary).
+
+    Attributes:
+        air_p_low: Percentile threshold for seeding air at very dark intensities (default: 1.0)
+        air_p_high: Percentile threshold to permit flood-fill through dark voxels (default: 25.0)
+        air_p_global: Global percentile for darkest voxels as fallback seeds (default: 0.2)
+        erode_vox: Number of erosion iterations on head seed (0=conservative, default: 0)
+        close_iters: Number of iterations for final morphological smoothing (default: 1)
+        connectivity: Connectivity structure selector: 1=6-conn, 2=18-conn, 3=26-conn (default: 2)
     """
     air_p_low: float = 1.0       # seed air at very dark intensities (1st percentile)
     air_p_high: float = 25.0     # permit flood-fill through "dark-enough" voxels
@@ -189,7 +197,11 @@ def compute_brain_mask_simple(
     return result
 
 
-def _compute_brain_mask_self(volume: np.ndarray, verbose: bool = False) -> np.ndarray:
+def _compute_brain_mask_self(
+    volume: np.ndarray,
+    verbose: bool = False,
+    mask_params: Optional[MaskParams] = None,
+) -> np.ndarray:
     """
     Border-based SELF algorithm for head mask extraction (internal function).
 
@@ -218,6 +230,8 @@ def _compute_brain_mask_self(volume: np.ndarray, verbose: bool = False) -> np.nd
         3D MRI volume (D, H, W) in any orientation.
     verbose : bool
         If True, prints diagnostic information.
+    mask_params : Optional[MaskParams]
+        Parameters for SELF algorithm. If None, uses default values.
 
     Returns
     -------
@@ -225,7 +239,7 @@ def _compute_brain_mask_self(volume: np.ndarray, verbose: bool = False) -> np.nd
         True for head/anatomy, False for background (air).
         Same shape as input volume.
     """
-    p = _MaskParams()
+    p = mask_params if mask_params is not None else MaskParams()
     v = np.asanyarray(volume, dtype=np.float32)
     v[~np.isfinite(v)] = 0.0
 
@@ -342,6 +356,9 @@ def compute_brain_mask(
     verbose: bool = False,
     auto_fallback: bool = True,
     fallback_threshold: float = 0.05,
+    fallback_method: str = "otsu",
+    fallback_percentile: float = 10.0,
+    mask_params: Optional[MaskParams] = None,
 ) -> np.ndarray:
     """
     Compute a conservative head mask (head vs. air) with optional fallback.
@@ -373,6 +390,12 @@ def compute_brain_mask(
         Minimum acceptable coverage for SELF (default: 0.05 = 5% of volume).
         If SELF returns a mask smaller than this, it is considered a failure
         and a simple method is used instead.
+    fallback_method : str
+        Method to use for fallback: "otsu", "percentile", or "zero" (default: "otsu").
+    fallback_percentile : float
+        Percentile threshold for fallback when method="percentile" (default: 10.0).
+    mask_params : Optional[MaskParams]
+        Parameters for SELF algorithm. If None, uses default values.
 
     Returns
     -------
@@ -383,7 +406,7 @@ def compute_brain_mask(
     if verbose:
         print("   Trying SELF (border-based) head mask...")
 
-    mask_self = _compute_brain_mask_self(volume, verbose=verbose)
+    mask_self = _compute_brain_mask_self(volume, verbose=verbose, mask_params=mask_params)
     coverage = mask_self.sum() / mask_self.size
 
     if verbose:
@@ -396,7 +419,12 @@ def compute_brain_mask(
                 f"   SELF coverage {coverage * 100:.1f}% < "
                 f"{fallback_threshold * 100:.1f}% threshold - using simple fallback"
             )
-        mask = compute_brain_mask_simple(volume, method="otsu", verbose=verbose)
+        mask = compute_brain_mask_simple(
+            volume,
+            method=fallback_method,
+            percentile_threshold=fallback_percentile,
+            verbose=verbose,
+        )
         if verbose:
             new_coverage = mask.sum() / mask.size
             print(f"   Simple method coverage: {new_coverage * 100:.1f}%")
