@@ -11,7 +11,7 @@ import SimpleITK as sitk
 import nibabel as nib
 import numpy as np
 
-from mengrowth.preprocessing.src.step0_data_harmonization.base import BaseReorienter
+from mengrowth.preprocessing.src.data_harmonization.base import BaseReorienter
 
 logger = logging.getLogger(__name__)
 

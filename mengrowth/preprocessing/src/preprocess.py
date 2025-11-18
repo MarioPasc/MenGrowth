@@ -9,13 +9,13 @@ from typing import List, Optional, Union
 import logging
 
 from mengrowth.preprocessing.src.config import PreprocessingPipelineConfig, DataHarmonizationConfig
-from mengrowth.preprocessing.src.step0_data_harmonization.io import NRRDtoNIfTIConverter
-from mengrowth.preprocessing.src.step0_data_harmonization.orient import Reorienter
-from mengrowth.preprocessing.src.step0_data_harmonization.head_masking.conservative import ConservativeBackgroundRemover
-from mengrowth.preprocessing.src.step0_data_harmonization.head_masking.self import SELFBackgroundRemover
-from mengrowth.preprocessing.src.step1_bias_field_correction.n4_sitk import N4BiasFieldCorrector
-from mengrowth.preprocessing.src.step2_resampling.bspline import BSplineResampler
-from mengrowth.preprocessing.src.step2_resampling.eclare import EclareResampler
+from mengrowth.preprocessing.src.data_harmonization.io import NRRDtoNIfTIConverter
+from mengrowth.preprocessing.src.data_harmonization.orient import Reorienter
+from mengrowth.preprocessing.src.data_harmonization.head_masking.conservative import ConservativeBackgroundRemover
+from mengrowth.preprocessing.src.data_harmonization.head_masking.self import SELFBackgroundRemover
+from mengrowth.preprocessing.src.bias_field_correction.n4_sitk import N4BiasFieldCorrector
+from mengrowth.preprocessing.src.resampling.bspline import BSplineResampler
+from mengrowth.preprocessing.src.resampling.eclare import EclareResampler
 
 logger = logging.getLogger(__name__)
 

@@ -11,7 +11,7 @@ import nibabel as nib
 import numpy as np
 from scipy.ndimage import gaussian_filter, label, binary_erosion, binary_dilation, generate_binary_structure
 
-from mengrowth.preprocessing.src.step0_data_harmonization.base import BaseBackgroundRemover
+from mengrowth.preprocessing.src.data_harmonization.base import BaseBackgroundRemover
 from mengrowth.preprocessing.src.config import BackgroundZeroingConfig
 
 logger = logging.getLogger(__name__)

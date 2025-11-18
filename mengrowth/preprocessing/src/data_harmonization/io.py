@@ -10,7 +10,7 @@ import logging
 import nibabel as nib
 import numpy as np
 
-from mengrowth.preprocessing.src.step0_data_harmonization.base import BaseConverter
+from mengrowth.preprocessing.src.data_harmonization.base import BaseConverter
 from mengrowth.preprocessing.src.utils.nrrd_to_nifti import nifti_write_3d
 
 logger = logging.getLogger(__name__)

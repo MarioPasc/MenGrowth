@@ -14,7 +14,7 @@ import SimpleITK as sitk
 import nibabel as nib
 import numpy as np
 
-from mengrowth.preprocessing.src.step1_bias_field_correction.base import BaseBiasFieldCorrector
+from mengrowth.preprocessing.src.bias_field_correction.base import BaseBiasFieldCorrector
 
 logger = logging.getLogger(__name__)
 

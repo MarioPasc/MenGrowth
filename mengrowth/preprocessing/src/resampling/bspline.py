@@ -13,7 +13,7 @@ import SimpleITK as sitk
 import nibabel as nib
 import numpy as np
 
-from mengrowth.preprocessing.src.step2_resampling.base import BaseResampler
+from mengrowth.preprocessing.src.resampling.base import BaseResampler
 
 logger = logging.getLogger(__name__)
 
