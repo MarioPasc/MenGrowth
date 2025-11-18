@@ -15,6 +15,7 @@ from mengrowth.preprocessing.src.step0_data_harmonization.head_masking.conservat
 from mengrowth.preprocessing.src.step0_data_harmonization.head_masking.self import SELFBackgroundRemover
 from mengrowth.preprocessing.src.step1_bias_field_correction.n4_sitk import N4BiasFieldCorrector
 from mengrowth.preprocessing.src.step2_resampling.bspline import BSplineResampler
+from mengrowth.preprocessing.src.step2_resampling.eclare import EclareResampler
 
 logger = logging.getLogger(__name__)
 
@@ -109,9 +110,26 @@ class PreprocessingOrchestrator:
                 verbose=verbose
             )
             self.logger.info(f"Preprocessing orchestrator initialized with resampling method: {resample_method}")
+        elif resample_method == "eclare":
+            # Convert ResamplingConfig to dictionary for initializer
+            resample_config_dict = {
+                "conda_environment_eclare": config.step2_resampling.resampling.conda_environment_eclare,
+                "batch_size": config.step2_resampling.resampling.batch_size,
+                "n_patches": config.step2_resampling.resampling.n_patches,
+                "patch_sampling": config.step2_resampling.resampling.patch_sampling,
+                "suffix": config.step2_resampling.resampling.suffix,
+                "gpu_id": config.step2_resampling.resampling.gpu_id,
+                "verbose": config.step2_resampling.resampling.verbose if hasattr(config.step2_resampling.resampling, "verbose") else verbose,
+            }
+            self.resampler = EclareResampler(
+                target_voxel_size=config.step2_resampling.resampling.target_voxel_size,
+                config=resample_config_dict,
+                verbose=verbose
+            )
+            self.logger.info(f"Preprocessing orchestrator initialized with resampling method: {resample_method}")
         else:
             raise ValueError(
-                f"Unknown resampling method: {resample_method}. Must be None or 'bspline'"
+                f"Unknown resampling method: {resample_method}. Must be None, 'bspline', or 'eclare'"
             )
 
     def _get_study_directories(self, patient_id: str) -> List[Path]:

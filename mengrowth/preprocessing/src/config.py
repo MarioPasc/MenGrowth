@@ -6,7 +6,7 @@ including data harmonization, normalization, and other preprocessing steps.
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, List, Optional
+from typing import Literal, List, Optional, Union
 import yaml
 import logging
 
@@ -273,21 +273,37 @@ class ResamplingConfig:
     """Configuration for resampling to isotropic resolution.
 
     Attributes:
-        method: Resampling method ("bspline" or None to skip)
+        method: Resampling method ("bspline", "eclare", or None to skip)
         target_voxel_size: Target voxel size in mm [x, y, z]
         bspline_order: BSpline interpolation order [0-5] (used if method=="bspline")
                        0: nearest neighbor, 1: linear, 3: cubic (recommended)
+        conda_environment_eclare: Conda environment with ECLARE installed (used if method=="eclare")
+        batch_size: Batch size for ECLARE inference (used if method=="eclare")
+        n_patches: Number of patches for ECLARE training (used if method=="eclare")
+        patch_sampling: Patch sampling strategy for ECLARE (used if method=="eclare")
+        suffix: Suffix to add to ECLARE output filename (used if method=="eclare")
+        gpu_id: GPU ID(s) to use for ECLARE - int or list of ints (used if method=="eclare")
     """
-    method: Optional[Literal["bspline"]] = "bspline"
+    method: Optional[Literal["bspline", "eclare"]] = "bspline"
     target_voxel_size: List[float] = field(default_factory=lambda: [1.0, 1.0, 1.0])
+
+    # BSpline parameters
     bspline_order: int = 3
+
+    # ECLARE parameters
+    conda_environment_eclare: str = "eclare_env"
+    batch_size: int = 128
+    n_patches: int = 1000000
+    patch_sampling: str = "gradient"
+    suffix: str = ""
+    gpu_id: Union[int, List[int]] = 0
 
     def __post_init__(self) -> None:
         """Validate configuration values."""
         # Validate method
-        if self.method is not None and self.method != "bspline":
+        if self.method is not None and self.method not in ["bspline", "eclare"]:
             raise ConfigurationError(
-                f"method must be None or 'bspline', got {self.method}"
+                f"method must be None, 'bspline', or 'eclare', got {self.method}"
             )
 
         # Skip validation if method is None (resampling disabled)
@@ -308,11 +324,47 @@ class ResamplingConfig:
                 f"All target_voxel_size values must be > 0, got {self.target_voxel_size}"
             )
 
-        # Validate bspline_order
-        if not isinstance(self.bspline_order, int) or not (0 <= self.bspline_order <= 5):
-            raise ConfigurationError(
-                f"bspline_order must be an integer in [0, 5], got {self.bspline_order}"
-            )
+        # Validate BSpline parameters (if using BSpline)
+        if self.method == "bspline":
+            if not isinstance(self.bspline_order, int) or not (0 <= self.bspline_order <= 5):
+                raise ConfigurationError(
+                    f"bspline_order must be an integer in [0, 5], got {self.bspline_order}"
+                )
+
+        # Validate ECLARE parameters (if using ECLARE)
+        if self.method == "eclare":
+            if not isinstance(self.conda_environment_eclare, str) or not self.conda_environment_eclare:
+                raise ConfigurationError(
+                    f"conda_environment_eclare must be a non-empty string, got {self.conda_environment_eclare}"
+                )
+
+            if not isinstance(self.batch_size, int) or self.batch_size <= 0:
+                raise ConfigurationError(
+                    f"batch_size must be a positive integer, got {self.batch_size}"
+                )
+
+            if not isinstance(self.n_patches, int) or self.n_patches <= 0:
+                raise ConfigurationError(
+                    f"n_patches must be a positive integer, got {self.n_patches}"
+                )
+
+            # Validate gpu_id (can be int or list of ints)
+            if isinstance(self.gpu_id, int):
+                if self.gpu_id < 0:
+                    raise ConfigurationError(
+                        f"gpu_id must be non-negative, got {self.gpu_id}"
+                    )
+            elif isinstance(self.gpu_id, list):
+                if not all(isinstance(gpu, int) and gpu >= 0 for gpu in self.gpu_id):
+                    raise ConfigurationError(
+                        "gpu_id list must contain only non-negative integers"
+                    )
+                if len(self.gpu_id) == 0:
+                    raise ConfigurationError("gpu_id list cannot be empty")
+            else:
+                raise ConfigurationError(
+                    f"gpu_id must be int or List[int], got {type(self.gpu_id)}"
+                )
 
 
 @dataclass

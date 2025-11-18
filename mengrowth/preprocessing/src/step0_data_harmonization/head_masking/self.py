@@ -112,6 +112,10 @@ class SELFBackgroundRemover(BaseBackgroundRemover):
             connectivity=getattr(config, "connectivity", 2),
         )
 
+        # Cache for storing the last computed air mask to avoid redundant computation
+        self._cached_air_mask: Dict[str, np.ndarray] = {}
+        self._cached_original_volume: Dict[str, np.ndarray] = {}
+
         logger.info(
             "Initialized SELFBackgroundRemover (SELF-based): "
             f"method={config.method}, air_margin={config.air_border_margin}, "
@@ -247,6 +251,11 @@ class SELFBackgroundRemover(BaseBackgroundRemover):
             # Build air mask (True=air, False=head)
             air_mask = self._build_air_mask(volume)
 
+            # Cache the air mask and original volume for visualization
+            cache_key = str(input_path)
+            self._cached_air_mask[cache_key] = air_mask.copy()
+            self._cached_original_volume[cache_key] = volume.copy()
+
             # Apply mask: set only air voxels to fill_value
             fill_value: float = float(getattr(self.bg_config, "fill_value", 0.0))
             masked_volume = volume.copy()
@@ -277,19 +286,19 @@ class SELFBackgroundRemover(BaseBackgroundRemover):
         output_path: Path,
         **kwargs: Any,
     ) -> None:
-        """Generate visualization showing background removal with mask overlay.
+        """Generate comprehensive visualization showing background removal.
 
-        The visualization shows 4 depth slices for each of 3 orientations
-        (axial, sagittal, coronal), with the computed air mask overlaid on
-        the *original* volume in red.
+        The visualization includes:
+        1. Slice examples with air mask overlay (3 orientations × 4 slices)
+        2. Before/after intensity histograms with algorithm parameter landmarks
+        3. Voxel removal per slice plot (axial direction) with dual y-axis
 
         Parameters
         ----------
         before_path:
             NIfTI path before background removal.
         after_path:
-            NIfTI path after background removal (not strictly required for the
-            mask computation but kept for symmetry and potential QC checks).
+            NIfTI path after background removal.
         output_path:
             Path to save the resulting PNG figure.
         **kwargs:
@@ -298,6 +307,7 @@ class SELFBackgroundRemover(BaseBackgroundRemover):
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt  # type: ignore[import]
+        from matplotlib.gridspec import GridSpec
 
         self.logger.info("Generating background removal visualization: %s", output_path)
 
@@ -309,8 +319,14 @@ class SELFBackgroundRemover(BaseBackgroundRemover):
             after_img = nib.load(str(after_path))
             after_data = after_img.get_fdata()
 
-            # Compute air mask directly from the original volume
-            air_mask = self._build_air_mask(before_data)
+            # Try to use cached air mask to avoid redundant computation
+            cache_key = str(before_path)
+            if cache_key in self._cached_air_mask:
+                self.logger.info("Using cached air mask for visualization (avoiding redundant computation)")
+                air_mask = self._cached_air_mask[cache_key]
+            else:
+                self.logger.warning("Cached air mask not found, recomputing (this will take time)...")
+                air_mask = self._build_air_mask(before_data)
 
             # For logging/QC: how many voxels actually changed to fill_value?
             fill_value = float(getattr(self.bg_config, "fill_value", 0.0))
@@ -322,10 +338,10 @@ class SELFBackgroundRemover(BaseBackgroundRemover):
                 changed_to_fill.sum(),
             )
 
-            # Define slice positions (fractions of each axis).
-            depth_fractions = [0.25, 0.4, 0.5, 0.6]
+            # Create figure with custom layout
+            fig = plt.figure(figsize=(20, 16))
+            gs = GridSpec(5, 4, figure=fig, height_ratios=[1, 1, 1, 0.8, 0.8], hspace=0.3, wspace=0.3)
 
-            fig, axes = plt.subplots(3, 4, figsize=(16, 12))
             fig.suptitle(
                 f"Background Removal: {before_path.stem}\n"
                 "Air mask overlaid on original (red=air/background)",
@@ -333,46 +349,150 @@ class SELFBackgroundRemover(BaseBackgroundRemover):
                 fontweight="bold",
             )
 
+            # Define slice positions (fractions of each axis)
+            depth_fractions = [0.25, 0.4, 0.5, 0.6]
+
+            # ===== SLICE VISUALIZATIONS (rows 0-2) =====
             # Axial slices (row 0)
             for col, frac in enumerate(depth_fractions):
+                ax = fig.add_subplot(gs[0, col])
                 z_idx = int(before_data.shape[2] * frac)
                 slice_img = before_data[:, :, z_idx].T
                 slice_mask = air_mask[:, :, z_idx].T
 
-                axes[0, col].imshow(slice_img, cmap="gray", origin="lower")
+                ax.imshow(slice_img, cmap="gray", origin="lower")
                 overlay = np.zeros((*slice_mask.shape, 4), dtype=float)
                 overlay[slice_mask, :] = [0.7, 0.0, 0.0, 0.8]  # red with alpha
-                axes[0, col].imshow(overlay, origin="lower")
-                axes[0, col].set_title(f"Axial z={z_idx}")
-                axes[0, col].axis("off")
+                ax.imshow(overlay, origin="lower")
+                ax.set_title(f"Axial z={z_idx}")
+                ax.axis("off")
 
             # Sagittal slices (row 1)
             for col, frac in enumerate(depth_fractions):
+                ax = fig.add_subplot(gs[1, col])
                 x_idx = int(before_data.shape[0] * frac)
                 slice_img = before_data[x_idx, :, :].T
                 slice_mask = air_mask[x_idx, :, :].T
 
-                axes[1, col].imshow(slice_img, cmap="gray", origin="lower")
+                ax.imshow(slice_img, cmap="gray", origin="lower")
                 overlay = np.zeros((*slice_mask.shape, 4), dtype=float)
                 overlay[slice_mask, :] = [0.7, 0.0, 0.0, 0.8]
-                axes[1, col].imshow(overlay, origin="lower")
-                axes[1, col].set_title(f"Sagittal x={x_idx}")
-                axes[1, col].axis("off")
+                ax.imshow(overlay, origin="lower")
+                ax.set_title(f"Sagittal x={x_idx}")
+                ax.axis("off")
 
             # Coronal slices (row 2)
             for col, frac in enumerate(depth_fractions):
+                ax = fig.add_subplot(gs[2, col])
                 y_idx = int(before_data.shape[1] * frac)
                 slice_img = before_data[:, y_idx, :].T
                 slice_mask = air_mask[:, y_idx, :].T
 
-                axes[2, col].imshow(slice_img, cmap="gray", origin="lower")
+                ax.imshow(slice_img, cmap="gray", origin="lower")
                 overlay = np.zeros((*slice_mask.shape, 4), dtype=float)
                 overlay[slice_mask, :] = [0.7, 0.0, 0.0, 0.8]
-                axes[2, col].imshow(overlay, origin="lower")
-                axes[2, col].set_title(f"Coronal y={y_idx}")
-                axes[2, col].axis("off")
+                ax.imshow(overlay, origin="lower")
+                ax.set_title(f"Coronal y={y_idx}")
+                ax.axis("off")
 
-            plt.tight_layout()
+            # ===== INTENSITY HISTOGRAMS (row 3, spans 2 columns each) =====
+            # Before/After histogram with parameter landmarks
+            ax_hist = fig.add_subplot(gs[3, :2])
+
+            # Compute histograms
+            before_flat = before_data.ravel()
+            after_flat = after_data.ravel()
+
+            # Use robust range for histogram bins (exclude extreme outliers)
+            vmax = np.percentile(before_flat[before_flat > 0], 99.5)
+            bins = np.linspace(0, vmax, 150)
+
+            # Plot overlayed histograms
+            ax_hist.hist(before_flat, bins=bins, alpha=0.6, label="Before", color="blue", density=True)
+            ax_hist.hist(after_flat, bins=bins, alpha=0.6, label="After", color="green", density=True)
+
+            # Add vertical lines for algorithm parameters
+            # Compute the actual thresholds used in the algorithm
+            air_p_low = self.mask_params.air_p_low
+            air_p_high = self.mask_params.air_p_high
+
+            thr_low = np.percentile(before_flat, air_p_low)
+            thr_high = np.percentile(before_flat, air_p_high)
+
+            ax_hist.axvline(thr_low, color="red", linestyle="--", linewidth=2,
+                           label=f"air_p_low={air_p_low}% → {thr_low:.2f}")
+            ax_hist.axvline(thr_high, color="orange", linestyle="--", linewidth=2,
+                           label=f"air_p_high={air_p_high}% → {thr_high:.2f}")
+
+            ax_hist.set_xlabel("Intensity", fontsize=11)
+            ax_hist.set_ylabel("Density", fontsize=11)
+            ax_hist.set_title("Intensity Distribution: Before vs After", fontsize=12, fontweight="bold")
+            ax_hist.legend(loc="upper right", fontsize=9)
+            ax_hist.grid(True, alpha=0.3)
+
+            # ===== VOXEL REMOVAL PER SLICE (row 3, right half) =====
+            ax_slice = fig.add_subplot(gs[3, 2:])
+            ax_slice_pct = ax_slice.twinx()
+
+            # Compute voxel removal per axial slice
+            n_slices = air_mask.shape[2]
+            voxels_removed_per_slice = np.zeros(n_slices)
+            pct_removed_per_slice = np.zeros(n_slices)
+
+            for z_idx in range(n_slices):
+                slice_mask = air_mask[:, :, z_idx]
+                voxels_removed = slice_mask.sum()
+                total_voxels_in_slice = slice_mask.size
+
+                voxels_removed_per_slice[z_idx] = voxels_removed
+                pct_removed_per_slice[z_idx] = (voxels_removed / total_voxels_in_slice) * 100.0
+
+            slice_indices = np.arange(n_slices)
+
+            # Plot absolute counts on left y-axis
+            color1 = "tab:blue"
+            ax_slice.plot(slice_indices, voxels_removed_per_slice, color=color1, linewidth=2, label="Voxels removed")
+            ax_slice.set_xlabel("Axial Slice Index", fontsize=11)
+            ax_slice.set_ylabel("Voxels Removed (count)", color=color1, fontsize=11)
+            ax_slice.tick_params(axis="y", labelcolor=color1)
+            ax_slice.grid(True, alpha=0.3)
+
+            # Plot percentage on right y-axis
+            color2 = "tab:orange"
+            ax_slice_pct.plot(slice_indices, pct_removed_per_slice, color=color2, linewidth=2,
+                             linestyle="--", label="% removed")
+            ax_slice_pct.set_ylabel("% Removed per Slice", color=color2, fontsize=11)
+            ax_slice_pct.tick_params(axis="y", labelcolor=color2)
+
+            ax_slice.set_title("Voxel Removal per Axial Slice", fontsize=12, fontweight="bold")
+
+            # Add legends
+            lines1, labels1 = ax_slice.get_legend_handles_labels()
+            lines2, labels2 = ax_slice_pct.get_legend_handles_labels()
+            ax_slice.legend(lines1 + lines2, labels1 + labels2, loc="upper right", fontsize=9)
+
+            # ===== SUMMARY STATISTICS (row 4) =====
+            ax_stats = fig.add_subplot(gs[4, :])
+            ax_stats.axis("off")
+
+            # Compute statistics
+            total_voxels = air_mask.size
+            removed_voxels = air_mask.sum()
+            pct_removed = (removed_voxels / total_voxels) * 100.0
+
+            stats_text = (
+                f"Summary Statistics:\n"
+                f"  • Volume shape: {before_data.shape}\n"
+                f"  • Total voxels: {total_voxels:,}\n"
+                f"  • Removed voxels: {removed_voxels:,} ({pct_removed:.2f}%)\n"
+                f"  • Algorithm parameters: air_p_low={air_p_low}%, air_p_high={air_p_high}%, "
+                f"erode_vox={self.mask_params.erode_vox}, close_iters={self.mask_params.close_iters}\n"
+                f"  • Intensity range before: [{before_flat.min():.2f}, {before_flat.max():.2f}]\n"
+                f"  • Intensity range after: [{after_flat.min():.2f}, {after_flat.max():.2f}]"
+            )
+
+            ax_stats.text(0.05, 0.5, stats_text, fontsize=10, verticalalignment="center",
+                         family="monospace", bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.3))
 
             # Ensure output directory exists
             output_path.parent.mkdir(parents=True, exist_ok=True)
