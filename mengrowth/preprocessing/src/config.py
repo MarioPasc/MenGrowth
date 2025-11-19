@@ -292,7 +292,7 @@ class ResamplingConfig:
         suffix: Suffix to add to ECLARE output filename (used if method=="eclare")
         gpu_id: GPU ID(s) to use for ECLARE - int or list of ints (used if method=="eclare")
     """
-    method: Optional[Literal["bspline", "eclare"]] = "bspline"
+    method: Optional[Literal["bspline", "eclare", "composite"]] = "bspline"
     target_voxel_size: List[float] = field(default_factory=lambda: [1.0, 1.0, 1.0])
 
     # Normalization parameters (applied before resampling)
@@ -312,12 +312,19 @@ class ResamplingConfig:
     suffix: str = ""
     gpu_id: Union[int, List[int]] = 0
 
+    # COMPOSITE parameters
+    composite_interpolator: str = "bspline"
+    composite_dl_method: str = "eclare"
+    max_mm_interpolator: float = 1.2
+    max_mm_dl_method: float = 5.0
+    resample_mm_to_interpolator_if_max_mm_dl_method: float = 3.0
+
     def __post_init__(self) -> None:
         """Validate configuration values."""
         # Validate method
-        if self.method is not None and self.method not in ["bspline", "eclare"]:
+        if self.method is not None and self.method not in ["bspline", "eclare", "composite"]:
             raise ConfigurationError(
-                f"method must be None, 'bspline', or 'eclare', got {self.method}"
+                f"method must be None, 'bspline', 'eclare', or 'composite', got {self.method}"
             )
 
         # Validate normalization parameters
@@ -398,6 +405,35 @@ class ResamplingConfig:
             else:
                 raise ConfigurationError(
                     f"gpu_id must be int or List[int], got {type(self.gpu_id)}"
+                )
+
+        # Validate COMPOSITE parameters (if using COMPOSITE)
+        if self.method == "composite":
+            # Validate composite_interpolator
+            if self.composite_interpolator not in ["bspline"]:
+                raise ConfigurationError(
+                    f"composite_interpolator must be 'bspline', got {self.composite_interpolator}"
+                )
+
+            # Validate composite_dl_method
+            if self.composite_dl_method not in ["eclare"]:
+                raise ConfigurationError(
+                    f"composite_dl_method must be 'eclare', got {self.composite_dl_method}"
+                )
+
+            # Validate threshold ordering
+            if not 0 < self.max_mm_interpolator < self.max_mm_dl_method:
+                raise ConfigurationError(
+                    f"Must satisfy 0 < max_mm_interpolator < max_mm_dl_method, "
+                    f"got max_mm_interpolator={self.max_mm_interpolator}, "
+                    f"max_mm_dl_method={self.max_mm_dl_method}"
+                )
+
+            # Validate resample_mm_to_interpolator_if_max_mm_dl_method
+            if not 0 < self.resample_mm_to_interpolator_if_max_mm_dl_method < self.max_mm_dl_method:
+                raise ConfigurationError(
+                    f"resample_mm_to_interpolator_if_max_mm_dl_method must be between 0 and max_mm_dl_method, "
+                    f"got {self.resample_mm_to_interpolator_if_max_mm_dl_method} (max_mm_dl_method={self.max_mm_dl_method})"
                 )
 
 

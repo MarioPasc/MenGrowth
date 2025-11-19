@@ -7,9 +7,11 @@ a target voxel spacing (e.g., 1mm isotropic) using various interpolation methods
 from mengrowth.preprocessing.src.resampling.base import BaseResampler
 from mengrowth.preprocessing.src.resampling.bspline import BSplineResampler
 from mengrowth.preprocessing.src.resampling.eclare import EclareResampler
+from mengrowth.preprocessing.src.resampling.composite import CompositeResampler
 
 __all__ = [
     "BaseResampler",
     "BSplineResampler",
     "EclareResampler",
+    "CompositeResampler",
 ]

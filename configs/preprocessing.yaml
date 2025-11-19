@@ -66,11 +66,12 @@ preprocessing:
     step2_resampling:
         save_visualization: true # Save visualization for resampling step, we must see axial, sagittal, and coronal views
         resampling:
-          method: bspline                   # "bspline" | "eclare" | null (null to skip)
+          method: composite                   # "bspline" | "eclare" | "composite" | null (null to skip)
+          
           target_voxel_size: [1.0, 1.0, 1.0]  # in mm (isotropic)
 
           # Normalization parameters before resampling
-          normalize_method: kde  # Normalization before ECLARE: null | "zscore" | "kde" | "percentile_minmax"
+          normalize_method: null  # Normalization before ECLARE: null | "zscore" | "kde" | "percentile_minmax"
           # if normalize_method == "percentile_minmax"
           p1: 1.0                                 # for "percentile_minmax" normalization
           p2: 99.0                                # for "percentile_minmax" normalization 
@@ -81,8 +82,46 @@ preprocessing:
           # ECLARE Deep-Learning based super-resolution parameters
           conda_environment_eclare: "eclare"        # Name of the conda environment with ECLARE installed
           batch_size: 128                           # Batch size for ECLARE inference
-          n_patches: 50000                          # Number of patches to sample for ECLARE inference
+          n_patches: 80000                          # Number of patches to sample for ECLARE inference
           patch_sampling: "gradient"                # Patch sampling strategy: "uniform" | "gradient" | "random"
           suffix: ""                                # Suffix to add to output filename when using ECLARE
           gpu_id: 0                                 # GPU ID(s) to use for ECLARE inference (int or list of ints, e.g., 0 or [0, 1])
 
+          # COMPOSITE parameters
+          # Composite consists of applying interpolation followed by a deep-learning based enhancement. 
+          # The idea is that interpolators work better when the resolution of the image is better or closer to the target resolution.
+          # Therefore, if we detect a dimension in the image that has a better resolution than the target_voxel_size, we apply the 
+          # interpolator first to bring that dimension closer to the target resolution. 
+          # Then, we apply the deep-learning based enhancement to reach the target resolution.
+          composite_interpolator: "bspline"   # Interpolator for the first step of composite
+          composite_dl_method: "eclare"       # Deep-learning method for the second step of composite
+            
+          # The following three arguments operate following these set of rules:
+          # For a MRI volume with dimensions [dx, dy, dz] and target_voxel_size [tx, ty, tz]:
+          # 1. If any dimension is lower than the corresponding target voxel size (i.e., dx < tx, dy < ty, or dz < tz),
+          #    then we apply the interpolator to that dimension. 
+          #    (e.g., [tx, ty, tz] = [1.0, 1.0, 1.0], [dx, dy, dz] = [0.5, 1.2, 1.5] -> apply interpolator to dx)
+          # 2. If a dimension is higher than the target voxel size, but lower than the max_mm_interpolator threshold,
+          #    we also apply the interpolator to that dimension.
+          #    (e.g., [tx, ty, tz] = [1.0, 1.0, 1.0], [dx, dy, dz] = [1.1, 2.5, 6.0], max_mm_interpolator = 1.2 -> apply interpolator to dx)
+          # 3. Dimensions between max_mm_interpolator and max_mm_dl_method are processed by deep-learning method only. 
+          #    (e.g., [tx, ty, tz] = [1.0, 1.0, 1.0], [dx, dy, dz] = [1.5, 4.0, 6.0], max_mm_interpolator = 1.2, max_mm_dl_method = 5.0 -> apply dl to dx and dy)
+          # 4. Dimensions higher than max_mm_dl_method are resampled using the interpolator to bring them to the resolution specified in the
+          #    resample_mm_to_interpolator_if_max_mm_dl_method parameter for that dimension, then, we apply the deep-learning method to that output.
+          #    (e.g., [tx, ty, tz] = [1.0, 1.0, 1.0], [dx, dy, dz] = [1.5, 6.0, 10.0], max_mm_dl_method = 5.0, resample_mm_to_interpolator_if_max_mm_dl_method = 3.0 
+          #     -> resample dy and dz to 3.0 mm using the interpolator, then apply dl to dy and dz, for dx, apply dl directly)
+
+          # Complete example:
+          # Given target_voxel_size = [1.0, 1.0, 1.0], max_mm_interpolator = 1.5, max_mm_dl_method = 5.0, resample_mm_to_interpolator_if_max_mm_dl_method = 3.0
+          # For an image with voxel sizes [0.8, 1.5, 6.0]:
+          # - 0.8 mm  -> DL method only (rule 1)
+          # - 1.5 mm  -> interpolation method only (rule 2): 1.5 <= max_mm_interpolator
+          # - 6.0 mm  -> Resample to 3.0 mm with interpolator, then DL method (rule 4): 6.0 is > max_mm_dl_method 
+          
+          max_mm_interpolator: 1.5          
+          max_mm_dl_method: 5.0
+          resample_mm_to_interpolator_if_max_mm_dl_method: 3.0
+
+          
+
+        
