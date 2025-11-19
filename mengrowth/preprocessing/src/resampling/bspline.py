@@ -191,12 +191,16 @@ class BSplineResampler(BaseResampler):
         output_path: Path,
         **kwargs: Any
     ) -> None:
-        """Generate 3-view (axial, sagittal, coronal) comparison visualization.
+        """Generate 3-view comparison visualization with intensity histogram overlay.
 
         Creates visualization with:
         - Row 1: Original image (axial, sagittal, coronal)
         - Row 2: Resampled image (axial, sagittal, coronal)
+        - Row 3 (subplot 4): Overlayed intensity histograms (pre vs post)
         - Metadata text with spacing and shape information
+
+        The histogram overlay helps verify that the intensity distribution is
+        preserved after resampling.
 
         Args:
             before_path: Path to input file (before resampling)
@@ -221,7 +225,7 @@ class BSplineResampler(BaseResampler):
         original_shape = kwargs.get("original_shape")
         resampled_shape = kwargs.get("resampled_shape")
 
-        self.logger.info(f"Generating resampling visualization: {output_path}")
+        self.logger.info(f"Generating BSpline visualization: {output_path}")
 
         try:
             # Load images
@@ -250,10 +254,12 @@ class BSplineResampler(BaseResampler):
             coronal_before = before_data[:, mid_y_before, :].T
             coronal_after = after_data[:, mid_y_after, :].T
 
-            # Create figure: 2 rows x 3 columns
-            fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+            # Create figure: 3 rows x 3 columns (last row has histogram in middle)
+            fig = plt.figure(figsize=(18, 16))
+            gs = fig.add_gridspec(3, 3, hspace=0.3, wspace=0.2)
+
             fig.suptitle(
-                f'Resampling (BSpline order {self.bspline_order}): {before_path.stem}',
+                f'BSpline Resampling: {before_path.stem}',
                 fontsize=16,
                 fontweight='bold'
             )
@@ -263,51 +269,102 @@ class BSplineResampler(BaseResampler):
             vmax = max(before_data.max(), after_data.max())
 
             # Row 1: Original image
-            axes[0, 0].imshow(axial_before, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
-            axes[0, 0].set_title('Original - Axial')
-            axes[0, 0].axis('off')
+            ax00 = fig.add_subplot(gs[0, 0])
+            ax00.imshow(axial_before, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
+            ax00.set_title('Original - Axial', fontsize=12)
+            ax00.axis('off')
 
-            axes[0, 1].imshow(sagittal_before, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
-            axes[0, 1].set_title('Original - Sagittal')
-            axes[0, 1].axis('off')
+            ax01 = fig.add_subplot(gs[0, 1])
+            ax01.imshow(sagittal_before, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
+            ax01.set_title('Original - Sagittal', fontsize=12)
+            ax01.axis('off')
 
-            axes[0, 2].imshow(coronal_before, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
-            axes[0, 2].set_title('Original - Coronal')
-            axes[0, 2].axis('off')
+            ax02 = fig.add_subplot(gs[0, 2])
+            ax02.imshow(coronal_before, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
+            ax02.set_title('Original - Coronal', fontsize=12)
+            ax02.axis('off')
 
             # Row 2: Resampled image
-            axes[1, 0].imshow(axial_after, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
-            axes[1, 0].set_title('Resampled - Axial')
-            axes[1, 0].axis('off')
+            ax10 = fig.add_subplot(gs[1, 0])
+            ax10.imshow(axial_after, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
+            ax10.set_title('BSpline Resampled - Axial', fontsize=12)
+            ax10.axis('off')
 
-            axes[1, 1].imshow(sagittal_after, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
-            axes[1, 1].set_title('Resampled - Sagittal')
-            axes[1, 1].axis('off')
+            ax11 = fig.add_subplot(gs[1, 1])
+            ax11.imshow(sagittal_after, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
+            ax11.set_title('BSpline Resampled - Sagittal', fontsize=12)
+            ax11.axis('off')
 
-            axes[1, 2].imshow(coronal_after, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
-            axes[1, 2].set_title('Resampled - Coronal')
-            axes[1, 2].axis('off')
+            ax12 = fig.add_subplot(gs[1, 2])
+            ax12.imshow(coronal_after, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
+            ax12.set_title('BSpline Resampled - Coronal', fontsize=12)
+            ax12.axis('off')
+
+            # Row 3: Overlayed histogram (center column, spans all 3 columns)
+            ax2 = fig.add_subplot(gs[2, :])
+
+            # Flatten data for histogram
+            before_flat = before_data.flatten()
+            after_flat = after_data.flatten()
+
+            # Remove zero/background values for better histogram
+            before_nonzero = before_flat[before_flat > 0]
+            after_nonzero = after_flat[after_flat > 0]
+
+            # Compute histogram bins
+            bins = 100
+            hist_range = (
+                min(before_nonzero.min(), after_nonzero.min()),
+                max(before_nonzero.max(), after_nonzero.max())
+            )
+
+            # Plot overlayed histograms with transparency
+            ax2.hist(
+                before_nonzero,
+                bins=bins,
+                range=hist_range,
+                alpha=0.5,
+                label='Original',
+                color='blue',
+                density=True
+            )
+            ax2.hist(
+                after_nonzero,
+                bins=bins,
+                range=hist_range,
+                alpha=0.5,
+                label='BSpline Resampled',
+                color='red',
+                density=True
+            )
+
+            ax2.set_xlabel('Intensity', fontsize=11)
+            ax2.set_ylabel('Density', fontsize=11)
+            ax2.set_title('Intensity Distribution Comparison (non-zero voxels)', fontsize=12)
+            ax2.legend(fontsize=10)
+            ax2.grid(True, alpha=0.3)
 
             # Add metadata text
             metadata_text = (
                 f"Original:\n"
                 f"  Spacing: {original_spacing}\n"
                 f"  Shape: {original_shape}\n\n"
-                f"Resampled:\n"
+                f"BSpline Resampled:\n"
                 f"  Spacing: {target_spacing}\n"
-                f"  Shape: {resampled_shape}"
+                f"  Shape: {resampled_shape}\n\n"
+                f"BSpline Config:\n"
+                f"  Order: {self.bspline_order}\n"
+                f"  Target voxel size: {self.target_voxel_size}"
             )
 
             fig.text(
-                0.5, 0.02,
+                0.5, 0.01,
                 metadata_text,
                 ha='center',
-                fontsize=10,
+                fontsize=9,
                 family='monospace',
                 bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5)
             )
-
-            plt.tight_layout(rect=[0, 0.05, 1, 0.98])
 
             # Ensure output directory exists
             output_path.parent.mkdir(parents=True, exist_ok=True)

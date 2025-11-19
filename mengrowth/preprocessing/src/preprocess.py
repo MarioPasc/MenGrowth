@@ -685,7 +685,7 @@ class PreprocessingOrchestrator:
                                     resample_result=resample_result
                                 )
                             else:
-                                # Standard 2-row visualization: original → resampled
+                                # Standard visualization: original → resampled (with histogram)
                                 self.resampler.visualize(
                                     paths["nifti"],
                                     temp_resampled,

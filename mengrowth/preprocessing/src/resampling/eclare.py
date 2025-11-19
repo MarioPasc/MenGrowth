@@ -169,7 +169,7 @@ class EclareResampler(BaseResampler):
             "--n-patches", str(self.n_patches),
             "--inplane-acq-res", f"{self.target_voxel_size[0]}", f"{self.target_voxel_size[1]}",
             "--patch-sampling", self.patch_sampling,
-            "--relative-slice-thickness", str(relative_slice_thickness),
+            #"--relative-slice-thickness", str(relative_slice_thickness),
             "--gpu-id", str(gpu_id)
         ]
 
