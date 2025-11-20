@@ -66,7 +66,7 @@ preprocessing:
     step2_resampling:
         save_visualization: true # Save visualization for resampling step, we must see axial, sagittal, and coronal views
         resampling:
-          method: bspline                   # "bspline" | "eclare" | "composite" | null (null to skip)
+          method: composite                   # "bspline" | "eclare" | "composite" | null (null to skip)
           
           target_voxel_size: [1.0, 1.0, 1.0]  # in mm (isotropic)
 
@@ -120,7 +120,7 @@ preprocessing:
           
           max_mm_interpolator: 1.5
           max_mm_dl_method: 5.0
-          resample_mm_to_interpolator_if_max_mm_dl_method: 3.0
+          resample_mm_to_interpolator_if_max_mm_dl_method: 3.5
 
     step3_registration:
         save_visualization: true # Save visualization for registration step (one PNG per modality)
