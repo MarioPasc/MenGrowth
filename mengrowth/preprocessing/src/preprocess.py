@@ -204,39 +204,71 @@ class PreprocessingOrchestrator:
                 f"Unknown resampling method: {resample_method}. Must be None, 'bspline', 'eclare', or 'composite'"
             )
 
-        # Select registration algorithm based on method
-        reg_method = config.step3_registration.registration.method
-        if reg_method is None:
-            self.registrator = None
+        # Step 3a: Intra-study to reference registration
+        intra_study_to_ref_method = config.step3_registration.intra_study_to_reference.method
+        if intra_study_to_ref_method is None:
+            self.intra_study_to_ref_registrator = None
             self.selected_reference_modality = None
-            self.logger.info("Preprocessing orchestrator initialized with registration disabled")
-        elif reg_method == "ants":
+            self.logger.info("Intra-study to reference registration disabled")
+        elif intra_study_to_ref_method == "ants":
             from mengrowth.preprocessing.src.registration.multi_modal_coregistration import MultiModalCoregistration
-            # Convert RegistrationConfig to dictionary for initializer
-            reg_config_dict = {
-                "reference_modality_priority": config.step3_registration.registration.reference_modality_priority,
-                "transform_type": config.step3_registration.registration.transform_type,
-                "metric": config.step3_registration.registration.metric,
-                "metric_bins": config.step3_registration.registration.metric_bins,
-                "sampling_strategy": config.step3_registration.registration.sampling_strategy,
-                "sampling_percentage": config.step3_registration.registration.sampling_percentage,
-                "number_of_iterations": config.step3_registration.registration.number_of_iterations,
-                "shrink_factors": config.step3_registration.registration.shrink_factors,
-                "smoothing_sigmas": config.step3_registration.registration.smoothing_sigmas,
-                "convergence_threshold": config.step3_registration.registration.convergence_threshold,
-                "convergence_window_size": config.step3_registration.registration.convergence_window_size,
-                "write_composite_transform": config.step3_registration.registration.write_composite_transform,
-                "interpolation": config.step3_registration.registration.interpolation,
+            # Convert config to dictionary
+            intra_study_to_ref_config = {
+                "reference_modality_priority": config.step3_registration.intra_study_to_reference.reference_modality_priority,
+                "transform_type": config.step3_registration.intra_study_to_reference.transform_type,
+                "metric": config.step3_registration.intra_study_to_reference.metric,
+                "metric_bins": config.step3_registration.intra_study_to_reference.metric_bins,
+                "sampling_strategy": config.step3_registration.intra_study_to_reference.sampling_strategy,
+                "sampling_percentage": config.step3_registration.intra_study_to_reference.sampling_percentage,
+                "number_of_iterations": config.step3_registration.intra_study_to_reference.number_of_iterations,
+                "shrink_factors": config.step3_registration.intra_study_to_reference.shrink_factors,
+                "smoothing_sigmas": config.step3_registration.intra_study_to_reference.smoothing_sigmas,
+                "convergence_threshold": config.step3_registration.intra_study_to_reference.convergence_threshold,
+                "convergence_window_size": config.step3_registration.intra_study_to_reference.convergence_window_size,
+                "write_composite_transform": config.step3_registration.intra_study_to_reference.write_composite_transform,
+                "interpolation": config.step3_registration.intra_study_to_reference.interpolation,
             }
-            self.registrator = MultiModalCoregistration(
-                config=reg_config_dict,
+            self.intra_study_to_ref_registrator = MultiModalCoregistration(
+                config=intra_study_to_ref_config,
                 verbose=verbose
             )
             self.selected_reference_modality = None  # Will be set during execution
-            self.logger.info(f"Preprocessing orchestrator initialized with registration method: {reg_method}")
+            self.logger.info(f"Intra-study to reference registration initialized: {intra_study_to_ref_method}")
         else:
             raise ValueError(
-                f"Unknown registration method: {reg_method}. Must be None or 'ants'"
+                f"Unknown intra-study to reference method: {intra_study_to_ref_method}. Must be None or 'ants'"
+            )
+
+        # Step 3b: Intra-study to atlas registration
+        intra_study_to_atlas_method = config.step3_registration.intra_study_to_atlas.method
+        if intra_study_to_atlas_method is None:
+            self.intra_study_to_atlas_registrator = None
+            self.logger.info("Intra-study to atlas registration disabled")
+        elif intra_study_to_atlas_method == "ants":
+            from mengrowth.preprocessing.src.registration.intra_study_to_atlas import IntraStudyToAtlas
+            # Convert config to dictionary
+            intra_study_to_atlas_config = {
+                "atlas_path": config.step3_registration.intra_study_to_atlas.atlas_path,
+                "transforms": config.step3_registration.intra_study_to_atlas.transforms,
+                "create_composite_transforms": config.step3_registration.intra_study_to_atlas.create_composite_transforms,
+                "metric": config.step3_registration.intra_study_to_atlas.metric,
+                "metric_bins": config.step3_registration.intra_study_to_atlas.metric_bins,
+                "sampling_strategy": config.step3_registration.intra_study_to_atlas.sampling_strategy,
+                "sampling_percentage": config.step3_registration.intra_study_to_atlas.sampling_percentage,
+                "number_of_iterations": config.step3_registration.intra_study_to_atlas.number_of_iterations,
+                "shrink_factors": config.step3_registration.intra_study_to_atlas.shrink_factors,
+                "smoothing_sigmas": config.step3_registration.intra_study_to_atlas.smoothing_sigmas,
+                "convergence_threshold": config.step3_registration.intra_study_to_atlas.convergence_threshold,
+                "convergence_window_size": config.step3_registration.intra_study_to_atlas.convergence_window_size,
+                "interpolation": config.step3_registration.intra_study_to_atlas.interpolation,
+            }
+            # Note: reference_modality will be set after step 3a completes
+            self.intra_study_to_atlas_registrator = None  # Will be initialized with reference_modality later
+            self.intra_study_to_atlas_config = intra_study_to_atlas_config
+            self.logger.info(f"Intra-study to atlas registration will be initialized after reference selection")
+        else:
+            raise ValueError(
+                f"Unknown intra-study to atlas method: {intra_study_to_atlas_method}. Must be None or 'ants'"
             )
 
     def _get_study_directories(self, patient_id: str) -> List[Path]:
@@ -786,9 +818,10 @@ class PreprocessingOrchestrator:
                     total_errors += 1
                     # Continue with next modality
 
-            # Step 3: Multi-modal coregistration (once per study, after all modalities processed)
-            if self.registrator is not None:
-                self.logger.info(f"\n  [Step 3] Multi-modal coregistration")
+            # Step 3a: Intra-study multi-modal coregistration to reference
+            intra_study_transforms = {}  # Store transforms for step 3b
+            if self.intra_study_to_ref_registrator is not None:
+                self.logger.info(f"\n  [Step 3a] Intra-study multi-modal coregistration to reference")
                 try:
                     # Determine study output directory based on mode
                     if self.config.mode == "test":
@@ -800,15 +833,16 @@ class PreprocessingOrchestrator:
                         artifacts_base = Path(self.config.preprocessing_artifacts_path) / patient_id / study_dir.name
                         viz_base = Path(self.config.viz_root) / patient_id / study_dir.name
 
-                    # Execute registration
-                    reg_result = self.registrator.execute(
+                    # Execute intra-study to reference registration
+                    reg_result = self.intra_study_to_ref_registrator.execute(
                         study_dir=study_output_dir,
                         artifacts_dir=artifacts_base,
                         modalities=self.config.modalities
                     )
 
-                    # Store selected reference modality for next steps
+                    # Store selected reference modality and transforms for step 3b
                     self.selected_reference_modality = reg_result["reference_modality"]
+                    intra_study_transforms = reg_result["transforms"]
                     self.logger.info(f"  Reference modality: {self.selected_reference_modality}")
 
                     # Generate visualizations if enabled
@@ -816,18 +850,15 @@ class PreprocessingOrchestrator:
                         reference_path = study_output_dir / f"{self.selected_reference_modality}.nii.gz"
 
                         for modality in reg_result["registered_modalities"]:
-                            # Find the original (unregistered) version for visualization
                             # Note: The file has already been replaced with registered version
-                            # So we visualize: reference, registered(current), registered(current)
-                            # This is a simplification - ideally we'd keep the original
                             moving_path = study_output_dir / f"{modality}.nii.gz"  # Now contains registered version
                             registered_path = moving_path  # Same (already replaced)
                             transform_path = reg_result["transforms"].get(modality)
 
-                            viz_output = viz_base / f"step3_registration_{modality}_to_{self.selected_reference_modality}.png"
+                            viz_output = viz_base / f"step3a_intra_study_to_ref_{modality}_to_{self.selected_reference_modality}.png"
 
                             try:
-                                self.registrator.visualize(
+                                self.intra_study_to_ref_registrator.visualize(
                                     reference_path=reference_path,
                                     moving_path=moving_path,  # Actually the registered version
                                     registered_path=registered_path,
@@ -839,15 +870,93 @@ class PreprocessingOrchestrator:
                                 self.logger.warning(f"  Failed to generate visualization for {modality}: {viz_error}")
 
                     self.logger.info(
-                        f"  Successfully registered {len(reg_result['registered_modalities'])} modalities"
+                        f"  Successfully registered {len(reg_result['registered_modalities'])} modalities to reference"
                     )
 
                 except Exception as e:
-                    self.logger.error(f"  [Error] Registration failed: {e}")
+                    self.logger.error(f"  [Error] Intra-study to reference registration failed: {e}")
                     total_errors += 1
                     # Continue with next study
             else:
-                self.logger.info("  [Step 3: Registration skipped - method is None]")
+                self.logger.info("  [Step 3a: Intra-study to reference registration skipped - method is None]")
+
+            # Step 3b: Intra-study to atlas registration (register reference to atlas, propagate transforms)
+            if self.intra_study_to_atlas_config is not None and self.selected_reference_modality is not None:
+                self.logger.info(f"\n  [Step 3b] Intra-study to atlas registration")
+                try:
+                    # Initialize atlas registrator with reference modality from step 3a
+                    from mengrowth.preprocessing.src.registration.intra_study_to_atlas import IntraStudyToAtlas
+
+                    atlas_registrator = IntraStudyToAtlas(
+                        config=self.intra_study_to_atlas_config,
+                        reference_modality=self.selected_reference_modality,
+                        verbose=self.verbose
+                    )
+
+                    # Determine study output directory based on mode
+                    if self.config.mode == "test":
+                        study_output_dir = Path(self.config.output_root) / patient_id / study_dir.name
+                        artifacts_base = Path(self.config.preprocessing_artifacts_path) / patient_id / study_dir.name
+                        viz_base = Path(self.config.viz_root) / patient_id / study_dir.name
+                    else:
+                        study_output_dir = study_dir
+                        artifacts_base = Path(self.config.preprocessing_artifacts_path) / patient_id / study_dir.name
+                        viz_base = Path(self.config.viz_root) / patient_id / study_dir.name
+
+                    # Execute atlas registration
+                    atlas_result = atlas_registrator.execute(
+                        study_dir=study_output_dir,
+                        artifacts_dir=artifacts_base,
+                        modalities=self.config.modalities,
+                        intra_study_transforms=intra_study_transforms
+                    )
+
+                    self.logger.info(f"  Reference registered to atlas: {atlas_result['atlas_path']}")
+
+                    # Generate visualizations if enabled
+                    if self.config.step3_registration.save_visualization:
+                        atlas_path = Path(self.intra_study_to_atlas_config["atlas_path"])
+                        reference_path = study_output_dir / f"{self.selected_reference_modality}.nii.gz"
+
+                        # Visualize reference to atlas alignment
+                        viz_output_ref = viz_base / f"step3b_atlas_registration_reference_{self.selected_reference_modality}.png"
+                        try:
+                            atlas_registrator.visualize_reference_to_atlas(
+                                atlas_path=atlas_path,
+                                reference_path=reference_path,
+                                output_path=viz_output_ref,
+                                ref_to_atlas_transform=atlas_result["ref_to_atlas_transform"]
+                            )
+                        except Exception as viz_error:
+                            self.logger.warning(f"  Failed to generate reference→atlas visualization: {viz_error}")
+
+                        # Visualize each modality in atlas space
+                        for modality in atlas_result["registered_modalities"]:
+                            modality_path = study_output_dir / f"{modality}.nii.gz"
+                            viz_output = viz_base / f"step3b_atlas_space_{modality}.png"
+
+                            try:
+                                atlas_registrator.visualize_modality_in_atlas_space(
+                                    atlas_path=atlas_path,
+                                    modality_path=modality_path,
+                                    output_path=viz_output,
+                                    modality=modality
+                                )
+                            except Exception as viz_error:
+                                self.logger.warning(f"  Failed to generate atlas space visualization for {modality}: {viz_error}")
+
+                    self.logger.info(
+                        f"  Successfully registered {len(atlas_result['registered_modalities'])} modalities to atlas space"
+                    )
+
+                except Exception as e:
+                    self.logger.error(f"  [Error] Intra-study to atlas registration failed: {e}")
+                    total_errors += 1
+                    # Continue with next study
+            elif self.intra_study_to_atlas_config is not None and self.selected_reference_modality is None:
+                self.logger.warning("  [Step 3b: Atlas registration skipped - no reference modality available from step 3a]")
+            else:
+                self.logger.info("  [Step 3b: Intra-study to atlas registration skipped - method is None]")
 
         # Summary
         self.logger.info(f"\n{'='*80}")

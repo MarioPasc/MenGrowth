@@ -455,8 +455,11 @@ class Step2ResamplingConfig:
 
 
 @dataclass
-class RegistrationConfig:
-    """Configuration for image registration.
+class IntraStudyToReferenceConfig:
+    """Configuration for intra-study multi-modal coregistration to reference.
+
+    This step registers all modalities within a study to a reference modality
+    (e.g., T1n, T2w, T2-FLAIR → T1c).
 
     Attributes:
         method: Registration method ("ants" or None to skip)
@@ -596,20 +599,167 @@ class RegistrationConfig:
 
 
 @dataclass
+class IntraStudyToAtlasConfig:
+    """Configuration for registering reference modality to atlas space.
+
+    This step registers the reference modality to an atlas (e.g., SRI24) and
+    propagates the transform to all other modalities, bringing the entire study
+    into atlas space.
+
+    Attributes:
+        method: Registration method ("ants" or None to skip)
+        atlas_path: Path to atlas NIfTI file (e.g., SRI24_T1.nii.gz)
+        transforms: List of transform types to apply (e.g., ["Rigid", "Affine"])
+        create_composite_transforms: Whether to create composite M→atlas transforms
+        metric: Similarity metric for registration
+        metric_bins: Number of bins for mutual information metric
+        sampling_strategy: Sampling strategy ("Random", "Regular", or "None")
+        sampling_percentage: Percentage of voxels to sample (0.0-1.0)
+        number_of_iterations: Iterations per resolution level (one sublist per transform)
+        shrink_factors: Downsampling factors per level (one sublist per transform)
+        smoothing_sigmas: Smoothing sigmas per level (one sublist per transform)
+        convergence_threshold: Convergence threshold for optimization
+        convergence_window_size: Window size for convergence detection
+        interpolation: Interpolation method for intensities
+    """
+    method: Optional[Literal["ants"]] = "ants"
+    atlas_path: str = ""
+    transforms: List[str] = field(default_factory=lambda: ["Rigid", "Affine"])
+    create_composite_transforms: bool = False
+    metric: str = "Mattes"
+    metric_bins: int = 32
+    sampling_strategy: str = "Random"
+    sampling_percentage: float = 0.2
+    number_of_iterations: List[List[int]] = field(default_factory=lambda: [[1000, 500, 250], [500, 250, 100]])
+    shrink_factors: List[List[int]] = field(default_factory=lambda: [[4, 2, 1], [2, 1, 1]])
+    smoothing_sigmas: List[List[int]] = field(default_factory=lambda: [[2, 1, 0], [1, 0, 0]])
+    convergence_threshold: float = 1e-6
+    convergence_window_size: int = 10
+    interpolation: str = "Linear"
+
+    def __post_init__(self) -> None:
+        """Validate configuration values."""
+        # Validate method
+        if self.method is not None and self.method not in ["ants"]:
+            raise ConfigurationError(
+                f"method must be None or 'ants', got {self.method}"
+            )
+
+        # Skip validation if method is None (atlas registration disabled)
+        if self.method is None:
+            return
+
+        # Validate atlas_path
+        if not self.atlas_path:
+            raise ConfigurationError(
+                "atlas_path must be specified when method is not None"
+            )
+
+        # Validate transforms
+        if not self.transforms:
+            raise ConfigurationError(
+                "transforms list cannot be empty"
+            )
+        valid_transforms = ["Rigid", "Affine", "SyN"]
+        for t in self.transforms:
+            if t not in valid_transforms:
+                raise ConfigurationError(
+                    f"Invalid transform '{t}'. Must be one of {valid_transforms}"
+                )
+
+        # Validate that number_of_iterations, shrink_factors, smoothing_sigmas have same length as transforms
+        if len(self.number_of_iterations) != len(self.transforms):
+            raise ConfigurationError(
+                f"number_of_iterations must have one sublist per transform. "
+                f"Got {len(self.number_of_iterations)} sublists for {len(self.transforms)} transforms"
+            )
+        if len(self.shrink_factors) != len(self.transforms):
+            raise ConfigurationError(
+                f"shrink_factors must have one sublist per transform. "
+                f"Got {len(self.shrink_factors)} sublists for {len(self.transforms)} transforms"
+            )
+        if len(self.smoothing_sigmas) != len(self.transforms):
+            raise ConfigurationError(
+                f"smoothing_sigmas must have one sublist per transform. "
+                f"Got {len(self.smoothing_sigmas)} sublists for {len(self.transforms)} transforms"
+            )
+
+        # Validate metric
+        valid_metrics = ["Mattes", "MI", "CC", "MeanSquares", "Demons"]
+        if self.metric not in valid_metrics:
+            raise ConfigurationError(
+                f"metric must be one of {valid_metrics}, got {self.metric}"
+            )
+
+        # Validate metric_bins
+        if not 8 <= self.metric_bins <= 128:
+            raise ConfigurationError(
+                f"metric_bins must be in [8, 128], got {self.metric_bins}"
+            )
+
+        # Validate sampling_strategy
+        if self.sampling_strategy not in ["Random", "Regular", "None"]:
+            raise ConfigurationError(
+                f"sampling_strategy must be 'Random', 'Regular', or 'None', got {self.sampling_strategy}"
+            )
+
+        # Validate sampling_percentage
+        if not 0.0 < self.sampling_percentage <= 1.0:
+            raise ConfigurationError(
+                f"sampling_percentage must be in (0.0, 1.0], got {self.sampling_percentage}"
+            )
+
+        # Validate convergence_threshold
+        if self.convergence_threshold <= 0:
+            raise ConfigurationError(
+                f"convergence_threshold must be positive, got {self.convergence_threshold}"
+            )
+
+        # Validate convergence_window_size
+        if self.convergence_window_size < 1:
+            raise ConfigurationError(
+                f"convergence_window_size must be >= 1, got {self.convergence_window_size}"
+            )
+
+        # Validate interpolation
+        valid_interpolations = ["Linear", "BSpline", "NearestNeighbor", "MultiLabel", "Gaussian"]
+        if self.interpolation not in valid_interpolations:
+            raise ConfigurationError(
+                f"interpolation must be one of {valid_interpolations}, got {self.interpolation}"
+            )
+
+
+@dataclass
 class Step3RegistrationConfig:
-    """Configuration for Step 3: Multi-modal coregistration.
+    """Configuration for Step 3: Multi-modal coregistration and atlas registration.
+
+    This step consists of two sub-steps:
+    1. Intra-study to reference: Register all modalities within a study to a reference
+    2. Intra-study to atlas: Register the reference (and all modalities) to atlas space
 
     Attributes:
         save_visualization: Whether to save visualization outputs for this step
-        registration: Configuration for registration method
+        intra_study_to_reference: Configuration for intra-study coregistration
+        intra_study_to_atlas: Configuration for atlas registration
     """
     save_visualization: bool = True
-    registration: RegistrationConfig = field(default_factory=RegistrationConfig)
+    intra_study_to_reference: IntraStudyToReferenceConfig = field(
+        default_factory=IntraStudyToReferenceConfig
+    )
+    intra_study_to_atlas: IntraStudyToAtlasConfig = field(
+        default_factory=IntraStudyToAtlasConfig
+    )
 
     def __post_init__(self) -> None:
-        """Ensure registration is a RegistrationConfig instance."""
-        if isinstance(self.registration, dict):
-            self.registration = RegistrationConfig(**self.registration)
+        """Ensure sub-configs are proper dataclass instances."""
+        if isinstance(self.intra_study_to_reference, dict):
+            self.intra_study_to_reference = IntraStudyToReferenceConfig(
+                **self.intra_study_to_reference
+            )
+        if isinstance(self.intra_study_to_atlas, dict):
+            self.intra_study_to_atlas = IntraStudyToAtlasConfig(
+                **self.intra_study_to_atlas
+            )
 
 
 @dataclass

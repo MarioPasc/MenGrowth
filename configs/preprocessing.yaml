@@ -125,8 +125,8 @@ preprocessing:
     step3_registration:
         save_visualization: true # Save visualization for registration step (one PNG per modality)
 
-        # Multi-modal coregistration parameters
-        registration:
+        # Step 3a: Intra-study multi-modal coregistration to reference
+        intra_study_to_reference:
           method: "ants"                                # "ants" | null (null to skip)
           reference_modality_priority: "t1c > t1n > t2f > t2w"  # Priority order for reference selection
 
@@ -150,8 +150,34 @@ preprocessing:
 
           # Output parameters
           write_composite_transform: true               # Write composite transform file (.h5)
-          interpolation: "Linear"                       # "Linear" | "BSpline" | "NearestNeighbor"
+          interpolation: "BSpline"                       # "Linear" | "BSpline" | "NearestNeighbor"
 
+        # Step 3b: Register reference modality to atlas space and propagate transforms
+        intra_study_to_atlas:
+          method: "ants"                                # "ants" | null (null to skip atlas registration)
+          atlas_path: "/media/mpascual/PortableSSD/Meningiomas/ATLAS/sri24_spm8/templates/T1.nii"       # Path to atlas template (must be set if method != null)
 
+          # Transform parameters (can specify multiple transforms)
+          transforms: ["Rigid", "Affine"]               # List of transforms to apply sequentially
 
-        
+          # Whether to create composite M→atlas transforms (M→ref→atlas merged into single file)
+          create_composite_transforms: false            # true | false
+
+          # Metric parameters
+          metric: "Mattes"                              # "Mattes" | "MI" | "CC" | "MeanSquares" | "Demons"
+          metric_bins: 32                               # Number of bins for mutual information [8-128]
+          sampling_strategy: "Random"                   # "Random" | "Regular" | "None"
+          sampling_percentage: 0.2                      # Percentage of voxels to sample (0.0-1.0]
+
+          # Multi-resolution schedule (one sublist per transform)
+          number_of_iterations: [[1000, 500, 250], [500, 250, 100]]  # First for Rigid, second for Affine
+          shrink_factors: [[4, 2, 1], [2, 1, 1]]        # First for Rigid, second for Affine
+          smoothing_sigmas: [[2, 1, 0], [1, 0, 0]]      # First for Rigid, second for Affine
+
+          # Convergence parameters
+          convergence_threshold: 1.0e-6                 # Convergence threshold for optimization
+          convergence_window_size: 10                   # Window size for convergence detection
+
+          # Output parameters
+          interpolation: "BSpline"                       # "Linear" | "BSpline" | "NearestNeighbor"
+

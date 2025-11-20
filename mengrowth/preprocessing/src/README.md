@@ -39,7 +39,7 @@ For each study $S_i$ (time-point) of each patient, execute the following steps:
    - Register T1n → T1c, T2w → T1c, T2-FLAIR → T1c using rigid (6 d.o.f) transform with mutual-information metric (parameters tunable in the `configs/preprocessing.yaml` file, but we only contemplate rigid registration).  
    - Store transform matrices (artifacts folder).
 
-6. **Transform into atlas space + resample to 1 mm³ isotropic**  
+6. **Transform into atlas space**  
    - Register T1c (native) → SRI24-atlas (or chosen standard) with a rigid/affine transform (ATLAS path tunable in the `configs/preprocessing.yaml`).  
    - For each other modality, compute composed transform:  
      $$
