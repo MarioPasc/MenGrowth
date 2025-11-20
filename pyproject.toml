@@ -43,6 +43,7 @@ dependencies = [
     "matplotlib",
     "seaborn",
     "nibabel",
+    "nipype>=1.8.6",
     "pynrrd",
     "scipy",
     "scikit-image",

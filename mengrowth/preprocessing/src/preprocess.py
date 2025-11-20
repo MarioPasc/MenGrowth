@@ -204,6 +204,41 @@ class PreprocessingOrchestrator:
                 f"Unknown resampling method: {resample_method}. Must be None, 'bspline', 'eclare', or 'composite'"
             )
 
+        # Select registration algorithm based on method
+        reg_method = config.step3_registration.registration.method
+        if reg_method is None:
+            self.registrator = None
+            self.selected_reference_modality = None
+            self.logger.info("Preprocessing orchestrator initialized with registration disabled")
+        elif reg_method == "ants":
+            from mengrowth.preprocessing.src.registration.multi_modal_coregistration import MultiModalCoregistration
+            # Convert RegistrationConfig to dictionary for initializer
+            reg_config_dict = {
+                "reference_modality_priority": config.step3_registration.registration.reference_modality_priority,
+                "transform_type": config.step3_registration.registration.transform_type,
+                "metric": config.step3_registration.registration.metric,
+                "metric_bins": config.step3_registration.registration.metric_bins,
+                "sampling_strategy": config.step3_registration.registration.sampling_strategy,
+                "sampling_percentage": config.step3_registration.registration.sampling_percentage,
+                "number_of_iterations": config.step3_registration.registration.number_of_iterations,
+                "shrink_factors": config.step3_registration.registration.shrink_factors,
+                "smoothing_sigmas": config.step3_registration.registration.smoothing_sigmas,
+                "convergence_threshold": config.step3_registration.registration.convergence_threshold,
+                "convergence_window_size": config.step3_registration.registration.convergence_window_size,
+                "write_composite_transform": config.step3_registration.registration.write_composite_transform,
+                "interpolation": config.step3_registration.registration.interpolation,
+            }
+            self.registrator = MultiModalCoregistration(
+                config=reg_config_dict,
+                verbose=verbose
+            )
+            self.selected_reference_modality = None  # Will be set during execution
+            self.logger.info(f"Preprocessing orchestrator initialized with registration method: {reg_method}")
+        else:
+            raise ValueError(
+                f"Unknown registration method: {reg_method}. Must be None or 'ants'"
+            )
+
     def _get_study_directories(self, patient_id: str) -> List[Path]:
         """Get list of study directories for a patient.
 
@@ -293,6 +328,7 @@ class PreprocessingOrchestrator:
             "viz_background": viz_base / f"step0_background_{modality}.png",
             "viz_bias_field": viz_base / f"step1_bias_field_{modality}.png",
             "viz_resampling": viz_base / f"step2_resampling_{modality}.png",
+            "viz_registration": viz_base / f"step3_registration_{modality}.png",
         }
 
     def _visualize_normalization_and_resampling(
@@ -749,6 +785,69 @@ class PreprocessingOrchestrator:
                     self.logger.error(f"   [Error] Processing {modality}: {e}")
                     total_errors += 1
                     # Continue with next modality
+
+            # Step 3: Multi-modal coregistration (once per study, after all modalities processed)
+            if self.registrator is not None:
+                self.logger.info(f"\n  [Step 3] Multi-modal coregistration")
+                try:
+                    # Determine study output directory based on mode
+                    if self.config.mode == "test":
+                        study_output_dir = Path(self.config.output_root) / patient_id / study_dir.name
+                        artifacts_base = Path(self.config.preprocessing_artifacts_path) / patient_id / study_dir.name
+                        viz_base = Path(self.config.viz_root) / patient_id / study_dir.name
+                    else:
+                        study_output_dir = study_dir
+                        artifacts_base = Path(self.config.preprocessing_artifacts_path) / patient_id / study_dir.name
+                        viz_base = Path(self.config.viz_root) / patient_id / study_dir.name
+
+                    # Execute registration
+                    reg_result = self.registrator.execute(
+                        study_dir=study_output_dir,
+                        artifacts_dir=artifacts_base,
+                        modalities=self.config.modalities
+                    )
+
+                    # Store selected reference modality for next steps
+                    self.selected_reference_modality = reg_result["reference_modality"]
+                    self.logger.info(f"  Reference modality: {self.selected_reference_modality}")
+
+                    # Generate visualizations if enabled
+                    if self.config.step3_registration.save_visualization:
+                        reference_path = study_output_dir / f"{self.selected_reference_modality}.nii.gz"
+
+                        for modality in reg_result["registered_modalities"]:
+                            # Find the original (unregistered) version for visualization
+                            # Note: The file has already been replaced with registered version
+                            # So we visualize: reference, registered(current), registered(current)
+                            # This is a simplification - ideally we'd keep the original
+                            moving_path = study_output_dir / f"{modality}.nii.gz"  # Now contains registered version
+                            registered_path = moving_path  # Same (already replaced)
+                            transform_path = reg_result["transforms"].get(modality)
+
+                            viz_output = viz_base / f"step3_registration_{modality}_to_{self.selected_reference_modality}.png"
+
+                            try:
+                                self.registrator.visualize(
+                                    reference_path=reference_path,
+                                    moving_path=moving_path,  # Actually the registered version
+                                    registered_path=registered_path,
+                                    output_path=viz_output,
+                                    modality=modality,
+                                    transform_path=transform_path
+                                )
+                            except Exception as viz_error:
+                                self.logger.warning(f"  Failed to generate visualization for {modality}: {viz_error}")
+
+                    self.logger.info(
+                        f"  Successfully registered {len(reg_result['registered_modalities'])} modalities"
+                    )
+
+                except Exception as e:
+                    self.logger.error(f"  [Error] Registration failed: {e}")
+                    total_errors += 1
+                    # Continue with next study
+            else:
+                self.logger.info("  [Step 3: Registration skipped - method is None]")
 
         # Summary
         self.logger.info(f"\n{'='*80}")

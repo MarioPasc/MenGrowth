@@ -455,6 +455,164 @@ class Step2ResamplingConfig:
 
 
 @dataclass
+class RegistrationConfig:
+    """Configuration for image registration.
+
+    Attributes:
+        method: Registration method ("ants" or None to skip)
+        reference_modality_priority: Priority order for selecting reference modality
+                                      e.g., "t1c > t1n > t2f > t2w"
+        transform_type: Type of transform ("Rigid", "Affine", or "SyN")
+        metric: Similarity metric for registration ("Mattes", "MI", "CC", etc.)
+        metric_bins: Number of bins for mutual information metric
+        sampling_strategy: Sampling strategy ("Random", "Regular", or "None")
+        sampling_percentage: Percentage of voxels to sample (0.0-1.0)
+        number_of_iterations: Iterations per resolution level (list of lists)
+        shrink_factors: Downsampling factors per level (list of lists)
+        smoothing_sigmas: Smoothing sigmas per level (list of lists)
+        convergence_threshold: Convergence threshold for optimization
+        convergence_window_size: Window size for convergence detection
+        write_composite_transform: Write composite transform file (.h5)
+        interpolation: Interpolation method ("Linear", "BSpline", "NearestNeighbor")
+    """
+    method: Optional[Literal["ants"]] = "ants"
+    reference_modality_priority: str = "t1c > t1n > t2f > t2w"
+    transform_type: str = "Rigid"
+    metric: str = "Mattes"
+    metric_bins: int = 32
+    sampling_strategy: str = "Random"
+    sampling_percentage: float = 0.2
+    number_of_iterations: List[List[int]] = field(default_factory=lambda: [[1000, 500, 250]])
+    shrink_factors: List[List[int]] = field(default_factory=lambda: [[4, 2, 1]])
+    smoothing_sigmas: List[List[int]] = field(default_factory=lambda: [[2, 1, 0]])
+    convergence_threshold: float = 1e-6
+    convergence_window_size: int = 10
+    write_composite_transform: bool = True
+    interpolation: str = "Linear"
+
+    def __post_init__(self) -> None:
+        """Validate configuration values."""
+        # Validate method
+        if self.method is not None and self.method not in ["ants"]:
+            raise ConfigurationError(
+                f"method must be None or 'ants', got {self.method}"
+            )
+
+        # Skip validation if method is None (registration disabled)
+        if self.method is None:
+            return
+
+        # Validate reference_modality_priority
+        if not self.reference_modality_priority:
+            raise ConfigurationError(
+                "reference_modality_priority cannot be empty"
+            )
+        if ">" not in self.reference_modality_priority:
+            # Single modality specified
+            if not self.reference_modality_priority.strip():
+                raise ConfigurationError(
+                    "reference_modality_priority must specify at least one modality"
+                )
+
+        # Validate transform_type
+        if self.transform_type not in ["Rigid", "Affine", "SyN"]:
+            raise ConfigurationError(
+                f"transform_type must be 'Rigid', 'Affine', or 'SyN', got {self.transform_type}"
+            )
+
+        # Validate metric
+        valid_metrics = ["Mattes", "MI", "CC", "MeanSquares", "Demons"]
+        if self.metric not in valid_metrics:
+            raise ConfigurationError(
+                f"metric must be one of {valid_metrics}, got {self.metric}"
+            )
+
+        # Validate metric_bins
+        if not 8 <= self.metric_bins <= 128:
+            raise ConfigurationError(
+                f"metric_bins must be in [8, 128], got {self.metric_bins}"
+            )
+
+        # Validate sampling_strategy
+        if self.sampling_strategy not in ["Random", "Regular", "None"]:
+            raise ConfigurationError(
+                f"sampling_strategy must be 'Random', 'Regular', or 'None', got {self.sampling_strategy}"
+            )
+
+        # Validate sampling_percentage
+        if not 0.0 < self.sampling_percentage <= 1.0:
+            raise ConfigurationError(
+                f"sampling_percentage must be in (0.0, 1.0], got {self.sampling_percentage}"
+            )
+
+        # Validate number_of_iterations
+        if not isinstance(self.number_of_iterations, list):
+            raise ConfigurationError(
+                f"number_of_iterations must be a list, got {type(self.number_of_iterations)}"
+            )
+        if not all(isinstance(level, list) for level in self.number_of_iterations):
+            raise ConfigurationError(
+                "number_of_iterations must be a list of lists"
+            )
+
+        # Validate shrink_factors
+        if not isinstance(self.shrink_factors, list):
+            raise ConfigurationError(
+                f"shrink_factors must be a list, got {type(self.shrink_factors)}"
+            )
+        if not all(isinstance(level, list) for level in self.shrink_factors):
+            raise ConfigurationError(
+                "shrink_factors must be a list of lists"
+            )
+
+        # Validate smoothing_sigmas
+        if not isinstance(self.smoothing_sigmas, list):
+            raise ConfigurationError(
+                f"smoothing_sigmas must be a list, got {type(self.smoothing_sigmas)}"
+            )
+        if not all(isinstance(level, list) for level in self.smoothing_sigmas):
+            raise ConfigurationError(
+                "smoothing_sigmas must be a list of lists"
+            )
+
+        # Validate convergence_threshold
+        if self.convergence_threshold <= 0:
+            raise ConfigurationError(
+                f"convergence_threshold must be positive, got {self.convergence_threshold}"
+            )
+
+        # Validate convergence_window_size
+        if self.convergence_window_size < 1:
+            raise ConfigurationError(
+                f"convergence_window_size must be >= 1, got {self.convergence_window_size}"
+            )
+
+        # Validate interpolation
+        valid_interpolations = ["Linear", "BSpline", "NearestNeighbor", "MultiLabel", "Gaussian"]
+        if self.interpolation not in valid_interpolations:
+            raise ConfigurationError(
+                f"interpolation must be one of {valid_interpolations}, got {self.interpolation}"
+            )
+
+
+@dataclass
+class Step3RegistrationConfig:
+    """Configuration for Step 3: Multi-modal coregistration.
+
+    Attributes:
+        save_visualization: Whether to save visualization outputs for this step
+        registration: Configuration for registration method
+    """
+    save_visualization: bool = True
+    registration: RegistrationConfig = field(default_factory=RegistrationConfig)
+
+    def __post_init__(self) -> None:
+        """Ensure registration is a RegistrationConfig instance."""
+        if isinstance(self.registration, dict):
+            self.registration = RegistrationConfig(**self.registration)
+
+
+@dataclass
 class DataHarmonizationConfig:
     """Configuration for the data harmonization preprocessing stage.
 
@@ -472,6 +630,7 @@ class DataHarmonizationConfig:
         step0_data_harmonization: Configuration for harmonization operations
         step1_bias_field_correction: Configuration for bias field correction
         step2_resampling: Configuration for resampling to isotropic resolution
+        step3_registration: Configuration for multi-modal coregistration
     """
     enabled: bool = True
     patient_selector: Literal["single", "all"] = "single"
@@ -492,6 +651,9 @@ class DataHarmonizationConfig:
     step2_resampling: Step2ResamplingConfig = field(
         default_factory=Step2ResamplingConfig
     )
+    step3_registration: Step3RegistrationConfig = field(
+        default_factory=Step3RegistrationConfig
+    )
 
     def __post_init__(self) -> None:
         """Validate configuration and convert paths."""
@@ -511,6 +673,12 @@ class DataHarmonizationConfig:
         if isinstance(self.step2_resampling, dict):
             self.step2_resampling = Step2ResamplingConfig(
                 **self.step2_resampling
+            )
+
+        # Ensure step3 is a dataclass instance
+        if isinstance(self.step3_registration, dict):
+            self.step3_registration = Step3RegistrationConfig(
+                **self.step3_registration
             )
 
         # Validate dataset_root

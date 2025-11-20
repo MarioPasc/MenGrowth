@@ -66,7 +66,7 @@ preprocessing:
     step2_resampling:
         save_visualization: true # Save visualization for resampling step, we must see axial, sagittal, and coronal views
         resampling:
-          method: composite                   # "bspline" | "eclare" | "composite" | null (null to skip)
+          method: bspline                   # "bspline" | "eclare" | "composite" | null (null to skip)
           
           target_voxel_size: [1.0, 1.0, 1.0]  # in mm (isotropic)
 
@@ -118,10 +118,40 @@ preprocessing:
           # - 1.5 mm  -> interpolation method only (rule 2): 1.5 <= max_mm_interpolator
           # - 6.0 mm  -> Resample to 3.0 mm with interpolator, then DL method (rule 4): 6.0 is > max_mm_dl_method 
           
-          max_mm_interpolator: 1.5          
+          max_mm_interpolator: 1.5
           max_mm_dl_method: 5.0
           resample_mm_to_interpolator_if_max_mm_dl_method: 3.0
 
-          
+    step3_registration:
+        save_visualization: true # Save visualization for registration step (one PNG per modality)
+
+        # Multi-modal coregistration parameters
+        registration:
+          method: "ants"                                # "ants" | null (null to skip)
+          reference_modality_priority: "t1c > t1n > t2f > t2w"  # Priority order for reference selection
+
+          # Transform parameters
+          transform_type: "Rigid"                       # "Rigid" | "Affine" | "SyN"
+
+          # Metric parameters
+          metric: "Mattes"                              # "Mattes" | "MI" | "CC" | "MeanSquares" | "Demons"
+          metric_bins: 32                               # Number of bins for mutual information [8-128]
+          sampling_strategy: "Random"                   # "Random" | "Regular" | "None"
+          sampling_percentage: 0.2                      # Percentage of voxels to sample (0.0-1.0]
+
+          # Multi-resolution schedule
+          number_of_iterations: [[1000, 500, 250]]      # Iterations per level (list of lists)
+          shrink_factors: [[4, 2, 1]]                   # Downsampling factors per level (list of lists)
+          smoothing_sigmas: [[2, 1, 0]]                 # Smoothing sigmas per level (list of lists)
+
+          # Convergence parameters
+          convergence_threshold: 1.0e-6                 # Convergence threshold for optimization
+          convergence_window_size: 10                   # Window size for convergence detection
+
+          # Output parameters
+          write_composite_transform: true               # Write composite transform file (.h5)
+          interpolation: "Linear"                       # "Linear" | "BSpline" | "NearestNeighbor"
+
+
 
         
