@@ -1,0 +1,245 @@
+preprocessing:
+  data_harmonization:
+    enabled: true
+
+    # Selection
+    patient_selector: "single"        # "single" | "all"
+    patient_id: "MenGrowth-0006"      # used only if patient_selector == "single"
+
+    # I/O mode
+    mode: "test"                       # "test" | "pipeline"
+    dataset_root: "/media/hddb/mario/data/meningiomas/mengrowth/MenGrowth-2025"
+    output_root: "/media/hddb/mario/results/mengrowth/MenGrowth-2025"     # used in test mode
+    preprocessing_artifacts_path: "/media/hddb/mario/results/mengrowth/artifacts"  # intermediate artifacts
+    viz_root: "/media/hddb/mario/results/mengrowth/viz"              # quick-looks for both modes
+    overwrite: true                                                   # guard rails
+
+    # Modalities to include (if present in a study directory)
+    modalities: ["t1c", "t1n", "t2w", "t2f"]
+
+    step0_data_harmonization:
+        save_visualization: true # Save this step's visualization for the method used
+
+        # Orientation
+        reorient_to: "RAS"                 # "RAS" | "LPS"
+
+        # Background zeroing (conservative)
+        background_zeroing:
+          method: null # "border_connected_percentile" | "self_head_mask" | null
+
+          # if method == "border_connected_percentile"
+          percentile_low: 2              # [0.1-2.0], conservative default
+          gaussian_sigma: 0.5            # smoothing before thresholding (vox)
+          min_comp_voxels: 500           # ignore tiny components
+
+          # if method == "self_head_mask" - Fallback control
+          auto_fallback: true            # Use simple fallback if SELF fails
+          fallback_threshold: 0.05       # Min coverage (5%) for SELF before fallback
+          fallback_method: "otsu"        # Fallback method: "otsu" | "percentile" | "zero"
+          fallback_percentile: 10.0      # Percentile threshold for fallback (if method="percentile")
+          fill_value: 0.0                # Value to set for background voxels
+
+          air_p_low: 2.0                 # Percentile threshold for seeding air [0.0-100.0]
+          air_p_high: 20.0               # Percentile threshold for flood-fill through dark voxels
+          air_p_global: 0.2              # Global percentile for darkest voxels as fallback seeds
+          erode_vox: 1                   # Erosion iterations on head seed (0=conservative)
+          close_iters: 2                 # Iterations for final morphological smoothing
+          connectivity: 2                # Connectivity: 1=6-conn, 2=18-conn, 3=26-conn
+
+          # Common parameters (post-processing on air mask)
+          air_border_margin: 0           # Voxels to erode the air mask (MORE conservative - shrinks air region)
+          expand_air_mask: 3             # Voxels to dilate the air mask (LESS conservative - expands air region)
+          # Note: Use EITHER air_border_margin OR expand_air_mask, not both > 0
+
+    step1_bias_field_correction:
+        save_visualization: true # Save visualization for bias field correction
+        save_artifact: true      # Save bias field NIfTI to artifacts directory
+
+        # Bias field correction parameters
+        bias_field_correction:
+          method: "n4"                     # "n4" | null (null to skip)
+          shrink_factor: 4                 # Downsampling factor [1-8], higher=faster but coarser
+          max_iterations: [50, 50, 50, 50] # Iterations per resolution level (4 levels)
+          bias_field_fwhm: 0.15            # Gaussian smoothing FWHM [0.01-1.0], higher=smoother field
+          convergence_threshold: 0.001     # Early stopping threshold (0.0-1.0)
+
+    step2_resampling:
+        save_visualization: true # Save visualization for resampling step, we must see axial, sagittal, and coronal views
+        resampling:
+          method: bspline                   # "bspline" | "eclare" | "composite" | null (null to skip)
+          
+          target_voxel_size: [1.0, 1.0, 1.0]  # in mm (isotropic)
+
+          # Normalization parameters before resampling
+          normalize_method: null  # null | "zscore" | "kde" | "percentile_minmax" | "whitestripe" | "fcm" | "lsq"
+
+          # Common parameters
+          norm_value: 1.0  # For zscore, kde, lsq
+
+          # Percentile MinMax parameters
+          p1: 1.0
+          p2: 99.0
+
+          # WhiteStripe parameters
+          whitestripe_width: 0.05
+          whitestripe_width_l: null  # Optional lower bound override
+          whitestripe_width_u: null  # Optional upper bound override
+
+          # FCM parameters
+          fcm_n_clusters: 3
+          fcm_tissue_type: "WM"  # "WM" | "GM" | "CSF"
+          fcm_max_iter: 50
+          fcm_error_threshold: 0.005
+          fcm_fuzziness: 2.0 
+
+          # BSPLINE parameters
+          bspline_order: 3                    # if method == "bspline", order [0-5]
+
+          # ECLARE Deep-Learning based super-resolution parameters
+          conda_environment_eclare: "eclare"        # Name of the conda environment with ECLARE installed
+          batch_size: 128                           # Batch size for ECLARE inference
+          n_patches: 80000                          # Number of patches to sample for ECLARE inference
+          patch_sampling: "gradient"                # Patch sampling strategy: "uniform" | "gradient" | "random"
+          suffix: ""                                # Suffix to add to output filename when using ECLARE
+          gpu_id: 0                                 # GPU ID(s) to use for ECLARE inference (int or list of ints, e.g., 0 or [0, 1])
+
+          # COMPOSITE parameters
+          # Composite consists of applying interpolation followed by a deep-learning based enhancement. 
+          # The idea is that interpolators work better when the resolution of the image is better or closer to the target resolution.
+          # Therefore, if we detect a dimension in the image that has a better resolution than the target_voxel_size, we apply the 
+          # interpolator first to bring that dimension closer to the target resolution. 
+          # Then, we apply the deep-learning based enhancement to reach the target resolution.
+          composite_interpolator: "bspline"   # Interpolator for the first step of composite
+          composite_dl_method: "eclare"       # Deep-learning method for the second step of composite
+            
+          # The following three arguments operate following these set of rules:
+          # For a MRI volume with dimensions [dx, dy, dz] and target_voxel_size [tx, ty, tz]:
+          # 1. If any dimension is lower than the corresponding target voxel size (i.e., dx < tx, dy < ty, or dz < tz),
+          #    then we apply the interpolator to that dimension. 
+          #    (e.g., [tx, ty, tz] = [1.0, 1.0, 1.0], [dx, dy, dz] = [0.5, 1.2, 1.5] -> apply interpolator to dx)
+          # 2. If a dimension is higher than the target voxel size, but lower than the max_mm_interpolator threshold,
+          #    we also apply the interpolator to that dimension.
+          #    (e.g., [tx, ty, tz] = [1.0, 1.0, 1.0], [dx, dy, dz] = [1.1, 2.5, 6.0], max_mm_interpolator = 1.2 -> apply interpolator to dx)
+          # 3. Dimensions between max_mm_interpolator and max_mm_dl_method are processed by deep-learning method only. 
+          #    (e.g., [tx, ty, tz] = [1.0, 1.0, 1.0], [dx, dy, dz] = [1.5, 4.0, 6.0], max_mm_interpolator = 1.2, max_mm_dl_method = 5.0 -> apply dl to dx and dy)
+          # 4. Dimensions higher than max_mm_dl_method are resampled using the interpolator to bring them to the resolution specified in the
+          #    resample_mm_to_interpolator_if_max_mm_dl_method parameter for that dimension, then, we apply the deep-learning method to that output.
+          #    (e.g., [tx, ty, tz] = [1.0, 1.0, 1.0], [dx, dy, dz] = [1.5, 6.0, 10.0], max_mm_dl_method = 5.0, resample_mm_to_interpolator_if_max_mm_dl_method = 3.0 
+          #     -> resample dy and dz to 3.0 mm using the interpolator, then apply dl to dy and dz, for dx, apply dl directly)
+
+          # Complete example:
+          # Given target_voxel_size = [1.0, 1.0, 1.0], max_mm_interpolator = 1.5, max_mm_dl_method = 5.0, resample_mm_to_interpolator_if_max_mm_dl_method = 3.0
+          # For an image with voxel sizes [0.8, 1.5, 6.0]:
+          # - 0.8 mm  -> DL method only (rule 1)
+          # - 1.5 mm  -> interpolation method only (rule 2): 1.5 <= max_mm_interpolator
+          # - 6.0 mm  -> Resample to 3.0 mm with interpolator, then DL method (rule 4): 6.0 is > max_mm_dl_method 
+          
+          max_mm_interpolator: 1.5
+          max_mm_dl_method: 5.0
+          resample_mm_to_interpolator_if_max_mm_dl_method: 3.5
+
+    step3_registration:
+      save_visualization: true  # One PNG per modality
+
+      # Step 3a: Intra-study multi-modal coregistration to reference
+      intra_study_to_reference:
+        method: "ants"
+        engine: "antspyx"
+        # Prefer T1n as anatomical reference, then T1c, then T2F, then T2w
+        reference_modality_priority: "t1n > t1c > t2f > t2w"
+
+        # Transform: same-subject multimodal -> rigid only
+        transform_type: "Rigid"          # "Rigid" | "Affine" | "SyN"
+
+        # Metric: cross-correlation works well across T1/T2/FLAIR
+        metric: "CC"                     # CC ignores metric_bins internally
+        metric_bins: 32                  # kept for compatibility
+        sampling_strategy: "Regular"     # more stable than Random for partial FOV
+        sampling_percentage: 0.4         # higher fraction for anisotropic T2/T2F
+
+        # Multi-resolution schedule
+        number_of_iterations: [[600, 300, 150]]
+        shrink_factors: [[3, 2, 1]]
+        smoothing_sigmas: [[2, 1, 0]]
+
+        # Convergence parameters
+        convergence_threshold: 1.0e-6
+        convergence_window_size: 10
+
+        # Output parameters
+        write_composite_transform: true
+        interpolation: "BSpline"         # good for structural MRI
+
+      # Step 3b: Register reference modality (T1n, typically) to atlas space
+      intra_study_to_atlas:
+        method: "ants"
+        engine: "antspyx"
+        atlas_path: "/media/hddb/mario/data/meningiomas/mengrowth/templates/T1.nii"
+
+        # Purely linear atlas registration to avoid SyN over-deformation
+        transforms: ["Rigid", "Affine"]
+
+        # Create composite transform M→atlas (intra-study + atlas) per modality
+        create_composite_transforms: true
+
+        # Metric: MI/Mattes, robust across subjects/intensity scalings
+        metric: "Mattes"
+        metric_bins: 64                  # slightly higher for smoother MI estimate
+        sampling_strategy: "Regular"
+        sampling_percentage: 0.4
+
+        # Multi-resolution schedule (Rigid, then Affine)
+        number_of_iterations:
+          - [1000, 500, 250]             # Rigid
+          - [500, 250, 100]              # Affine
+        shrink_factors:
+          - [4, 2, 1]                    # Rigid
+          - [2, 1, 1]                    # Affine
+        smoothing_sigmas:
+          - [2, 1, 0]                    # Rigid
+          - [1, 0, 0]                    # Affine
+
+        convergence_threshold: 1.0e-6
+        convergence_window_size: 10
+
+        interpolation: "BSpline"
+
+    step4_skull_stripping:
+        save_visualization: true      # Save visualization PNGs
+        save_mask: true              # Save brain mask NIfTI to artifacts directory
+
+        skull_stripping:
+            method: "hdbet"          # "hdbet" | "synthstrip" | null (null to skip)
+            fill_value: 0.0          # Value for background voxels
+
+            # HD-BET specific parameters (used if method == "hdbet")
+            hdbet_mode: "accurate"   # "fast" | "accurate"
+            hdbet_device: 0          # GPU id (int) or "cpu" (str)
+            hdbet_do_tta: true       # Test-time augmentation
+
+            # SynthStrip specific parameters (used if method == "synthstrip")
+            synthstrip_border: 1     # Border parameter in mm
+            synthstrip_device: 0     # GPU id (int) or "cpu" (str)
+    step5_intensity_normalization:
+        save_visualization: true # Save visualization for intensity normalization step
+        intensity_normalization:
+            method: fcm  # null | "zscore" | "kde" | "percentile_minmax" | "whitestripe" | "fcm" | "lsq"
+
+            # Common parameters
+            norm_value: 1.0  # For zscore, kde, lsq
+
+            # Percentile MinMax parameters
+            p1: 1.0
+            p2: 99.0
+
+            # WhiteStripe parameters
+            width: 0.05
+            width_l: null  # Optional lower bound override
+            width_u: null  # Optional upper bound override
+
+            # FCM parameters
+            n_clusters: 3
+            tissue_type: "WM"  # "WM" | "GM" | "CSF"
+            max_iter: 50
+            error_threshold: 0.005
+            fuzziness: 2.0
