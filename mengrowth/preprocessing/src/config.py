@@ -479,6 +479,7 @@ class IntraStudyToReferenceConfig:
         interpolation: Interpolation method ("Linear", "BSpline", "NearestNeighbor")
     """
     method: Optional[Literal["ants"]] = "ants"
+    engine: Optional[Literal["nipype", "antspyx"]] = None
     reference_modality_priority: str = "t1c > t1n > t2f > t2w"
     transform_type: str = "Rigid"
     metric: str = "Mattes"
@@ -499,6 +500,12 @@ class IntraStudyToReferenceConfig:
         if self.method is not None and self.method not in ["ants"]:
             raise ConfigurationError(
                 f"method must be None or 'ants', got {self.method}"
+            )
+
+        # Validate engine (if specified)
+        if self.engine is not None and self.engine not in ["nipype", "antspyx"]:
+            raise ConfigurationError(
+                f"engine must be None, 'nipype', or 'antspyx', got {self.engine}"
             )
 
         # Skip validation if method is None (registration disabled)
@@ -623,6 +630,7 @@ class IntraStudyToAtlasConfig:
         interpolation: Interpolation method for intensities
     """
     method: Optional[Literal["ants"]] = "ants"
+    engine: Optional[Literal["nipype", "antspyx"]] = None
     atlas_path: str = ""
     transforms: List[str] = field(default_factory=lambda: ["Rigid", "Affine"])
     create_composite_transforms: bool = False
@@ -643,6 +651,12 @@ class IntraStudyToAtlasConfig:
         if self.method is not None and self.method not in ["ants"]:
             raise ConfigurationError(
                 f"method must be None or 'ants', got {self.method}"
+            )
+
+        # Validate engine (if specified)
+        if self.engine is not None and self.engine not in ["nipype", "antspyx"]:
+            raise ConfigurationError(
+                f"engine must be None, 'nipype', or 'antspyx', got {self.engine}"
             )
 
         # Skip validation if method is None (atlas registration disabled)

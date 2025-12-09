@@ -213,7 +213,8 @@ class PreprocessingOrchestrator:
             self.selected_reference_modality = None
             self.logger.info("Intra-study to reference registration disabled")
         elif intra_study_to_ref_method == "ants":
-            from mengrowth.preprocessing.src.registration.multi_modal_coregistration import MultiModalCoregistration
+            from mengrowth.preprocessing.src.registration.factory import create_multi_modal_coregistration
+            from mengrowth.preprocessing.src.registration.constants import DEFAULT_REGISTRATION_ENGINE
             # Convert config to dictionary
             intra_study_to_ref_config = {
                 "reference_modality_priority": config.step3_registration.intra_study_to_reference.reference_modality_priority,
@@ -229,8 +230,9 @@ class PreprocessingOrchestrator:
                 "convergence_window_size": config.step3_registration.intra_study_to_reference.convergence_window_size,
                 "write_composite_transform": config.step3_registration.intra_study_to_reference.write_composite_transform,
                 "interpolation": config.step3_registration.intra_study_to_reference.interpolation,
+                "engine": config.step3_registration.intra_study_to_reference.engine or DEFAULT_REGISTRATION_ENGINE,
             }
-            self.intra_study_to_ref_registrator = MultiModalCoregistration(
+            self.intra_study_to_ref_registrator = create_multi_modal_coregistration(
                 config=intra_study_to_ref_config,
                 verbose=verbose
             )
@@ -247,7 +249,7 @@ class PreprocessingOrchestrator:
             self.intra_study_to_atlas_registrator = None
             self.logger.info("Intra-study to atlas registration disabled")
         elif intra_study_to_atlas_method == "ants":
-            from mengrowth.preprocessing.src.registration.intra_study_to_atlas import IntraStudyToAtlas
+            from mengrowth.preprocessing.src.registration.constants import DEFAULT_REGISTRATION_ENGINE
             # Convert config to dictionary
             intra_study_to_atlas_config = {
                 "atlas_path": config.step3_registration.intra_study_to_atlas.atlas_path,
@@ -263,6 +265,7 @@ class PreprocessingOrchestrator:
                 "convergence_threshold": config.step3_registration.intra_study_to_atlas.convergence_threshold,
                 "convergence_window_size": config.step3_registration.intra_study_to_atlas.convergence_window_size,
                 "interpolation": config.step3_registration.intra_study_to_atlas.interpolation,
+                "engine": config.step3_registration.intra_study_to_atlas.engine or DEFAULT_REGISTRATION_ENGINE,
             }
             # Note: reference_modality will be set after step 3a completes
             self.intra_study_to_atlas_registrator = None  # Will be initialized with reference_modality later
@@ -921,9 +924,9 @@ class PreprocessingOrchestrator:
                 self.logger.info(f"\n  [Step 3b] Intra-study to atlas registration")
                 try:
                     # Initialize atlas registrator with reference modality from step 3a
-                    from mengrowth.preprocessing.src.registration.intra_study_to_atlas import IntraStudyToAtlas
+                    from mengrowth.preprocessing.src.registration.factory import create_intra_study_to_atlas
 
-                    atlas_registrator = IntraStudyToAtlas(
+                    atlas_registrator = create_intra_study_to_atlas(
                         config=self.intra_study_to_atlas_config,
                         reference_modality=self.selected_reference_modality,
                         verbose=self.verbose

@@ -1,11 +1,12 @@
-"""Multi-modal intra-study coregistration using ANTs.
+"""Multi-modal intra-study coregistration using AntsPyX.
 
 This module implements rigid registration of multiple MRI modalities
-to a reference sequence within the same study/time-point.
+to a reference sequence within the same study/time-point using the
+AntsPyX library instead of nipype.
 """
 
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Tuple
 import logging
 import time
 
@@ -17,8 +18,11 @@ from mengrowth.preprocessing.src.registration.base import BaseRegistrator
 logger = logging.getLogger(__name__)
 
 
-class MultiModalCoregistration(BaseRegistrator):
-    """Intra-study rigid multi-modal coregistration using ANTs.
+class AntsPyXMultiModalCoregistration(BaseRegistrator):
+    """Intra-study rigid multi-modal coregistration using AntsPyX.
+
+    This is the AntsPyX-based implementation, functionally equivalent
+    to MultiModalCoregistration but using antspyx library instead of nipype.
 
     For each study, registers all modalities (T1n, T2w, T2-FLAIR, etc.)
     to a reference modality (typically T1c) using rigid registration.
@@ -32,7 +36,7 @@ class MultiModalCoregistration(BaseRegistrator):
     """
 
     def __init__(self, config: Dict[str, Any], verbose: bool = False) -> None:
-        """Initialize multi-modal coregistration step.
+        """Initialize multi-modal coregistration step with AntsPyX.
 
         Args:
             config: Configuration dictionary from RegistrationConfig
@@ -40,6 +44,15 @@ class MultiModalCoregistration(BaseRegistrator):
         """
         super().__init__(config=config, verbose=verbose)
         self.logger = logging.getLogger(__name__)
+
+        # Validate antspyx is available
+        try:
+            import ants
+        except ImportError:
+            raise ImportError(
+                "AntsPyX is required for this registration engine. "
+                "Install with: pip install antspyx"
+            )
 
     def execute(
         self,
@@ -67,7 +80,7 @@ class MultiModalCoregistration(BaseRegistrator):
             RuntimeError: If registration fails
         """
         start_time = time.time()
-        self.logger.info(f"Starting multi-modal coregistration in {study_dir.name}")
+        self.logger.info(f"[AntsPyX] Starting multi-modal coregistration in {study_dir.name}")
 
         # 1. Discover available modality files
         modality_files = self._discover_modality_files(study_dir, modalities)
@@ -147,8 +160,8 @@ class MultiModalCoregistration(BaseRegistrator):
         transform_path: Path,
         study_dir: Path,
         modality: str
-    ) -> Path:
-        """Register a single modality to the reference using ANTs.
+    ) -> Tuple[Path, Path]:
+        """Register a single modality to the reference using AntsPyX.
 
         Args:
             fixed_path: Path to reference (fixed) image
@@ -163,177 +176,120 @@ class MultiModalCoregistration(BaseRegistrator):
         Raises:
             RuntimeError: If registration fails
         """
-        from nipype.interfaces import ants
-
-        # Create a temporary output path for the registered image
-        temp_output = study_dir / f"_temp_{modality}_registered.nii.gz"
+        import ants
 
         if self.verbose:
-            self.logger.debug(f"[DEBUG] Registration setup for {modality}:")
+            self.logger.debug(f"[DEBUG] [AntsPyX] Registration setup for {modality}:")
             self.logger.debug(f"  Fixed image:     {fixed_path}")
             self.logger.debug(f"  Moving image:    {moving_path}")
             self.logger.debug(f"  Transform (req): {transform_path}")
-            self.logger.debug(f"  Temp output:     {temp_output}")
-
-        # Initialize ANTs Registration interface
-        reg = ants.Registration()
-        reg.inputs.dimension = 3
-        reg.inputs.fixed_image = str(fixed_path)
-        reg.inputs.moving_image = str(moving_path)
-
-        # Transform configuration
-        transform_type = self.config.get("transform_type", "Rigid")
-        reg.inputs.transforms = [transform_type]
-
-        # Transform parameters (gradient step for optimization)
-        # For Rigid: [gradient_step]
-        # Typical value is 0.1 for rigid registration
-        reg.inputs.transform_parameters = [(0.1,)]
-
-        # Metric configuration
-        metric = self.config.get("metric", "Mattes")
-        metric_bins = self.config.get("metric_bins", 32)
-        reg.inputs.metric = [metric]
-        reg.inputs.metric_weight = [1.0]
-        reg.inputs.radius_or_number_of_bins = [metric_bins]
-
-        # Sampling strategy
-        sampling_strategy = self.config.get("sampling_strategy", "Random")
-        sampling_percentage = self.config.get("sampling_percentage", 0.2)
-        reg.inputs.sampling_strategy = [sampling_strategy]
-        reg.inputs.sampling_percentage = [sampling_percentage]
-
-        # Multi-resolution schedule
-        number_of_iterations = self.config.get("number_of_iterations", [[1000, 500, 250]])
-        shrink_factors = self.config.get("shrink_factors", [[4, 2, 1]])
-        smoothing_sigmas = self.config.get("smoothing_sigmas", [[2, 1, 0]])
-
-        reg.inputs.number_of_iterations = number_of_iterations
-        reg.inputs.shrink_factors = shrink_factors
-        reg.inputs.smoothing_sigmas = smoothing_sigmas
-        reg.inputs.sigma_units = ["vox"]
-
-        # Convergence
-        reg.inputs.convergence_threshold = [
-            self.config.get("convergence_threshold", 1e-6)
-        ]
-        reg.inputs.convergence_window_size = [
-            self.config.get("convergence_window_size", 10)
-        ]
-
-        # Output configuration
-        write_composite = self.config.get("write_composite_transform", True)
-        reg.inputs.write_composite_transform = write_composite
-
-        # Transform prefix should NOT include extension
-        # ANTs will append "Composite.h5" when write_composite_transform=True
-        # So if transform_path is "/path/to/t2f_to_t1c.h5", we set prefix to "/path/to/t2f_to_t1c"
-        # and ANTs will create "/path/to/t2f_to_t1cComposite.h5"
-        transform_prefix = str(transform_path.with_suffix(""))
-        reg.inputs.output_transform_prefix = transform_prefix
-        reg.inputs.output_warped_image = str(temp_output)
-
-        # Update transform_path to point to the actual output file
-        # ANTs appends "Composite.h5" to the prefix
-        actual_transform_path = Path(str(transform_prefix) + "Composite.h5")
-
-        # Interpolation
-        interpolation = self.config.get("interpolation", "Linear")
-        reg.inputs.interpolation = interpolation
-
-        # Verbose output
-        reg.inputs.verbose = self.verbose
-
-        if self.verbose:
-            self.logger.debug(f"[DEBUG] ANTs parameters:")
-            self.logger.debug(f"  Transform: {transform_type}")
-            self.logger.debug(f"  Metric: {metric} (bins={metric_bins})")
-            self.logger.debug(f"  Sampling: {sampling_strategy} ({sampling_percentage*100}%)")
-            self.logger.debug(f"  Iterations: {number_of_iterations}")
-            self.logger.debug(f"  Shrink: {shrink_factors}")
-            self.logger.debug(f"  Smoothing: {smoothing_sigmas}")
-            self.logger.debug(f"  Convergence: {reg.inputs.convergence_threshold}")
-            self.logger.debug(f"  Interpolation: {interpolation}")
-            self.logger.debug(f"  Transform prefix: {transform_prefix}")
-            self.logger.debug(f"  Actual transform file: {actual_transform_path}")
 
         try:
-            # Run registration
+            # Load images
+            fixed_img = ants.image_read(str(fixed_path))
+            moving_img = ants.image_read(str(moving_path))
+
+            # Map configuration parameters
+            transform_type = self.config.get("transform_type", "Rigid")
+            metric = self.config.get("metric", "Mattes").lower()
+            metric_bins = self.config.get("metric_bins", 32)
+            sampling_percentage = self.config.get("sampling_percentage", 0.2)
+
+            # Extract multi-resolution parameters (first element since single transform)
+            number_of_iterations = self.config.get("number_of_iterations", [[1000, 500, 250]])[0]
+            shrink_factors = self.config.get("shrink_factors", [[4, 2, 1]])[0]
+            smoothing_sigmas = self.config.get("smoothing_sigmas", [[2, 1, 0]])[0]
+
+            # Transform type mapping
+            type_map = {
+                "Rigid": "Rigid",
+                "Affine": "Affine",
+                "SyN": "SyN"
+            }
+            ants_transform_type = type_map.get(transform_type, "Rigid")
+
+            # Construct output prefix (without extension)
+            # AntsPyX will create files like: prefix0GenericAffine.mat or prefixComposite.h5
+            transform_prefix = str(transform_path.with_suffix("").with_suffix(""))
+
             if self.verbose:
-                self.logger.debug(f"[DEBUG] Executing ANTs registration...")
-                self.logger.debug(f"[DEBUG] Command line will be constructed by Nipype")
+                self.logger.debug(f"[DEBUG] [AntsPyX] Calling ants.registration with:")
+                self.logger.debug(f"  type_of_transform: {ants_transform_type}")
+                self.logger.debug(f"  aff_metric: {metric}")
+                self.logger.debug(f"  aff_sampling: {metric_bins}")
+                self.logger.debug(f"  aff_random_sampling_rate: {sampling_percentage}")
+                self.logger.debug(f"  aff_iterations: {tuple(number_of_iterations)}")
+                self.logger.debug(f"  aff_shrink_factors: {tuple(shrink_factors)}")
+                self.logger.debug(f"  aff_smoothing_sigmas: {tuple(smoothing_sigmas)}")
+                self.logger.debug(f"  outprefix: {transform_prefix}")
 
-                # Try to get the command line before running
-                try:
-                    test_cmdline = reg.cmdline
-                    self.logger.debug(f"[DEBUG] Constructed command line:")
-                    self.logger.debug(f"  {test_cmdline}")
-                except Exception as cmdline_err:
-                    self.logger.debug(f"[DEBUG] Failed to construct command line: {cmdline_err}")
-                    import traceback
-                    self.logger.debug(f"[DEBUG] Traceback:")
-                    for line in traceback.format_exc().split('\n'):
-                        self.logger.debug(f"  {line}")
+            # Perform registration
+            write_composite = self.config.get("write_composite_transform", True)
 
-            result = reg.run()
+            result = ants.registration(
+                fixed=fixed_img,
+                moving=moving_img,
+                type_of_transform=ants_transform_type,
+                outprefix=transform_prefix,
+                aff_metric=metric,
+                aff_sampling=metric_bins,
+                aff_random_sampling_rate=sampling_percentage,
+                aff_iterations=tuple(number_of_iterations),
+                aff_shrink_factors=tuple(shrink_factors),
+                aff_smoothing_sigmas=tuple(smoothing_sigmas),
+                write_composite_transform=write_composite,
+                verbose=self.verbose
+            )
 
             if self.verbose:
-                self.logger.debug(f"[DEBUG] Registration completed successfully")
-                self.logger.debug(f"[DEBUG] Checking outputs...")
+                self.logger.debug(f"[DEBUG] [AntsPyX] Registration completed")
 
-            # Verify transform was created
-            if not actual_transform_path.exists():
-                # List files in transform directory to debug
-                transform_dir = actual_transform_path.parent
-                if self.verbose and transform_dir.exists():
-                    self.logger.debug(f"[DEBUG] Files in {transform_dir}:")
-                    for f in transform_dir.iterdir():
-                        self.logger.debug(f"  - {f.name}")
+            # Extract warped image
+            warped_img = result['warpedmovout']
+
+            # Get transform file paths
+            fwd_transforms = result['fwdtransforms']  # List of paths
+
+            if self.verbose:
+                self.logger.debug(f"[DEBUG] [AntsPyX] Forward transforms: {fwd_transforms}")
+
+            # Determine actual transform path
+            # If write_composite_transform=True, look for Composite.h5
+            # Otherwise, use the first transform in the list
+            if write_composite:
+                actual_transform_path = Path(transform_prefix + "Composite.h5")
+                if not actual_transform_path.exists():
+                    # Fallback to first transform
+                    actual_transform_path = Path(fwd_transforms[0]) if fwd_transforms else None
+            else:
+                actual_transform_path = Path(fwd_transforms[0]) if fwd_transforms else None
+
+            if not actual_transform_path or not actual_transform_path.exists():
                 raise RuntimeError(f"Transform file not created: {actual_transform_path}")
 
-            # Verify output image was created
+            # Save warped image to temp location
+            temp_output = study_dir / f"_temp_{modality}_registered.nii.gz"
+            ants.image_write(warped_img, str(temp_output))
+
             if not temp_output.exists():
                 raise RuntimeError(f"Registered image not created: {temp_output}")
 
             if self.verbose:
-                self.logger.debug(f"[DEBUG] Outputs verified successfully")
-                self.logger.debug(f"[DEBUG] Replacing {moving_path.name} with registered version")
+                self.logger.debug(f"[DEBUG] [AntsPyX] Outputs verified successfully")
+                self.logger.debug(f"[DEBUG] [AntsPyX] Replacing {moving_path.name} with registered version")
 
             # Replace original with registered version (in-place)
             final_output = moving_path
             temp_output.replace(final_output)
 
             if self.verbose:
-                self.logger.debug(f"[DEBUG] File replacement complete")
+                self.logger.debug(f"[DEBUG] [AntsPyX] File replacement complete")
 
             return final_output, actual_transform_path
 
         except Exception as e:
-            # Enhanced error reporting
-            error_msg = f"ANTs registration failed for {modality}: {str(e)}"
-
-            if self.verbose:
-                self.logger.debug(f"[DEBUG] Registration error details:")
-                self.logger.debug(f"  Error type: {type(e).__name__}")
-                self.logger.debug(f"  Error message: {str(e)}")
-
-                # Try to get the command line that failed
-                try:
-                    cmdline = reg.cmdline
-                    self.logger.debug(f"  Command line: {cmdline}")
-                except:
-                    self.logger.debug(f"  Could not retrieve command line")
-
-                # Check if input files exist
-                self.logger.debug(f"  Fixed image exists: {fixed_path.exists()}")
-                self.logger.debug(f"  Moving image exists: {moving_path.exists()}")
-
-            # Clean up temp file if it exists
-            if temp_output.exists():
-                temp_output.unlink()
-                if self.verbose:
-                    self.logger.debug(f"[DEBUG] Cleaned up temp file: {temp_output}")
-
+            error_msg = f"AntsPyX registration failed for {modality}: {str(e)}"
+            self.logger.error(error_msg)
             raise RuntimeError(error_msg) from e
 
     def visualize(
@@ -398,7 +354,7 @@ class MultiModalCoregistration(BaseRegistrator):
             transform_path = kwargs.get("transform_path", "N/A")
 
             fig.suptitle(
-                f"Multi-Modal Coregistration: {modality}\n"
+                f"Multi-Modal Coregistration (AntsPyX): {modality}\n"
                 f"Transform: {transform_path.name if hasattr(transform_path, 'name') else transform_path}",
                 fontsize=12
             )
