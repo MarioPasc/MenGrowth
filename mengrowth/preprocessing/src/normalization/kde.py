@@ -17,7 +17,7 @@ import nibabel as nib
 import numpy as np
 from scipy import stats
 
-from intensity_normalization.normalize.kde import KDENormalize
+from intensity_normalization.normalizers.individual.kde import KDENormalizer as KDENormalize
 
 from mengrowth.preprocessing.src.normalization.base import BaseNormalizer
 from mengrowth.preprocessing.src.normalization.utils import infer_modality_from_filename

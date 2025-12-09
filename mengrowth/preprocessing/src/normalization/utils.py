@@ -1,4 +1,4 @@
-from intensity_normalization.typing import Modality
+from intensity_normalization.domain.models import Modality
 from typing import Dict
 
 def modality_str_to_enum(modality_str: str) -> str:

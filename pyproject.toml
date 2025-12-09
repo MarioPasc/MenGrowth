@@ -7,7 +7,7 @@ name = "mengrowth"
 version = "0.1.0"
 description = "MenGrowth: A deep learning framework for meningioma growth prediction from multimodal magnetic resonance imaging"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = {file = "LICENSE"}
 keywords = [
     "magnetic-resonance-imaging",
@@ -42,12 +42,18 @@ dependencies = [
     "pandas",
     "matplotlib",
     "seaborn",
-    "nibabel",
+    "nibabel>=5.0.0",
     "nipype>=1.8.6",
     "pynrrd",
     "scipy",
     "scikit-image",
-    "intensity-normalization"
+]
+
+[project.optional-dependencies]
+preprocessing = [
+    "brats==0.1.6",
+    "brats[preprocessing]",
+    "intensity-normalization @ git+https://github.com/jcreinhold/intensity-normalization.git@6d2e486"
 ]
 
 [project.urls]

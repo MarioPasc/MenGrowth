@@ -13,9 +13,8 @@ from typing import Any, Dict
 import logging
 
 import nibabel as nib
-import numpy as np
 
-from intensity_normalization.normalize.zscore import ZScoreNormalize
+from intensity_normalization.normalizers.individual.zscore import ZScoreNormalizer as ZScoreNormalize
 
 from mengrowth.preprocessing.src.normalization.base import BaseNormalizer
 from mengrowth.preprocessing.src.normalization.utils import infer_modality_from_filename

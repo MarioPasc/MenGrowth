@@ -763,6 +763,87 @@ class Step3RegistrationConfig:
 
 
 @dataclass
+class SkullStrippingConfig:
+    """Configuration for skull stripping (brain extraction).
+
+    Attributes:
+        method: Algorithm to use ("hdbet", "synthstrip", or None to skip)
+        fill_value: Value for background voxels (default: 0.0)
+
+        # HD-BET parameters
+        hdbet_mode: Mode for HD-BET ("fast" or "accurate")
+        hdbet_device: Device for HD-BET (GPU id as int or "cpu")
+        hdbet_do_tta: Enable test-time augmentation for HD-BET
+
+        # SynthStrip parameters
+        synthstrip_border: Border parameter for SynthStrip in mm
+        synthstrip_device: Device for SynthStrip (GPU id as int or "cpu")
+    """
+    method: Optional[Literal["hdbet", "synthstrip"]] = "hdbet"
+    fill_value: float = 0.0
+
+    # HD-BET parameters
+    hdbet_mode: Literal["fast", "accurate"] = "accurate"
+    hdbet_device: Union[int, str] = 0
+    hdbet_do_tta: bool = True
+
+    # SynthStrip parameters
+    synthstrip_border: int = 1
+    synthstrip_device: Union[int, str] = 0
+
+    def __post_init__(self) -> None:
+        """Validate configuration values."""
+        # Validate method
+        if self.method is not None and self.method not in ["hdbet", "synthstrip"]:
+            raise ConfigurationError(
+                f"method must be None, 'hdbet', or 'synthstrip', got {self.method}"
+            )
+
+        # Skip validation if disabled
+        if self.method is None:
+            return
+
+        # Validate HD-BET parameters
+        if self.method == "hdbet":
+            if self.hdbet_mode not in ["fast", "accurate"]:
+                raise ConfigurationError(f"hdbet_mode must be 'fast' or 'accurate', got {self.hdbet_mode}")
+
+            if isinstance(self.hdbet_device, int) and self.hdbet_device < 0:
+                raise ConfigurationError(f"hdbet_device must be non-negative, got {self.hdbet_device}")
+            elif isinstance(self.hdbet_device, str) and self.hdbet_device != "cpu":
+                raise ConfigurationError(f"hdbet_device must be int or 'cpu', got {self.hdbet_device}")
+
+        # Validate SynthStrip parameters
+        if self.method == "synthstrip":
+            if self.synthstrip_border < 0:
+                raise ConfigurationError(f"synthstrip_border must be non-negative, got {self.synthstrip_border}")
+
+            if isinstance(self.synthstrip_device, int) and self.synthstrip_device < 0:
+                raise ConfigurationError(f"synthstrip_device must be non-negative, got {self.synthstrip_device}")
+            elif isinstance(self.synthstrip_device, str) and self.synthstrip_device != "cpu":
+                raise ConfigurationError(f"synthstrip_device must be int or 'cpu', got {self.synthstrip_device}")
+
+
+@dataclass
+class Step4SkullStrippingConfig:
+    """Configuration for Step 4: Skull stripping (brain extraction).
+
+    Attributes:
+        save_visualization: Whether to save visualization PNGs
+        save_mask: Whether to save brain mask NIfTI to artifacts directory
+        skull_stripping: Configuration for skull stripping algorithm
+    """
+    save_visualization: bool = True
+    save_mask: bool = True
+    skull_stripping: SkullStrippingConfig = field(default_factory=SkullStrippingConfig)
+
+    def __post_init__(self) -> None:
+        """Ensure skull_stripping is a SkullStrippingConfig instance."""
+        if isinstance(self.skull_stripping, dict):
+            self.skull_stripping = SkullStrippingConfig(**self.skull_stripping)
+
+
+@dataclass
 class DataHarmonizationConfig:
     """Configuration for the data harmonization preprocessing stage.
 
@@ -781,6 +862,7 @@ class DataHarmonizationConfig:
         step1_bias_field_correction: Configuration for bias field correction
         step2_resampling: Configuration for resampling to isotropic resolution
         step3_registration: Configuration for multi-modal coregistration
+        step4_skull_stripping: Configuration for skull stripping (brain extraction)
     """
     enabled: bool = True
     patient_selector: Literal["single", "all"] = "single"
@@ -803,6 +885,9 @@ class DataHarmonizationConfig:
     )
     step3_registration: Step3RegistrationConfig = field(
         default_factory=Step3RegistrationConfig
+    )
+    step4_skull_stripping: Step4SkullStrippingConfig = field(
+        default_factory=Step4SkullStrippingConfig
     )
 
     def __post_init__(self) -> None:
@@ -829,6 +914,12 @@ class DataHarmonizationConfig:
         if isinstance(self.step3_registration, dict):
             self.step3_registration = Step3RegistrationConfig(
                 **self.step3_registration
+            )
+
+        # Ensure step4 is a dataclass instance
+        if isinstance(self.step4_skull_stripping, dict):
+            self.step4_skull_stripping = Step4SkullStrippingConfig(
+                **self.step4_skull_stripping
             )
 
         # Validate dataset_root

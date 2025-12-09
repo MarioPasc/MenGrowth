@@ -20,6 +20,8 @@ from mengrowth.preprocessing.src.normalization.percentile_minmax import Percenti
 from mengrowth.preprocessing.src.resampling.bspline import BSplineResampler
 from mengrowth.preprocessing.src.resampling.eclare import EclareResampler
 from mengrowth.preprocessing.src.resampling.composite import CompositeResampler
+from mengrowth.preprocessing.src.skull_stripping.hdbet import HDBetSkullStripper
+from mengrowth.preprocessing.src.skull_stripping.synthstrip import SynthStripSkullStripper
 
 logger = logging.getLogger(__name__)
 
@@ -269,6 +271,40 @@ class PreprocessingOrchestrator:
         else:
             raise ValueError(
                 f"Unknown intra-study to atlas method: {intra_study_to_atlas_method}. Must be None or 'ants'"
+            )
+
+        # Step 4: Skull stripping (brain extraction)
+        skull_strip_method = config.step4_skull_stripping.skull_stripping.method
+        if skull_strip_method is None:
+            self.skull_stripper = None
+            self.logger.info("Skull stripping disabled")
+        elif skull_strip_method == "hdbet":
+            skull_strip_config_dict = {
+                "mode": config.step4_skull_stripping.skull_stripping.hdbet_mode,
+                "device": config.step4_skull_stripping.skull_stripping.hdbet_device,
+                "do_tta": config.step4_skull_stripping.skull_stripping.hdbet_do_tta,
+                "fill_value": config.step4_skull_stripping.skull_stripping.fill_value,
+            }
+            self.skull_stripper = HDBetSkullStripper(
+                config=skull_strip_config_dict,
+                verbose=verbose
+            )
+            self.logger.info(f"Initialized skull stripper: {skull_strip_method}")
+        elif skull_strip_method == "synthstrip":
+            skull_strip_config_dict = {
+                "border": config.step4_skull_stripping.skull_stripping.synthstrip_border,
+                "device": config.step4_skull_stripping.skull_stripping.synthstrip_device,
+                "fill_value": config.step4_skull_stripping.skull_stripping.fill_value,
+            }
+            self.skull_stripper = SynthStripSkullStripper(
+                config=skull_strip_config_dict,
+                verbose=verbose
+            )
+            self.logger.info(f"Initialized skull stripper: {skull_strip_method}")
+        else:
+            raise ValueError(
+                f"Unknown skull stripping method: {skull_strip_method}. "
+                f"Must be None, 'hdbet', or 'synthstrip'"
             )
 
     def _get_study_directories(self, patient_id: str) -> List[Path]:
@@ -957,6 +993,80 @@ class PreprocessingOrchestrator:
                 self.logger.warning("  [Step 3b: Atlas registration skipped - no reference modality available from step 3a]")
             else:
                 self.logger.info("  [Step 3b: Intra-study to atlas registration skipped - method is None]")
+
+            # Step 4: Skull stripping (brain extraction)
+            if self.skull_stripper is not None:
+                self.logger.info(f"\n  [Step 4] Skull stripping (brain extraction)")
+                try:
+                    # Determine output directories based on mode
+                    if self.config.mode == "test":
+                        study_output_dir = Path(self.config.output_root) / patient_id / study_dir.name
+                        artifacts_base = Path(self.config.preprocessing_artifacts_path) / patient_id / study_dir.name
+                        viz_base = Path(self.config.viz_root) / patient_id / study_dir.name
+                    else:
+                        study_output_dir = study_dir
+                        artifacts_base = Path(self.config.preprocessing_artifacts_path) / patient_id / study_dir.name
+                        viz_base = Path(self.config.viz_root) / patient_id / study_dir.name
+
+                    # Process each modality
+                    for modality in self.config.modalities:
+                        modality_path = study_output_dir / f"{modality}.nii.gz"
+
+                        # Skip if file doesn't exist
+                        if not modality_path.exists():
+                            self.logger.warning(f"  Skipping {modality} - file not found")
+                            continue
+
+                        self.logger.info(f"  Processing {modality}...")
+
+                        # Create temporary output path
+                        temp_skull_stripped = modality_path.parent / f"_temp_{modality}_skull_stripped.nii.gz"
+
+                        # Determine mask path
+                        if self.config.step4_skull_stripping.save_mask:
+                            mask_path = artifacts_base / f"{modality}_brain_mask.nii.gz"
+                        else:
+                            import tempfile
+                            temp_dir = Path(tempfile.gettempdir())
+                            mask_path = temp_dir / f"_temp_{modality}_brain_mask.nii.gz"
+
+                        # Execute skull stripping
+                        result = self.skull_stripper.execute(
+                            modality_path,
+                            temp_skull_stripped,
+                            mask_path=mask_path,
+                            allow_overwrite=True
+                        )
+
+                        # Generate visualization if enabled
+                        if self.config.step4_skull_stripping.save_visualization:
+                            viz_output = viz_base / f"step4_skull_stripping_{modality}.png"
+                            self.skull_stripper.visualize(
+                                modality_path,
+                                temp_skull_stripped,
+                                viz_output,
+                                **result
+                            )
+
+                        # Replace original with skull-stripped version (in-place)
+                        temp_skull_stripped.replace(modality_path)
+
+                        # Clean up temporary mask if not saving
+                        if not self.config.step4_skull_stripping.save_mask and mask_path.exists():
+                            mask_path.unlink()
+
+                        self.logger.info(
+                            f"  {modality}: brain_volume={result['brain_volume_mm3']:.1f} mm³, "
+                            f"coverage={result['brain_coverage_percent']:.1f}%"
+                        )
+
+                    self.logger.info(f"  Step 4 completed successfully")
+
+                except Exception as e:
+                    self.logger.error(f"  [Error] Skull stripping failed: {e}")
+                    total_errors += 1
+            else:
+                self.logger.info("  [Step 4: Skull stripping skipped - method is None]")
 
         # Summary
         self.logger.info(f"\n{'='*80}")

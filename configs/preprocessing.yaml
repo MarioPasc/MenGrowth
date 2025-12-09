@@ -180,4 +180,19 @@ preprocessing:
 
           # Output parameters
           interpolation: "BSpline"                       # "Linear" | "BSpline" | "NearestNeighbor"
+    step4_skull_stripping:
+        save_visualization: true      # Save visualization PNGs
+        save_mask: true              # Save brain mask NIfTI to artifacts directory
 
+        skull_stripping:
+            method: "hdbet"          # "hdbet" | "synthstrip" | null (null to skip)
+            fill_value: 0.0          # Value for background voxels
+
+            # HD-BET specific parameters (used if method == "hdbet")
+            hdbet_mode: "accurate"   # "fast" | "accurate"
+            hdbet_device: 0          # GPU id (int) or "cpu" (str)
+            hdbet_do_tta: true       # Test-time augmentation
+
+            # SynthStrip specific parameters (used if method == "synthstrip")
+            synthstrip_border: 1     # Border parameter in mm
+            synthstrip_device: 0     # GPU id (int) or "cpu" (str)
