@@ -17,6 +17,9 @@ from mengrowth.preprocessing.src.bias_field_correction.n4_sitk import N4BiasFiel
 from mengrowth.preprocessing.src.normalization.zscore import ZScoreNormalizer
 from mengrowth.preprocessing.src.normalization.kde import KDENormalizer
 from mengrowth.preprocessing.src.normalization.percentile_minmax import PercentileMinMaxNormalizer
+from mengrowth.preprocessing.src.normalization.whitestripe import WhiteStripeNormalizer
+from mengrowth.preprocessing.src.normalization.fcm import FCMNormalizer
+from mengrowth.preprocessing.src.normalization.lsq import LSQNormalizer
 from mengrowth.preprocessing.src.resampling.bspline import BSplineResampler
 from mengrowth.preprocessing.src.resampling.eclare import EclareResampler
 from mengrowth.preprocessing.src.resampling.composite import CompositeResampler
@@ -136,10 +139,46 @@ class PreprocessingOrchestrator:
                 verbose=verbose
             )
             self.logger.info(f"Preprocessing orchestrator initialized with normalization method: {norm_method}")
+        elif norm_method == "whitestripe":
+            # Convert config to dictionary for initializer
+            norm_config_dict = {
+                "width": config.step2_resampling.resampling.whitestripe_width,
+                "width_l": config.step2_resampling.resampling.whitestripe_width_l,
+                "width_u": config.step2_resampling.resampling.whitestripe_width_u,
+            }
+            self.normalizer = WhiteStripeNormalizer(
+                config=norm_config_dict,
+                verbose=verbose
+            )
+            self.logger.info(f"Preprocessing orchestrator initialized with normalization method: {norm_method}")
+        elif norm_method == "fcm":
+            # Convert config to dictionary for initializer
+            norm_config_dict = {
+                "n_clusters": config.step2_resampling.resampling.fcm_n_clusters,
+                "tissue_type": config.step2_resampling.resampling.fcm_tissue_type,
+                "max_iter": config.step2_resampling.resampling.fcm_max_iter,
+                "error_threshold": config.step2_resampling.resampling.fcm_error_threshold,
+                "fuzziness": config.step2_resampling.resampling.fcm_fuzziness,
+            }
+            self.normalizer = FCMNormalizer(
+                config=norm_config_dict,
+                verbose=verbose
+            )
+            self.logger.info(f"Preprocessing orchestrator initialized with normalization method: {norm_method}")
+        elif norm_method == "lsq":
+            # Convert config to dictionary for initializer
+            norm_config_dict = {
+                "norm_value": config.step2_resampling.resampling.norm_value,
+            }
+            self.normalizer = LSQNormalizer(
+                config=norm_config_dict,
+                verbose=verbose
+            )
+            self.logger.info(f"Preprocessing orchestrator initialized with normalization method: {norm_method} (population-based)")
         else:
             raise ValueError(
                 f"Unknown normalization method: {norm_method}. "
-                "Must be None, 'zscore', 'kde', or 'percentile_minmax'"
+                "Must be None, 'zscore', 'kde', 'percentile_minmax', 'whitestripe', 'fcm', or 'lsq'"
             )
 
         # Select resampling algorithm based on method

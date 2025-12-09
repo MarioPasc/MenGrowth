@@ -296,10 +296,22 @@ class ResamplingConfig:
     target_voxel_size: List[float] = field(default_factory=lambda: [1.0, 1.0, 1.0])
 
     # Normalization parameters (applied before resampling)
-    normalize_method: Optional[Literal["zscore", "kde", "percentile_minmax"]] = None
+    normalize_method: Optional[Literal["zscore", "kde", "percentile_minmax", "whitestripe", "fcm", "lsq"]] = None
     p1: float = 1.0
     p2: float = 99.0
     norm_value: float = 1.0
+
+    # WhiteStripe parameters
+    whitestripe_width: float = 0.05
+    whitestripe_width_l: Optional[float] = None
+    whitestripe_width_u: Optional[float] = None
+
+    # FCM parameters
+    fcm_n_clusters: int = 3
+    fcm_tissue_type: str = "WM"
+    fcm_max_iter: int = 50
+    fcm_error_threshold: float = 0.005
+    fcm_fuzziness: float = 2.0
 
     # BSpline parameters
     bspline_order: int = 3
@@ -329,9 +341,10 @@ class ResamplingConfig:
 
         # Validate normalization parameters
         if self.normalize_method is not None:
-            if self.normalize_method not in ["zscore", "kde", "percentile_minmax"]:
+            valid_methods = ["zscore", "kde", "percentile_minmax", "whitestripe", "fcm", "lsq"]
+            if self.normalize_method not in valid_methods:
                 raise ConfigurationError(
-                    f"normalize_method must be None, 'zscore', 'kde', or 'percentile_minmax', "
+                    f"normalize_method must be None or one of {valid_methods}, "
                     f"got {self.normalize_method}"
                 )
 
@@ -341,11 +354,49 @@ class ResamplingConfig:
                     f"Percentiles must satisfy 0 <= p1 < p2 <= 100, got p1={self.p1}, p2={self.p2}"
                 )
 
-            # Validate norm_value (used by zscore and kde)
+            # Validate norm_value (used by zscore, kde, lsq)
             if self.norm_value <= 0:
                 raise ConfigurationError(
                     f"norm_value must be positive, got {self.norm_value}"
                 )
+
+            # Validate WhiteStripe parameters
+            if self.normalize_method == "whitestripe":
+                if not 0.0 < self.whitestripe_width <= 1.0:
+                    raise ConfigurationError(
+                        f"whitestripe_width must be in (0.0, 1.0], got {self.whitestripe_width}"
+                    )
+                if self.whitestripe_width_l is not None and not 0.0 < self.whitestripe_width_l <= 1.0:
+                    raise ConfigurationError(
+                        f"whitestripe_width_l must be in (0.0, 1.0], got {self.whitestripe_width_l}"
+                    )
+                if self.whitestripe_width_u is not None and not 0.0 < self.whitestripe_width_u <= 1.0:
+                    raise ConfigurationError(
+                        f"whitestripe_width_u must be in (0.0, 1.0], got {self.whitestripe_width_u}"
+                    )
+
+            # Validate FCM parameters
+            if self.normalize_method == "fcm":
+                if not 2 <= self.fcm_n_clusters <= 10:
+                    raise ConfigurationError(
+                        f"fcm_n_clusters must be in [2, 10], got {self.fcm_n_clusters}"
+                    )
+                if self.fcm_tissue_type not in ["WM", "GM", "CSF"]:
+                    raise ConfigurationError(
+                        f"fcm_tissue_type must be 'WM', 'GM', or 'CSF', got {self.fcm_tissue_type}"
+                    )
+                if self.fcm_max_iter < 1:
+                    raise ConfigurationError(
+                        f"fcm_max_iter must be >= 1, got {self.fcm_max_iter}"
+                    )
+                if not 0.0 < self.fcm_error_threshold < 1.0:
+                    raise ConfigurationError(
+                        f"fcm_error_threshold must be in (0.0, 1.0), got {self.fcm_error_threshold}"
+                    )
+                if not 1.0 < self.fcm_fuzziness <= 10.0:
+                    raise ConfigurationError(
+                        f"fcm_fuzziness must be in (1.0, 10.0], got {self.fcm_fuzziness}"
+                    )
 
         # Skip validation if method is None (resampling disabled)
         if self.method is None:
@@ -858,6 +909,131 @@ class Step4SkullStrippingConfig:
 
 
 @dataclass
+class IntensityNormalizationConfig:
+    """Configuration for intensity normalization methods (Step 5).
+
+    Attributes:
+        method: Normalization method to apply
+                ("zscore", "kde", "percentile_minmax", "whitestripe", "fcm", "lsq", or None to skip)
+
+        # Common parameters
+        norm_value: Scaling factor for zscore, kde, and lsq (default=1.0)
+        p1: Lower percentile for percentile_minmax (default=1.0)
+        p2: Upper percentile for percentile_minmax (default=99.0)
+
+        # WhiteStripe parameters
+        width: Quantile range width for white matter detection (default=0.05)
+        width_l: Optional lower bound width override
+        width_u: Optional upper bound width override
+
+        # FCM parameters
+        n_clusters: Number of tissue clusters (default=3)
+        tissue_type: Target tissue type "WM"|"GM"|"CSF" (default="WM")
+        max_iter: Maximum FCM iterations (default=50)
+        error_threshold: Convergence threshold (default=0.005)
+        fuzziness: Cluster membership fuzziness parameter (default=2.0)
+    """
+    method: Optional[Literal["zscore", "kde", "percentile_minmax", "whitestripe", "fcm", "lsq"]] = None
+
+    # Common parameters
+    norm_value: float = 1.0
+    p1: float = 1.0
+    p2: float = 99.0
+
+    # WhiteStripe parameters
+    width: float = 0.05
+    width_l: Optional[float] = None
+    width_u: Optional[float] = None
+
+    # FCM parameters
+    n_clusters: int = 3
+    tissue_type: str = "WM"
+    max_iter: int = 50
+    error_threshold: float = 0.005
+    fuzziness: float = 2.0
+
+    def __post_init__(self) -> None:
+        """Validate configuration values."""
+        if self.method is not None:
+            valid_methods = ["zscore", "kde", "percentile_minmax", "whitestripe", "fcm", "lsq"]
+            if self.method not in valid_methods:
+                raise ConfigurationError(
+                    f"method must be None or one of {valid_methods}, got {self.method}"
+                )
+
+            # Validate percentile parameters (used by percentile_minmax)
+            if not 0.0 <= self.p1 < self.p2 <= 100.0:
+                raise ConfigurationError(
+                    f"Percentiles must satisfy 0 <= p1 < p2 <= 100, got p1={self.p1}, p2={self.p2}"
+                )
+
+            # Validate norm_value (used by zscore, kde, lsq)
+            if self.norm_value <= 0:
+                raise ConfigurationError(
+                    f"norm_value must be positive, got {self.norm_value}"
+                )
+
+            # Validate WhiteStripe parameters
+            if self.method == "whitestripe":
+                if not 0.0 < self.width <= 1.0:
+                    raise ConfigurationError(
+                        f"width must be in (0.0, 1.0], got {self.width}"
+                    )
+                if self.width_l is not None and not 0.0 < self.width_l <= 1.0:
+                    raise ConfigurationError(
+                        f"width_l must be in (0.0, 1.0], got {self.width_l}"
+                    )
+                if self.width_u is not None and not 0.0 < self.width_u <= 1.0:
+                    raise ConfigurationError(
+                        f"width_u must be in (0.0, 1.0], got {self.width_u}"
+                    )
+
+            # Validate FCM parameters
+            if self.method == "fcm":
+                if not 2 <= self.n_clusters <= 10:
+                    raise ConfigurationError(
+                        f"n_clusters must be in [2, 10], got {self.n_clusters}"
+                    )
+                if self.tissue_type not in ["WM", "GM", "CSF"]:
+                    raise ConfigurationError(
+                        f"tissue_type must be 'WM', 'GM', or 'CSF', got {self.tissue_type}"
+                    )
+                if self.max_iter < 1:
+                    raise ConfigurationError(
+                        f"max_iter must be >= 1, got {self.max_iter}"
+                    )
+                if not 0.0 < self.error_threshold < 1.0:
+                    raise ConfigurationError(
+                        f"error_threshold must be in (0.0, 1.0), got {self.error_threshold}"
+                    )
+                if not 1.0 < self.fuzziness <= 10.0:
+                    raise ConfigurationError(
+                        f"fuzziness must be in (1.0, 10.0], got {self.fuzziness}"
+                    )
+
+
+@dataclass
+class Step5IntensityNormalizationConfig:
+    """Configuration for Step 5: Post-skull-stripping intensity normalization.
+
+    Attributes:
+        save_visualization: Whether to save visualization PNGs
+        intensity_normalization: Configuration for normalization method
+    """
+    save_visualization: bool = True
+    intensity_normalization: IntensityNormalizationConfig = field(
+        default_factory=IntensityNormalizationConfig
+    )
+
+    def __post_init__(self) -> None:
+        """Ensure intensity_normalization is an IntensityNormalizationConfig instance."""
+        if isinstance(self.intensity_normalization, dict):
+            self.intensity_normalization = IntensityNormalizationConfig(
+                **self.intensity_normalization
+            )
+
+
+@dataclass
 class DataHarmonizationConfig:
     """Configuration for the data harmonization preprocessing stage.
 
@@ -877,6 +1053,7 @@ class DataHarmonizationConfig:
         step2_resampling: Configuration for resampling to isotropic resolution
         step3_registration: Configuration for multi-modal coregistration
         step4_skull_stripping: Configuration for skull stripping (brain extraction)
+        step5_intensity_normalization: Configuration for post-skull-stripping intensity normalization
     """
     enabled: bool = True
     patient_selector: Literal["single", "all"] = "single"
@@ -902,6 +1079,9 @@ class DataHarmonizationConfig:
     )
     step4_skull_stripping: Step4SkullStrippingConfig = field(
         default_factory=Step4SkullStrippingConfig
+    )
+    step5_intensity_normalization: Step5IntensityNormalizationConfig = field(
+        default_factory=Step5IntensityNormalizationConfig
     )
 
     def __post_init__(self) -> None:
@@ -934,6 +1114,12 @@ class DataHarmonizationConfig:
         if isinstance(self.step4_skull_stripping, dict):
             self.step4_skull_stripping = Step4SkullStrippingConfig(
                 **self.step4_skull_stripping
+            )
+
+        # Ensure step5 is a dataclass instance
+        if isinstance(self.step5_intensity_normalization, dict):
+            self.step5_intensity_normalization = Step5IntensityNormalizationConfig(
+                **self.step5_intensity_normalization
             )
 
         # Validate dataset_root

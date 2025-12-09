@@ -66,15 +66,31 @@ preprocessing:
     step2_resampling:
         save_visualization: true # Save visualization for resampling step, we must see axial, sagittal, and coronal views
         resampling:
-          method: composite                   # "bspline" | "eclare" | "composite" | null (null to skip)
+          method: bspline                   # "bspline" | "eclare" | "composite" | null (null to skip)
           
           target_voxel_size: [1.0, 1.0, 1.0]  # in mm (isotropic)
 
           # Normalization parameters before resampling
-          normalize_method: null  # Normalization before ECLARE: null | "zscore" | "kde" | "percentile_minmax"
-          # if normalize_method == "percentile_minmax"
-          p1: 1.0                                 # for "percentile_minmax" normalization
-          p2: 99.0                                # for "percentile_minmax" normalization 
+          normalize_method: null  # null | "zscore" | "kde" | "percentile_minmax" | "whitestripe" | "fcm" | "lsq"
+
+          # Common parameters
+          norm_value: 1.0  # For zscore, kde, lsq
+
+          # Percentile MinMax parameters
+          p1: 1.0
+          p2: 99.0
+
+          # WhiteStripe parameters
+          whitestripe_width: 0.05
+          whitestripe_width_l: null  # Optional lower bound override
+          whitestripe_width_u: null  # Optional upper bound override
+
+          # FCM parameters
+          fcm_n_clusters: 3
+          fcm_tissue_type: "WM"  # "WM" | "GM" | "CSF"
+          fcm_max_iter: 50
+          fcm_error_threshold: 0.005
+          fcm_fuzziness: 2.0 
 
           # BSPLINE parameters
           bspline_order: 3                    # if method == "bspline", order [0-5]
@@ -132,7 +148,7 @@ preprocessing:
           reference_modality_priority: "t1c > t1n > t2f > t2w"  # Priority order for reference selection
 
           # Transform parameters
-          transform_type: "Rigid"                       # "Rigid" | "Affine" | "SyN"
+          transform_type: "Affine"                       # "Rigid" | "Affine" | "SyN"
 
           # Metric parameters
           metric: "Mattes"                              # "Mattes" | "MI" | "CC" | "MeanSquares" | "Demons"
@@ -156,7 +172,7 @@ preprocessing:
         # Step 3b: Register reference modality to atlas space and propagate transforms
         intra_study_to_atlas:
           method: "ants"                                # "ants" | null (null to skip atlas registration)
-          # engine: "antspyx"                           # Optional: "nipype" (default) | "antspyx" - Registration engine to use
+          engine: "antspyx"                           # Optional: "nipype" (default) | "antspyx" - Registration engine to use
           atlas_path: "/media/mpascual/PortableSSD/Meningiomas/ATLAS/sri24_spm8/templates/T1.nii"       # Path to atlas template (must be set if method != null)
 
           # Transform parameters (can specify multiple transforms)
@@ -198,3 +214,26 @@ preprocessing:
             # SynthStrip specific parameters (used if method == "synthstrip")
             synthstrip_border: 1     # Border parameter in mm
             synthstrip_device: 0     # GPU id (int) or "cpu" (str)
+    step5_intensity_normalization:
+        save_visualization: true # Save visualization for intensity normalization step
+        intensity_normalization:
+            method: fcm  # null | "zscore" | "kde" | "percentile_minmax" | "whitestripe" | "fcm" | "lsq"
+
+            # Common parameters
+            norm_value: 1.0  # For zscore, kde, lsq
+
+            # Percentile MinMax parameters
+            p1: 1.0
+            p2: 99.0
+
+            # WhiteStripe parameters
+            width: 0.05
+            width_l: null  # Optional lower bound override
+            width_u: null  # Optional upper bound override
+
+            # FCM parameters
+            n_clusters: 3
+            tissue_type: "WM"  # "WM" | "GM" | "CSF"
+            max_iter: 50
+            error_threshold: 0.005
+            fuzziness: 2.0

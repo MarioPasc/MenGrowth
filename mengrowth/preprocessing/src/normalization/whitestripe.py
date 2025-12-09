@@ -1,0 +1,327 @@
+"""WhiteStripe-based normalization using intensity-normalization package.
+
+This module implements WhiteStripe intensity normalization which identifies
+white matter tissue regions and normalizes based on their intensity distribution.
+This is particularly useful for standardizing MRI intensities across different
+scanners and acquisition protocols.
+
+Reference:
+    intensity-normalization package: https://github.com/jcreinhold/intensity-normalization
+    WhiteStripe paper: Shinohara et al. (2014), "Statistical normalization techniques
+    for magnetic resonance imaging"
+"""
+
+from pathlib import Path
+from typing import Any, Dict, Optional
+import logging
+
+import nibabel as nib
+import numpy as np
+from scipy import stats
+
+from intensity_normalization.normalizers.individual.whitestripe import WhiteStripeNormalizer as WSNormalize
+
+from mengrowth.preprocessing.src.normalization.base import BaseNormalizer
+from mengrowth.preprocessing.src.normalization.utils import infer_modality_from_filename
+
+logger = logging.getLogger(__name__)
+
+
+class WhiteStripeNormalizer(BaseNormalizer):
+    """WhiteStripe white matter-based intensity normalizer.
+
+    This normalizer uses the WhiteStripe method to identify white matter voxels
+    and normalizes intensities to have zero mean and unit variance based on the
+    white matter intensity distribution.
+
+    This uses the intensity-normalization package's WhiteStripeNormalizer.
+    """
+
+    def __init__(
+        self,
+        config: Dict[str, Any],
+        verbose: bool = False
+    ) -> None:
+        """Initialize WhiteStripe normalizer.
+
+        Args:
+            config: Configuration dictionary containing:
+                - width: Quantile range width for white matter detection (default=0.05)
+                - width_l: Optional lower bound width override (default=None)
+                - width_u: Optional upper bound width override (default=None)
+            verbose: Enable verbose logging
+        """
+        super().__init__(
+            config=config,
+            verbose=verbose
+        )
+
+        # Extract parameters with defaults
+        self.width = config.get("width", 0.05)
+        self.width_l = config.get("width_l", None)
+        self.width_u = config.get("width_u", None)
+
+        # Validate width parameters
+        if not 0.0 < self.width <= 1.0:
+            raise ValueError(f"width must be in (0.0, 1.0], got {self.width}")
+
+        if self.width_l is not None and not 0.0 < self.width_l <= 1.0:
+            raise ValueError(f"width_l must be in (0.0, 1.0], got {self.width_l}")
+
+        if self.width_u is not None and not 0.0 < self.width_u <= 1.0:
+            raise ValueError(f"width_u must be in (0.0, 1.0], got {self.width_u}")
+
+        self.logger.info(
+            f"Initialized WhiteStripeNormalizer: width={self.width}, "
+            f"width_l={self.width_l}, width_u={self.width_u}"
+        )
+
+    def execute(
+        self,
+        input_path: Path,
+        output_path: Path,
+        **kwargs: Any
+    ) -> Dict[str, Any]:
+        """Execute WhiteStripe normalization using intensity-normalization package.
+
+        Args:
+            input_path: Path to input NIfTI file
+            output_path: Path to output normalized NIfTI file
+            **kwargs: Additional parameters:
+                - allow_overwrite: Allow overwriting existing files (bool)
+                - mask_path: Optional path to brain mask (Path)
+
+        Returns:
+            Dictionary containing:
+                - 'width': Quantile range width used
+                - 'width_l': Lower bound width (if specified)
+                - 'width_u': Upper bound width (if specified)
+                - 'modality': Inferred modality
+                - 'original_range': Original intensity range [min, max]
+                - 'normalized_range': Normalized intensity range [min, max]
+
+        Raises:
+            FileNotFoundError: If input file does not exist
+            RuntimeError: If normalization fails
+        """
+        allow_overwrite = kwargs.get("allow_overwrite", False)
+        mask_path = kwargs.get("mask_path", None)
+
+        # Validate inputs
+        self.validate_inputs(input_path)
+        self.validate_outputs(output_path, allow_overwrite=allow_overwrite)
+
+        # Log execution
+        self.log_execution(input_path, output_path)
+
+        try:
+            # Load NIfTI with nibabel
+            self.logger.debug(f"Loading image: {input_path}")
+            input_img = nib.load(str(input_path))
+            input_data = input_img.get_fdata()
+
+            # Store original range
+            original_range = [float(input_data.min()), float(input_data.max())]
+
+            # Apply WhiteStripe normalization using intensity-normalization package
+            self.logger.info("Applying WhiteStripe normalization using intensity-normalization package...")
+            normalizer = WSNormalize(
+                width=self.width,
+                width_l=self.width_l,
+                width_u=self.width_u
+            )
+            modality = infer_modality_from_filename(input_path)
+            self.logger.info(f"Inferred modality: {modality}, input: {input_path}")
+            normalized_data = normalizer(input_data, modality=modality)
+
+            # Store normalized range
+            normalized_range = [float(normalized_data.min()), float(normalized_data.max())]
+
+            self.logger.info(
+                f"Original range: [{original_range[0]:.3f}, {original_range[1]:.3f}]"
+            )
+            self.logger.info(
+                f"Normalized range: [{normalized_range[0]:.3f}, {normalized_range[1]:.3f}]"
+            )
+
+            # Save normalized image
+            self.logger.debug(f"Saving normalized image: {output_path}")
+            nib.Nifti1Image(normalized_data, input_img.affine).to_filename(str(output_path))
+
+            self.logger.info("WhiteStripe normalization complete")
+
+            return {
+                "width": self.width,
+                "width_l": self.width_l,
+                "width_u": self.width_u,
+                "modality": str(modality),
+                "original_range": original_range,
+                "normalized_range": normalized_range,
+            }
+
+        except Exception as e:
+            self.logger.error(f"WhiteStripe normalization failed: {e}")
+            raise RuntimeError(f"Normalization failed: {e}") from e
+
+    def visualize(
+        self,
+        before_path: Path,
+        after_path: Path,
+        output_path: Path,
+        **kwargs: Any
+    ) -> None:
+        """Generate visualization comparing before and after normalization.
+
+        Creates visualization with:
+        - Before and after image slices (axial, sagittal, coronal)
+        - Before and after intensity histograms
+        - Metadata text with WhiteStripe parameters and ranges
+
+        Args:
+            before_path: Path to input file (before normalization)
+            after_path: Path to output file (after normalization)
+            output_path: Path to save visualization (PNG)
+            **kwargs: Additional parameters containing metadata:
+                - 'width': Quantile range width
+                - 'width_l': Lower bound width
+                - 'width_u': Upper bound width
+                - 'modality': Modality string
+                - 'original_range': Original intensity range
+                - 'normalized_range': Normalized intensity range
+
+        Raises:
+            FileNotFoundError: If input files do not exist
+            RuntimeError: If visualization generation fails
+        """
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+
+        width = kwargs.get("width", self.width)
+        width_l = kwargs.get("width_l", self.width_l)
+        width_u = kwargs.get("width_u", self.width_u)
+        modality = kwargs.get("modality", "unknown")
+        original_range = kwargs.get("original_range")
+        normalized_range = kwargs.get("normalized_range")
+
+        self.logger.info(f"Generating normalization visualization: {output_path}")
+
+        try:
+            # Load images
+            before_img = nib.load(str(before_path))
+            before_data = before_img.get_fdata()
+
+            after_img = nib.load(str(after_path))
+            after_data = after_img.get_fdata()
+
+            # Get middle slices for each view
+            # Axial (XY plane, slice along Z)
+            mid_z = before_data.shape[2] // 2
+            axial_before = before_data[:, :, mid_z].T
+            axial_after = after_data[:, :, mid_z].T
+
+            # Sagittal (YZ plane, slice along X)
+            mid_x = before_data.shape[0] // 2
+            sagittal_before = before_data[mid_x, :, :].T
+            sagittal_after = after_data[mid_x, :, :].T
+
+            # Coronal (XZ plane, slice along Y)
+            mid_y = before_data.shape[1] // 2
+            coronal_before = before_data[:, mid_y, :].T
+            coronal_after = after_data[:, mid_y, :].T
+
+            # Create figure: 2 rows x 4 columns (3 views + 1 histogram per row)
+            fig, axes = plt.subplots(2, 4, figsize=(20, 10))
+            fig.suptitle(
+                f'WhiteStripe Normalization: {before_path.stem}',
+                fontsize=16,
+                fontweight='bold'
+            )
+
+            # Row 1: Original image
+            # Compute intensity range for original (for consistent display)
+            vmin_before = before_data.min()
+            vmax_before = before_data.max()
+
+            axes[0, 0].imshow(axial_before, cmap='gray', origin='lower', vmin=vmin_before, vmax=vmax_before)
+            axes[0, 0].set_title('Original - Axial', fontsize=12)
+            axes[0, 0].axis('off')
+
+            axes[0, 1].imshow(sagittal_before, cmap='gray', origin='lower', vmin=vmin_before, vmax=vmax_before)
+            axes[0, 1].set_title('Original - Sagittal', fontsize=12)
+            axes[0, 1].axis('off')
+
+            axes[0, 2].imshow(coronal_before, cmap='gray', origin='lower', vmin=vmin_before, vmax=vmax_before)
+            axes[0, 2].set_title('Original - Coronal', fontsize=12)
+            axes[0, 2].axis('off')
+
+            # Histogram for original
+            before_nonzero = before_data[before_data > 0]
+            axes[0, 3].hist(before_nonzero, bins=100, alpha=0.7, color='blue', density=True, label='Histogram')
+            axes[0, 3].set_xlabel('Intensity', fontsize=10)
+            axes[0, 3].set_ylabel('Density', fontsize=10)
+            axes[0, 3].set_title('Original Histogram', fontsize=12)
+            axes[0, 3].legend(fontsize=8)
+            axes[0, 3].grid(True, alpha=0.3)
+
+            # Row 2: Normalized image
+            # Compute intensity range for normalized
+            vmin_after = after_data.min()
+            vmax_after = after_data.max()
+
+            axes[1, 0].imshow(axial_after, cmap='gray', origin='lower', vmin=vmin_after, vmax=vmax_after)
+            axes[1, 0].set_title('Normalized - Axial', fontsize=12)
+            axes[1, 0].axis('off')
+
+            axes[1, 1].imshow(sagittal_after, cmap='gray', origin='lower', vmin=vmin_after, vmax=vmax_after)
+            axes[1, 1].set_title('Normalized - Sagittal', fontsize=12)
+            axes[1, 1].axis('off')
+
+            axes[1, 2].imshow(coronal_after, cmap='gray', origin='lower', vmin=vmin_after, vmax=vmax_after)
+            axes[1, 2].set_title('Normalized - Coronal', fontsize=12)
+            axes[1, 2].axis('off')
+
+            # Histogram for normalized
+            after_nonzero = after_data[after_data > vmin_after]
+            axes[1, 3].hist(after_nonzero, bins=100, alpha=0.7, color='purple', density=True)
+            axes[1, 3].axvline(0, color='green', linestyle='--', linewidth=2, label='Mean=0')
+            axes[1, 3].set_xlabel('Intensity', fontsize=10)
+            axes[1, 3].set_ylabel('Density', fontsize=10)
+            axes[1, 3].set_title('Normalized Histogram', fontsize=12)
+            axes[1, 3].legend(fontsize=8)
+            axes[1, 3].grid(True, alpha=0.3)
+
+            # Add metadata text
+            metadata_text = (
+                f"Normalization Method: WhiteStripe (White Matter-Based)\n"
+                f"  Modality: {modality}\n"
+                f"  Width = {width:.3f}\n"
+                f"  Width_L = {width_l if width_l is not None else 'None'}\n"
+                f"  Width_U = {width_u if width_u is not None else 'None'}\n\n"
+                f"Original Range: [{original_range[0]:.3f}, {original_range[1]:.3f}]\n"
+                f"Normalized Range: [{normalized_range[0]:.3f}, {normalized_range[1]:.3f}]"
+            )
+
+            fig.text(
+                0.5, 0.01,
+                metadata_text,
+                ha='center',
+                fontsize=10,
+                family='monospace',
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5)
+            )
+
+            plt.tight_layout(rect=[0, 0.08, 1, 0.98])
+
+            # Ensure output directory exists
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Save figure
+            plt.savefig(output_path, dpi=150, bbox_inches='tight')
+            plt.close(fig)
+
+            self.logger.info(f"Visualization saved to {output_path}")
+
+        except Exception as e:
+            self.logger.error(f"Visualization generation failed: {e}")
+            raise RuntimeError(f"Visualization failed: {e}") from e
