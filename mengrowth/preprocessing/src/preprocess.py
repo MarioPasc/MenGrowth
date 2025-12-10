@@ -668,69 +668,78 @@ class PreprocessingOrchestrator:
         total_skipped = 0
         total_errors = 0
 
-        # Categorize steps into per-modality and study-level
-        per_modality_steps, study_level_steps = self._categorize_steps()
+        # Get ordered step groups (preserves user-specified order with interleaving)
+        step_groups = self._get_ordered_step_groups()
 
         # Process each study
         for study_idx, study_dir in enumerate(study_dirs, 1):
             self.logger.info(f"\n[Study {study_idx}/{len(study_dirs)}] {study_dir.name}")
 
-            # Execute per-modality steps
-            for modality in self.config.modalities:
-                self.logger.info(f"  Processing modality: {modality}")
+            # Track modalities that have been processed successfully
+            processed_modalities = set()
 
-                try:
-                    # Find input file
-                    input_file = self._get_modality_file(study_dir, modality)
+            # Execute step groups in order (preserves interleaving of per-modality and study-level)
+            for group_level, group_steps in step_groups:
+                if group_level == "modality":
+                    # Execute per-modality steps on all modalities
+                    for modality in self.config.modalities:
+                        self.logger.info(f"  Processing modality: {modality}")
 
-                    if input_file is None:
-                        self.logger.warning(f"    Modality {modality} not found - skipping")
-                        total_skipped += 1
-                        continue
+                        try:
+                            # Find input file (only check on first group)
+                            input_file = self._get_modality_file(study_dir, modality)
 
-                    # Get output paths
-                    paths = self._get_output_paths(patient_id, study_dir, modality)
+                            if input_file is None and modality not in processed_modalities:
+                                self.logger.warning(f"    Modality {modality} not found - skipping")
+                                total_skipped += 1
+                                continue
 
-                    # Check overwrite conditions (strict: error and halt if exists)
-                    if paths["nifti"].exists() and not self.config.overwrite:
-                        if self.config.mode == "pipeline":
-                            raise FileExistsError(
-                                f"Output file exists and overwrite=False: {paths['nifti']}\n"
-                                "Set overwrite=true in config or use test mode"
+                            # Get output paths
+                            paths = self._get_output_paths(patient_id, study_dir, modality)
+
+                            # Check overwrite conditions (only on first group)
+                            if modality not in processed_modalities:
+                                if paths["nifti"].exists() and not self.config.overwrite:
+                                    if self.config.mode == "pipeline":
+                                        raise FileExistsError(
+                                            f"Output file exists and overwrite=False: {paths['nifti']}\n"
+                                            "Set overwrite=true in config or use test mode"
+                                        )
+                                    else:
+                                        self.logger.warning(
+                                            f"    Output exists and overwrite=False - skipping {modality}"
+                                        )
+                                        total_skipped += 1
+                                        continue
+
+                            # Execute per-modality steps for this group
+                            self._execute_per_modality_steps(
+                                patient_id=patient_id,
+                                study_dir=study_dir,
+                                modality=modality,
+                                paths=paths,
+                                steps=group_steps
                             )
-                        else:
-                            self.logger.warning(
-                                f"    Output exists and overwrite=False - skipping {modality}"
-                            )
-                            total_skipped += 1
-                            continue
 
-                    # Execute per-modality steps dynamically
-                    self._execute_per_modality_steps(
+                            processed_modalities.add(modality)
+                            self.logger.info(f"    Successfully processed {modality}")
+                            total_processed += 1
+
+                        except FileExistsError as e:
+                            # Re-raise overwrite errors (halt execution)
+                            raise
+                        except Exception as e:
+                            self.logger.error(f"   [Error] Processing {modality}: {e}")
+                            total_errors += 1
+                            # Continue with next modality
+
+                else:
+                    # Execute study-level steps
+                    self._execute_study_level_steps(
                         patient_id=patient_id,
                         study_dir=study_dir,
-                        modality=modality,
-                        paths=paths,
-                        steps=per_modality_steps
+                        steps=group_steps
                     )
-
-                    self.logger.info(f"    Successfully processed {modality}")
-                    total_processed += 1
-
-                except FileExistsError as e:
-                    # Re-raise overwrite errors (halt execution)
-                    raise
-                except Exception as e:
-                    self.logger.error(f"   [Error] Processing {modality}: {e}")
-                    total_errors += 1
-                    # Continue with next modality
-
-            # Execute study-level steps dynamically
-            self._execute_study_level_steps(
-                patient_id=patient_id,
-                study_dir=study_dir,
-                steps=study_level_steps
-            )
 
         # Summary
         self.logger.info(f"\n{'='*80}")
@@ -793,6 +802,46 @@ class PreprocessingOrchestrator:
                 per_modality_steps.append(step_name)
 
         return per_modality_steps, study_level_steps
+
+    def _get_ordered_step_groups(self) -> List[Tuple[str, List[str]]]:
+        """Group consecutive steps by execution level while preserving order.
+
+        This allows interleaving per-modality and study-level steps according
+        to the user-specified order in config.steps.
+
+        Returns:
+            List of (level, [step_names]) tuples in execution order.
+            level is either "modality" or "study".
+        """
+        groups = []
+        current_level = None
+        current_steps = []
+
+        for step_name in self.config.steps:
+            # Find step level
+            step_level = "modality"  # Default
+            for pattern, metadata in STEP_METADATA.items():
+                if pattern in step_name:
+                    step_level = metadata.level
+                    break
+
+            # Check if we need to start a new group
+            if step_level != current_level:
+                # Save previous group if it exists
+                if current_steps:
+                    groups.append((current_level, current_steps))
+                # Start new group
+                current_level = step_level
+                current_steps = [step_name]
+            else:
+                # Add to current group
+                current_steps.append(step_name)
+
+        # Don't forget the last group
+        if current_steps:
+            groups.append((current_level, current_steps))
+
+        return groups
 
     def _execute_per_modality_steps(
         self,

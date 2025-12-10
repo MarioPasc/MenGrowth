@@ -4,7 +4,7 @@ This module implements atlas registration using the AntsPyX library instead of n
 """
 
 from pathlib import Path
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, Optional
 import logging
 import time
 
@@ -176,7 +176,7 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
 
         return {
             "atlas_path": atlas_path,
-            "reference_to_atlas_transform": ref_to_atlas_transform,
+            "ref_to_atlas_transform": ref_to_atlas_transform,
             "atlas_transforms": atlas_transforms,
             "registered_modalities": registered_modalities
         }
@@ -418,90 +418,142 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
 
     def visualize(
         self,
-        atlas_path: Path,
-        reference_path: Path,
-        modality_paths: Dict[str, Path],
-        output_dir: Path,
+        atlas_path: Optional[Path] = None,
+        reference_path: Optional[Path] = None,
+        modality_paths: Optional[Dict[str, Path]] = None,
+        output_dir: Optional[Path] = None,
         **kwargs: Any
     ) -> None:
         """Generate visualizations for atlas registration.
 
-        Creates visualizations showing:
-        1. Reference modality in atlas space
-        2. Each modality in atlas space
+        Supports two modes:
+        1. Batch mode (original): output_dir, modality_paths, etc.
+        2. Single mode (registration.py): output_path, atlas_path, reference_path/modality_path
 
         Args:
             atlas_path: Path to atlas template
             reference_path: Path to reference modality (now in atlas space)
             modality_paths: Dict mapping modality to path (all in atlas space)
             output_dir: Directory to save visualizations
-            **kwargs: Additional parameters
+            **kwargs: Additional parameters (e.g., output_path, modality_path, modality)
         """
-        try:
-            # Load atlas
-            atlas_img = nib.load(str(atlas_path))
-            atlas_data = atlas_img.get_fdata()
+        # Handle single mode (registration.py usage)
+        output_path = kwargs.get('output_path')
+        if output_path is not None:
+            modality_path = kwargs.get('modality_path')
+            
+            if atlas_path and reference_path and not modality_path:
+                self.visualize_reference_to_atlas(atlas_path, reference_path, output_path)
+                return
+            elif atlas_path and modality_path:
+                modality = kwargs.get('modality', 'unknown')
+                self.visualize_modality_in_atlas_space(atlas_path, modality_path, output_path, modality)
+                return
 
+        try:
             # 1. Visualize reference→atlas alignment
+            if output_dir and atlas_path and reference_path:
+                output_dir.mkdir(parents=True, exist_ok=True)
+                ref_output = output_dir / f"atlas_registration_reference.png"
+                self.visualize_reference_to_atlas(atlas_path, reference_path, ref_output)
+
+            # 2. Visualize each modality in atlas space
+            if output_dir and atlas_path and modality_paths:
+                for modality, mod_path in modality_paths.items():
+                    if modality == self.reference_modality:
+                        continue
+                    
+                    if not mod_path.exists():
+                        continue
+
+                    mod_output = output_dir / f"atlas_registration_{modality}.png"
+                    self.visualize_modality_in_atlas_space(atlas_path, mod_path, mod_output, modality)
+
+        except Exception as e:
+            self.logger.error(f"Failed to generate visualization: {e}")
+            raise RuntimeError(f"Visualization failed: {e}") from e
+
+    def visualize_reference_to_atlas(
+        self,
+        atlas_path: Path,
+        reference_path: Path,
+        output_path: Path
+    ) -> None:
+        """Visualize reference modality registration to atlas."""
+        try:
+            atlas_img = nib.load(str(atlas_path))
             ref_img = nib.load(str(reference_path))
+
+            atlas_data = atlas_img.get_fdata()
             ref_data = ref_img.get_fdata()
 
             slice_idx = atlas_data.shape[2] // 2
 
             fig, axes = plt.subplots(1, 2, figsize=(10, 5))
 
-            # Atlas
-            axes[0].imshow(atlas_data[:, :, slice_idx].T, cmap="gray", origin="lower")
+            # Atlas - squeeze to ensure 2D for imshow
+            atlas_slice = np.squeeze(atlas_data[:, :, slice_idx])
+            axes[0].imshow(atlas_slice.T, cmap="gray", origin="lower")
             axes[0].set_title("Atlas Template")
             axes[0].axis("off")
 
-            # Reference in atlas space
-            axes[1].imshow(ref_data[:, :, slice_idx].T, cmap="gray", origin="lower")
+            # Reference in atlas space - squeeze to ensure 2D for imshow
+            ref_slice = np.squeeze(ref_data[:, :, slice_idx])
+            axes[1].imshow(ref_slice.T, cmap="gray", origin="lower")
             axes[1].set_title(f"Reference ({self.reference_modality}) in Atlas Space")
             axes[1].axis("off")
 
             fig.suptitle(f"Atlas Registration (AntsPyX): Reference Alignment", fontsize=12)
             plt.tight_layout()
-
-            output_dir.mkdir(parents=True, exist_ok=True)
-            output_file = output_dir / f"atlas_registration_reference.png"
-            plt.savefig(output_file, dpi=150, bbox_inches="tight")
+            
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            plt.savefig(output_path, dpi=150, bbox_inches="tight")
             plt.close()
 
-            self.logger.info(f"Saved reference→atlas visualization: {output_file.name}")
-
-            # 2. Visualize each modality in atlas space
-            for modality, mod_path in modality_paths.items():
-                if modality == self.reference_modality:
-                    continue
-
-                if not mod_path.exists():
-                    continue
-
-                mod_img = nib.load(str(mod_path))
-                mod_data = mod_img.get_fdata()
-
-                fig, axes = plt.subplots(1, 2, figsize=(10, 5))
-
-                # Atlas
-                axes[0].imshow(atlas_data[:, :, slice_idx].T, cmap="gray", origin="lower")
-                axes[0].set_title("Atlas Template")
-                axes[0].axis("off")
-
-                # Modality in atlas space
-                axes[1].imshow(mod_data[:, :, slice_idx].T, cmap="gray", origin="lower")
-                axes[1].set_title(f"{modality} in Atlas Space")
-                axes[1].axis("off")
-
-                fig.suptitle(f"Atlas Registration (AntsPyX): {modality} Alignment", fontsize=12)
-                plt.tight_layout()
-
-                output_file = output_dir / f"atlas_registration_{modality}.png"
-                plt.savefig(output_file, dpi=150, bbox_inches="tight")
-                plt.close()
-
-                self.logger.info(f"Saved {modality} visualization: {output_file.name}")
-
+            self.logger.info(f"Saved reference→atlas visualization: {output_path.name}")
         except Exception as e:
-            self.logger.error(f"Failed to generate visualization: {e}")
-            raise RuntimeError(f"Visualization failed: {e}") from e
+            self.logger.error(f"Failed to visualize reference to atlas: {e}")
+            raise
+
+    def visualize_modality_in_atlas_space(
+        self,
+        atlas_path: Path,
+        modality_path: Path,
+        output_path: Path,
+        modality: str
+    ) -> None:
+        """Visualize modality in atlas space."""
+        try:
+            atlas_img = nib.load(str(atlas_path))
+            mod_img = nib.load(str(modality_path))
+
+            atlas_data = atlas_img.get_fdata()
+            mod_data = mod_img.get_fdata()
+
+            slice_idx = atlas_data.shape[2] // 2
+
+            fig, axes = plt.subplots(1, 2, figsize=(10, 5))
+
+            # Atlas - squeeze to ensure 2D for imshow
+            atlas_slice = np.squeeze(atlas_data[:, :, slice_idx])
+            axes[0].imshow(atlas_slice.T, cmap="gray", origin="lower")
+            axes[0].set_title("Atlas Template")
+            axes[0].axis("off")
+
+            # Modality in atlas space - squeeze to ensure 2D for imshow
+            mod_slice = np.squeeze(mod_data[:, :, slice_idx])
+            axes[1].imshow(mod_slice.T, cmap="gray", origin="lower")
+            axes[1].set_title(f"{modality} in Atlas Space")
+            axes[1].axis("off")
+
+            fig.suptitle(f"Atlas Registration (AntsPyX): {modality} Alignment", fontsize=12)
+            plt.tight_layout()
+
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            plt.savefig(output_path, dpi=150, bbox_inches="tight")
+            plt.close()
+
+            self.logger.info(f"Saved {modality} visualization: {output_path.name}")
+        except Exception as e:
+            self.logger.error(f"Failed to visualize modality {modality}: {e}")
+            raise

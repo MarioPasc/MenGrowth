@@ -97,7 +97,7 @@ def execute(
 
         # Generate visualization if enabled
         if config.save_visualization:
-            viz_output = get_visualization_path(context)
+            viz_output = get_visualization_path(context, suffix=f"_{modality}")
             skull_stripper.visualize(
                 modality_path,
                 temp_skull_stripped,

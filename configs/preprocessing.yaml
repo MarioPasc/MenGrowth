@@ -156,16 +156,16 @@ preprocessing:
         intra_study_to_reference:
           method: "ants"                                # "ants" | null (null to skip)
           engine: "antspyx"                           # Optional: "nipype" (default) | "antspyx" - Registration engine to use
-          reference_modality_priority: "t1c > t1n > t2f > t2w"  # Priority order for reference selection
+          reference_modality_priority: "t1n > t1c > t2f > t2w"  # Priority order for reference selection
 
           # Transform parameters
           transform_type: "Affine"                       # "Rigid" | "Affine" | "SyN"
 
           # Metric parameters
-          metric: "Mattes"                              # "Mattes" | "MI" | "CC" | "MeanSquares" | "Demons"
-          metric_bins: 32                               # Number of bins for mutual information [8-128]
+          metric: "MI"                              # "Mattes" | "MI" | "CC" | "MeanSquares" | "Demons"
+          metric_bins: 64                               # Number of bins for mutual information [8-128]
           sampling_strategy: "Random"                   # "Random" | "Regular" | "None"
-          sampling_percentage: 0.2                      # Percentage of voxels to sample (0.0-1.0]
+          sampling_percentage: 0.4                      # Percentage of voxels to sample (0.0-1.0]
 
           # Multi-resolution schedule
           number_of_iterations: [[1000, 500, 250]]      # Iterations per level (list of lists)
@@ -193,10 +193,10 @@ preprocessing:
           create_composite_transforms: false            # true | false
 
           # Metric parameters
-          metric: "Mattes"                              # "Mattes" | "MI" | "CC" | "MeanSquares" | "Demons"
-          metric_bins: 32                               # Number of bins for mutual information [8-128]
+          metric: "MI"                              # "Mattes" | "MI" | "CC" | "MeanSquares" | "Demons"
+          metric_bins: 128                               # Number of bins for mutual information [8-128]
           sampling_strategy: "Random"                   # "Random" | "Regular" | "None"
-          sampling_percentage: 0.2                      # Percentage of voxels to sample (0.0-1.0]
+          sampling_percentage: 0.5                      # Percentage of voxels to sample (0.0-1.0]
 
           # Multi-resolution schedule (one sublist per transform)
           number_of_iterations: [[1000, 500, 250], [500, 250, 100]]  # First for Rigid, second for Affine

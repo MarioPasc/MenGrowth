@@ -147,7 +147,7 @@ def execute(
                 # Visualize reference to atlas
                 viz_output_ref = viz_base / f"{context.step_name}_3b_atlas_ref_{results['reference_modality']}.png"
                 try:
-                    atlas_registrator.visualize_reference_to_atlas(
+                    atlas_registrator.visualize(
                         atlas_path=atlas_path,
                         reference_path=reference_path,
                         output_path=viz_output_ref,
@@ -162,7 +162,7 @@ def execute(
                     viz_output = viz_base / f"{context.step_name}_3b_atlas_{modality}.png"
 
                     try:
-                        atlas_registrator.visualize_modality_in_atlas_space(
+                        atlas_registrator.visualize(
                             atlas_path=atlas_path,
                             modality_path=modality_path,
                             output_path=viz_output,
