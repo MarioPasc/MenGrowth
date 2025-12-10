@@ -105,6 +105,10 @@ class KDENormalizer(BaseNormalizer):
             # Load NIfTI with nibabel
             self.logger.debug(f"Loading image: {input_path}")
             input_img = nib.load(str(input_path))
+
+            input_img.get_data = input_img.get_fdata  # For compatibility with older nibabel versions
+            input_img.with_data = lambda data: nib.Nifti1Image(data, input_img.affine)
+
             input_data = input_img.get_fdata()
 
             # Store original range

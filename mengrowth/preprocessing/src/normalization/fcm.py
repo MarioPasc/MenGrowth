@@ -163,23 +163,10 @@ class FCMNormalizer(BaseNormalizer):
             # Load NIfTI with nibabel
             self.logger.debug(f"Loading image: {input_path}")
             input_img = nib.load(str(input_path))
-
-            # Compatibility fix for nibabel >= 5.0 and intensity-normalization
-            # intensity-normalization calls get_data(), which raises ExpiredDeprecationError in nibabel 5.0+
-            # We monkeypatch the instance to use get_fdata() instead
-            try:
-                input_img.get_data = input_img.get_fdata
-            except Exception:
-                pass
-
-            if type(input_img) is not np.ndarray:
-                input_data = input_img.get_fdata()
-            else:
-                input_data = input_img
-
-            # Store original range
-            original_range = [float(input_data.min()), float(input_data.max())]
-
+            
+            input_img.get_data = input_img.get_fdata  # For compatibility with older nibabel versions
+            input_img.with_data = lambda data: nib.Nifti1Image(data, input_img.affine)
+            
             # Apply FCM normalization using intensity-normalization package
             self.logger.info("Applying FCM normalization using intensity-normalization package...")
             normalizer = FCMNormalize(
@@ -189,14 +176,20 @@ class FCMNormalizer(BaseNormalizer):
                 error_threshold=self.error_threshold,
                 fuzziness=self.fuzziness
             )
-            modality = infer_modality_from_filename(input_path)
+            modality = infer_modality_from_filename(str(input_path))
             self.logger.info(f"Inferred modality: {modality}, input: {input_path}")
             
             # Pass nibabel image to normalizer
-            normalized_result = normalizer(input_path)
-            
-            self.logger.info(type(normalized_result))
-            
+            normalized_result = normalizer(input_img)
+
+            if type(input_img) is not np.ndarray:
+                input_data = input_img.get_fdata()
+            else:
+                input_data = input_img
+
+            # Store original range
+            original_range = [float(input_data.min()), float(input_data.max())]
+
             # Extract data from result
             if hasattr(normalized_result, 'get_fdata'):
                 normalized_data = normalized_result.get_fdata()
@@ -204,10 +197,7 @@ class FCMNormalizer(BaseNormalizer):
                 normalized_data = normalized_result
             else:
                 # Fallback
-                try:
-                    normalized_data = normalized_result.get_data()
-                except Exception:
-                    normalized_data = np.asanyarray(normalized_result.dataobj)
+                normalized_data = normalized_result.get_fdata()
 
             # Store normalized range
             normalized_range = [float(normalized_data.min()), float(normalized_data.max())]
@@ -293,12 +283,12 @@ class FCMNormalizer(BaseNormalizer):
             after_img = nib.load(str(after_path))
             
 
-            if type(before_data) is not np.ndarray:
+            if type(before_img) is not np.ndarray:
                 before_data = before_img.get_fdata()
             else:
                 before_data = before_img
             
-            if type(after_data) is not np.ndarray:
+            if type(after_img) is not np.ndarray:
                 after_data = after_img.get_fdata()
             else:
                 after_data = after_img
