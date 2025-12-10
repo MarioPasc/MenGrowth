@@ -17,10 +17,10 @@ preprocessing:
 
     # I/O mode
     mode: "test"                       # "test" | "pipeline"
-    dataset_root: "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/raw/MenGrowth-2025"
-    output_root: "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/preprocessed/MenGrowth-2025"     # used in test mode
-    preprocessing_artifacts_path: "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/preprocessed/artifacts"  # intermediate artifacts
-    viz_root: "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/preprocessed/viz"              # quick-looks for both modes
+    dataset_root: "/media/hddb/mario/data/meningiomas/mengrowth/MenGrowth-2025"
+    output_root: "/media/hddb/mario/results/mengrowth//preprocessed/MenGrowth-2025"     # used in test mode
+    preprocessing_artifacts_path: "/media/hddb/mario/results/mengrowth//preprocessed/artifacts"  # intermediate artifacts
+    viz_root: "/media/hddb/mario/results/mengrowth/preprocessed/viz"              # quick-looks for both modes
     overwrite: true                                                    # guard rails
 
     # Modalities to include (if present in a study directory)
