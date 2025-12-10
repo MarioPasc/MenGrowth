@@ -121,7 +121,7 @@ def main() -> int:
         config = load_preprocessing_pipeline_config(args.config)
 
         # Display configuration summary
-        dh_config = config.data_harmonization
+        dh_config = config  # loader now returns DataHarmonizationConfig directly
         logger.info("")
         logger.info("="*80)
         logger.info("PREPROCESSING CONFIGURATION")
@@ -138,15 +138,14 @@ def main() -> int:
         logger.info(f"Overwrite:        {dh_config.overwrite}")
         logger.info(f"Modalities:       {', '.join(dh_config.modalities)}")
         logger.info("")
-        logger.info("Data Harmonization Settings:")
-        logger.info(f"  Save viz:       {dh_config.step0_data_harmonization.save_visualization}")
-        logger.info(f"  Reorient to:    {dh_config.step0_data_harmonization.reorient_to}")
-        logger.info(f"  Background:")
-        bg = dh_config.step0_data_harmonization.background_zeroing
-        logger.info(f"    Method:       {bg.method}")
-        logger.info(f"    Percentile:   {bg.percentile_low}%")
-        logger.info(f"    Smoothing:    σ={bg.gaussian_sigma}")
-        logger.info(f"    Air margin:   {bg.air_border_margin} voxels")
+        logger.info("Pipeline Configuration:")
+        if hasattr(dh_config, 'steps') and dh_config.steps:
+            logger.info(f"  Pipeline steps ({len(dh_config.steps)}):")
+            for i, step in enumerate(dh_config.steps, 1):
+                logger.info(f"    {i}. {step}")
+            logger.info(f"  Step configs:   {len(dh_config.step_configs)} configured")
+        else:
+            logger.info("  Using legacy step configuration")
         logger.info("="*80)
         logger.info("")
 

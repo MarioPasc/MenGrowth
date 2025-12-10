@@ -1,10 +1,6 @@
 preprocessing:
   # Pipeline step order
   steps: ["data_harmonization",
-          "bias_field_correction",
-          "resampling",
-          "registration_static",
-          "skull_stripping",
           "intensity_normalization"
           ]
 

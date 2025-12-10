@@ -112,10 +112,10 @@ class KDENormalizer(BaseNormalizer):
 
             # Apply KDE normalization using intensity-normalization package
             self.logger.info("Applying KDE normalization using intensity-normalization package...")
-            normalizer = KDENormalize(norm_value=self.norm_value)
+            normalizer = KDENormalize(modality=modality)
             modality = infer_modality_from_filename(input_path)
             self.logger.info(f"Inferred modality: {modality}, type: {type(modality)}, input: {input_path}")
-            normalized_data = normalizer(input_data, modality=modality)
+            normalized_data = normalizer(input_data)
 
 
             # Store normalized range

@@ -115,10 +115,10 @@ class ZScoreNormalizer(BaseNormalizer):
             # Apply z-score normalization using intensity-normalization package
             self.logger.info("Applying z-score normalization using intensity-normalization package...")
 
-            normalizer = ZScoreNormalize(norm_value=self.norm_value)
+            normalizer = ZScoreNormalize()
             modality = infer_modality_from_filename(input_path)
             self.logger.info(f"Inferred modality: {modality}, type: {type(modality)}, input: {input_path}")
-            normalized_data = normalizer(input_data, modality=modality)
+            normalized_data = normalizer(input_data)
 
 
             # Store normalized range

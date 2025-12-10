@@ -6,9 +6,12 @@ including data harmonization, normalization, and other preprocessing steps.
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, List, Optional, Union
+from typing import Literal, List, Optional, Union, Dict, Any, Callable, Tuple, TYPE_CHECKING
 import yaml
 import logging
+
+if TYPE_CHECKING:
+    from mengrowth.preprocessing.src.preprocess import PreprocessingOrchestrator
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +20,137 @@ class ConfigurationError(Exception):
     """Raised when configuration is invalid or incomplete."""
     pass
 
+
+# ============================================================================
+# Dynamic Pipeline Infrastructure
+# ============================================================================
+
+@dataclass
+class StepMetadata:
+    """Metadata describing step execution characteristics.
+    
+    Attributes:
+        level: Whether step operates per-modality or at study level
+        description: Human-readable description of the step
+    """
+    level: Literal["modality", "study"]
+    description: str = ""
+
+
+# Step metadata registry - defines execution level for each step type
+STEP_METADATA: Dict[str, StepMetadata] = {
+    "data_harmonization": StepMetadata(
+        level="modality",
+        description="NRRD→NIfTI conversion, reorientation, background removal"
+    ),
+    "bias_field_correction": StepMetadata(
+        level="modality",
+        description="N4 bias field correction"
+    ),
+    "resampling": StepMetadata(
+        level="modality",
+        description="Isotropic resampling (bspline, eclare, composite)"
+    ),
+    "registration": StepMetadata(
+        level="study",
+        description="Multi-modal coregistration and atlas registration"
+    ),
+    "skull_stripping": StepMetadata(
+        level="study",
+        description="Brain extraction (HD-BET, SynthStrip)"
+    ),
+    "intensity_normalization": StepMetadata(
+        level="modality",
+        description="Intensity normalization (zscore, kde, fcm, etc.)"
+    ),
+}
+
+
+@dataclass
+class StepExecutionContext:
+    """Context passed to each step function containing all necessary state.
+
+    Attributes:
+        patient_id: Patient identifier
+        study_dir: Path to study directory
+        modality: Modality being processed (e.g., "t1c", "t1n"), None for study-level steps
+        paths: Dictionary of output paths from _get_output_paths()
+        orchestrator: Reference to PreprocessingOrchestrator instance
+        step_name: Full step name from config (e.g., "intensity_normalization_2")
+        step_config: Step-specific configuration object
+    """
+    patient_id: str
+    study_dir: Path
+    modality: Optional[str]
+    paths: Optional[Dict[str, Path]]
+    orchestrator: 'PreprocessingOrchestrator'
+    step_name: str
+    step_config: Any
+
+
+class StepRegistry:
+    """Registry mapping step name patterns to execution functions.
+
+    Supports substring matching: if a registered pattern appears anywhere
+    in a step name, that step's handler is invoked.
+
+    Example:
+        registry = StepRegistry()
+        registry.register("intensity_normalization", normalize_func)
+
+        # Both match the same handler:
+        registry.get_handler("intensity_normalization_1")  # matches
+        registry.get_handler("intensity_normalization_kde")  # matches
+    """
+
+    def __init__(self) -> None:
+        """Initialize empty step registry."""
+        self._registry: Dict[str, Callable] = {}
+
+    def register(self, pattern: str, func: Callable) -> None:
+        """Register a step function with a pattern name.
+
+        Args:
+            pattern: Pattern to match (e.g., "data_harmonization", "intensity_normalization")
+            func: Function to call for this step
+        """
+        self._registry[pattern] = func
+        logger.debug(f"Registered step pattern: {pattern}")
+
+    def get_handler(self, step_name: str) -> Tuple[str, Callable]:
+        """Find handler for a step name using substring matching.
+
+        Args:
+            step_name: Full step name from config (e.g., "intensity_normalization_1")
+
+        Returns:
+            Tuple of (matched_pattern, handler_function)
+
+        Raises:
+            ValueError: If no matching pattern found
+        """
+        for pattern, func in self._registry.items():
+            if pattern in step_name:
+                logger.debug(f"Matched '{step_name}' to pattern '{pattern}'")
+                return pattern, func
+
+        raise ValueError(
+            f"No handler found for step '{step_name}'. "
+            f"Available patterns: {list(self._registry.keys())}"
+        )
+
+    def list_patterns(self) -> List[str]:
+        """List all registered step patterns.
+
+        Returns:
+            List of registered pattern names
+        """
+        return list(self._registry.keys())
+
+
+# ============================================================================
+# Configuration Dataclasses
+# ============================================================================
 
 @dataclass
 class BackgroundZeroingConfig:
@@ -231,8 +365,8 @@ class BiasFieldCorrectionConfig:
 
 
 @dataclass
-class Step0DataHarmonizationConfig:
-    """Configuration for Step 0: Data harmonization (NRRD to NIfTI, reorient, background removal).
+class DataHarmonizationStepConfig:
+    """Configuration for data harmonization step (NRRD to NIfTI, reorient, background removal).
 
     Attributes:
         save_visualization: Whether to save visualization outputs for this step
@@ -249,9 +383,13 @@ class Step0DataHarmonizationConfig:
             self.background_zeroing = BackgroundZeroingConfig(**self.background_zeroing)
 
 
+# Backwards compatibility alias
+Step0DataHarmonizationConfig = DataHarmonizationStepConfig
+
+
 @dataclass
-class Step1BiasFieldCorrectionConfig:
-    """Configuration for Step 1: Bias field correction.
+class BiasFieldCorrectionStepConfig:
+    """Configuration for bias field correction step.
 
     Attributes:
         save_visualization: Whether to save visualization outputs for this step
@@ -266,6 +404,10 @@ class Step1BiasFieldCorrectionConfig:
         """Ensure bias_field_correction is a BiasFieldCorrectionConfig instance."""
         if isinstance(self.bias_field_correction, dict):
             self.bias_field_correction = BiasFieldCorrectionConfig(**self.bias_field_correction)
+
+
+# Backwards compatibility alias
+Step1BiasFieldCorrectionConfig = BiasFieldCorrectionStepConfig
 
 
 @dataclass
@@ -489,8 +631,8 @@ class ResamplingConfig:
 
 
 @dataclass
-class Step2ResamplingConfig:
-    """Configuration for Step 2: Resampling to isotropic resolution.
+class ResamplingStepConfig:
+    """Configuration for resampling step (isotropic resolution).
 
     Attributes:
         save_visualization: Whether to save visualization outputs for this step
@@ -503,6 +645,10 @@ class Step2ResamplingConfig:
         """Ensure resampling is a ResamplingConfig instance."""
         if isinstance(self.resampling, dict):
             self.resampling = ResamplingConfig(**self.resampling)
+
+
+# Backwards compatibility alias
+Step2ResamplingConfig = ResamplingStepConfig
 
 
 @dataclass
@@ -795,8 +941,8 @@ class IntraStudyToAtlasConfig:
 
 
 @dataclass
-class Step3RegistrationConfig:
-    """Configuration for Step 3: Multi-modal coregistration and atlas registration.
+class RegistrationStepConfig:
+    """Configuration for registration step (multi-modal coregistration and atlas registration).
 
     This step consists of two sub-steps:
     1. Intra-study to reference: Register all modalities within a study to a reference
@@ -825,6 +971,10 @@ class Step3RegistrationConfig:
             self.intra_study_to_atlas = IntraStudyToAtlasConfig(
                 **self.intra_study_to_atlas
             )
+
+
+# Backwards compatibility alias
+Step3RegistrationConfig = RegistrationStepConfig
 
 
 @dataclass
@@ -890,8 +1040,8 @@ class SkullStrippingConfig:
 
 
 @dataclass
-class Step4SkullStrippingConfig:
-    """Configuration for Step 4: Skull stripping (brain extraction).
+class SkullStrippingStepConfig:
+    """Configuration for skull stripping step (brain extraction).
 
     Attributes:
         save_visualization: Whether to save visualization PNGs
@@ -906,6 +1056,10 @@ class Step4SkullStrippingConfig:
         """Ensure skull_stripping is a SkullStrippingConfig instance."""
         if isinstance(self.skull_stripping, dict):
             self.skull_stripping = SkullStrippingConfig(**self.skull_stripping)
+
+
+# Backwards compatibility alias
+Step4SkullStrippingConfig = SkullStrippingStepConfig
 
 
 @dataclass
@@ -1013,8 +1167,8 @@ class IntensityNormalizationConfig:
 
 
 @dataclass
-class Step5IntensityNormalizationConfig:
-    """Configuration for Step 5: Post-skull-stripping intensity normalization.
+class IntensityNormalizationStepConfig:
+    """Configuration for intensity normalization step.
 
     Attributes:
         save_visualization: Whether to save visualization PNGs
@@ -1033,12 +1187,19 @@ class Step5IntensityNormalizationConfig:
             )
 
 
+# Backwards compatibility alias
+Step5IntensityNormalizationConfig = IntensityNormalizationStepConfig
+
+
 @dataclass
-class DataHarmonizationConfig:
-    """Configuration for the data harmonization preprocessing stage.
+class PipelineExecutionConfig:
+    """Configuration for the preprocessing pipeline execution.
+
+    This is the main configuration class that controls pipeline execution,
+    including patient selection, I/O paths, and step ordering.
 
     Attributes:
-        enabled: Whether this stage is enabled
+        enabled: Whether the pipeline is enabled
         patient_selector: Select "single" patient or "all" patients
         patient_id: Patient ID to process (used only if patient_selector == "single")
         mode: Operating mode - "test" (separate output) or "pipeline" (in-place)
@@ -1048,12 +1209,8 @@ class DataHarmonizationConfig:
         viz_root: Directory for visualization outputs
         overwrite: Allow overwriting existing files
         modalities: List of modalities to process
-        step0_data_harmonization: Configuration for harmonization operations
-        step1_bias_field_correction: Configuration for bias field correction
-        step2_resampling: Configuration for resampling to isotropic resolution
-        step3_registration: Configuration for multi-modal coregistration
-        step4_skull_stripping: Configuration for skull stripping (brain extraction)
-        step5_intensity_normalization: Configuration for post-skull-stripping intensity normalization
+        steps: Ordered list of step names to execute
+        step_configs: Dictionary mapping step patterns to their typed configurations
     """
     enabled: bool = True
     patient_selector: Literal["single", "all"] = "single"
@@ -1065,62 +1222,16 @@ class DataHarmonizationConfig:
     viz_root: str = ""
     overwrite: bool = False
     modalities: List[str] = field(default_factory=lambda: ["t1c", "t1n", "t2w", "t2f"])
-    step0_data_harmonization: Step0DataHarmonizationConfig = field(
-        default_factory=Step0DataHarmonizationConfig
-    )
-    step1_bias_field_correction: Step1BiasFieldCorrectionConfig = field(
-        default_factory=Step1BiasFieldCorrectionConfig
-    )
-    step2_resampling: Step2ResamplingConfig = field(
-        default_factory=Step2ResamplingConfig
-    )
-    step3_registration: Step3RegistrationConfig = field(
-        default_factory=Step3RegistrationConfig
-    )
-    step4_skull_stripping: Step4SkullStrippingConfig = field(
-        default_factory=Step4SkullStrippingConfig
-    )
-    step5_intensity_normalization: Step5IntensityNormalizationConfig = field(
-        default_factory=Step5IntensityNormalizationConfig
-    )
+
+    # Dynamic pipeline configuration
+    steps: List[str] = field(default_factory=list)
+    step_configs: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        """Validate configuration and convert paths."""
-        # Ensure step0 is a dataclass instance
-        if isinstance(self.step0_data_harmonization, dict):
-            self.step0_data_harmonization = Step0DataHarmonizationConfig(
-                **self.step0_data_harmonization
-            )
-
-        # Ensure step1 is a dataclass instance
-        if isinstance(self.step1_bias_field_correction, dict):
-            self.step1_bias_field_correction = Step1BiasFieldCorrectionConfig(
-                **self.step1_bias_field_correction
-            )
-
-        # Ensure step2 is a dataclass instance
-        if isinstance(self.step2_resampling, dict):
-            self.step2_resampling = Step2ResamplingConfig(
-                **self.step2_resampling
-            )
-
-        # Ensure step3 is a dataclass instance
-        if isinstance(self.step3_registration, dict):
-            self.step3_registration = Step3RegistrationConfig(
-                **self.step3_registration
-            )
-
-        # Ensure step4 is a dataclass instance
-        if isinstance(self.step4_skull_stripping, dict):
-            self.step4_skull_stripping = Step4SkullStrippingConfig(
-                **self.step4_skull_stripping
-            )
-
-        # Ensure step5 is a dataclass instance
-        if isinstance(self.step5_intensity_normalization, dict):
-            self.step5_intensity_normalization = Step5IntensityNormalizationConfig(
-                **self.step5_intensity_normalization
-            )
+        """Validate configuration and convert step configs to typed dataclasses."""
+        # Validate dynamic pipeline configuration if steps are provided
+        if self.steps and self.step_configs:
+            self._validate_dynamic_config()
 
         # Validate dataset_root
         if not self.dataset_root:
@@ -1157,9 +1268,91 @@ class DataHarmonizationConfig:
         if not self.modalities:
             raise ConfigurationError("At least one modality must be specified")
 
-        logger.info(f"DataHarmonizationConfig validated: mode={self.mode}, "
+        logger.info(f"PipelineExecutionConfig validated: mode={self.mode}, "
                    f"patient_selector={self.patient_selector}, "
                    f"overwrite={self.overwrite}")
+
+    def _validate_dynamic_config(self) -> None:
+        """Validate dynamic pipeline configuration (steps and step_configs)."""
+        # Validate steps list is not empty
+        if not self.steps:
+            raise ConfigurationError("'steps' list cannot be empty")
+
+        # Validate each step name has a known handler
+        registry = StepRegistry()
+        # Register patterns temporarily for validation
+        registry.register("data_harmonization", lambda: None)
+        registry.register("bias_field_correction", lambda: None)
+        registry.register("intensity_normalization", lambda: None)
+        registry.register("resampling", lambda: None)
+        registry.register("registration", lambda: None)
+        registry.register("skull_stripping", lambda: None)
+
+        for step_name in self.steps:
+            try:
+                pattern, _ = registry.get_handler(step_name)
+            except ValueError as e:
+                raise ConfigurationError(
+                    f"Invalid step name '{step_name}': {e}"
+                ) from e
+
+        # Validate each step has a matching config
+        for step_name in self.steps:
+            matched = False
+            for pattern in self.step_configs.keys():
+                if pattern in step_name:
+                    matched = True
+                    break
+            if not matched:
+                raise ConfigurationError(
+                    f"Step '{step_name}' has no matching configuration in step_configs. "
+                    f"Available patterns: {list(self.step_configs.keys())}"
+                )
+
+        # Convert step_configs dict entries to proper dataclass instances
+        self._convert_step_configs()
+
+    def _convert_step_configs(self) -> None:
+        """Convert step_configs dict entries to typed dataclass instances.
+
+        Maps each step configuration to its corresponding typed dataclass,
+        providing full type validation and IDE support.
+        """
+        # Registry mapping step patterns to their typed config classes
+        step_config_classes: Dict[str, type] = {
+            "data_harmonization": DataHarmonizationStepConfig,
+            "bias_field_correction": BiasFieldCorrectionStepConfig,
+            "resampling": ResamplingStepConfig,
+            "registration": RegistrationStepConfig,
+            "skull_stripping": SkullStrippingStepConfig,
+            "intensity_normalization": IntensityNormalizationStepConfig,
+        }
+
+        for step_name, config_data in list(self.step_configs.items()):
+            if isinstance(config_data, dict):
+                # Find matching config class using substring matching
+                matched = False
+                for pattern, config_class in step_config_classes.items():
+                    if pattern in step_name:
+                        try:
+                            self.step_configs[step_name] = config_class(**config_data)
+                            matched = True
+                            logger.debug(f"Converted '{step_name}' config to {config_class.__name__}")
+                            break
+                        except TypeError as e:
+                            raise ConfigurationError(
+                                f"Invalid configuration for step '{step_name}': {e}"
+                            ) from e
+                
+                if not matched:
+                    raise ConfigurationError(
+                        f"No config class found for step '{step_name}'. "
+                        f"Available patterns: {list(step_config_classes.keys())}"
+                    )
+
+
+# Backwards compatibility alias
+DataHarmonizationConfig = PipelineExecutionConfig
 
 
 @dataclass
@@ -1167,26 +1360,49 @@ class PreprocessingPipelineConfig:
     """Top-level configuration for the preprocessing pipeline.
 
     Attributes:
-        data_harmonization: Configuration for data harmonization stage
+        steps: Ordered list of pipeline steps to execute
+        general_configuration: Global configuration settings
+        step_configs: Dictionary of step-specific configurations
+        skull_stripping: Optional skull stripping configuration (top-level)
+        intensity_normalization: Optional intensity normalization configuration (top-level)
     """
-    data_harmonization: DataHarmonizationConfig = field(
-        default_factory=DataHarmonizationConfig
+    steps: List[str] = field(default_factory=list)
+    general_configuration: PipelineExecutionConfig = field(
+        default_factory=PipelineExecutionConfig
     )
+    step_configs: Dict[str, Any] = field(default_factory=dict)
+    skull_stripping: Optional[Dict[str, Any]] = None
+    intensity_normalization: Optional[Dict[str, Any]] = None
 
     def __post_init__(self) -> None:
-        """Ensure data_harmonization is a DataHarmonizationConfig instance."""
-        if isinstance(self.data_harmonization, dict):
-            self.data_harmonization = DataHarmonizationConfig(**self.data_harmonization)
+        """Validate and convert configuration."""
+        # Ensure general_configuration is a PipelineExecutionConfig instance
+        if isinstance(self.general_configuration, dict):
+            self.general_configuration = PipelineExecutionConfig(**self.general_configuration)
+
+        # Add top-level configs to step_configs if they exist
+        if self.skull_stripping:
+            self.step_configs['skull_stripping'] = self.skull_stripping
+        if self.intensity_normalization:
+            self.step_configs['intensity_normalization'] = self.intensity_normalization
+
+        # Add steps and step_configs to general_configuration for orchestrator access
+        self.general_configuration.steps = self.steps
+        self.general_configuration.step_configs = self.step_configs
+
+        # Now validate the dynamic config
+        if self.steps and self.step_configs:
+            self.general_configuration._validate_dynamic_config()
 
 
-def load_preprocessing_pipeline_config(config_path: Path) -> PreprocessingPipelineConfig:
+def load_preprocessing_pipeline_config(config_path: Path) -> PipelineExecutionConfig:
     """Load and validate preprocessing pipeline configuration from YAML.
 
     Args:
         config_path: Path to the YAML configuration file
 
     Returns:
-        Validated PreprocessingPipelineConfig object
+        Validated PipelineExecutionConfig object with steps and step_configs populated
 
     Raises:
         FileNotFoundError: If config file does not exist
@@ -1215,10 +1431,11 @@ def load_preprocessing_pipeline_config(config_path: Path) -> PreprocessingPipeli
     preprocessing_data = yaml_data["preprocessing"]
 
     try:
-        config = PreprocessingPipelineConfig(**preprocessing_data)
+        pipeline_config = PreprocessingPipelineConfig(**preprocessing_data)
     except TypeError as e:
         raise ConfigurationError(f"Invalid configuration structure: {e}") from e
 
     logger.info("Preprocessing pipeline configuration loaded successfully")
 
-    return config
+    # Return the general_configuration which now has steps and step_configs populated
+    return pipeline_config.general_configuration

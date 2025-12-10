@@ -5,10 +5,24 @@ managing file paths, mode semantics, and visualization outputs.
 """
 
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import List, Optional, Any, Tuple, Dict, Union
 import logging
 
-from mengrowth.preprocessing.src.config import PreprocessingPipelineConfig, DataHarmonizationConfig
+from mengrowth.preprocessing.src.config import (
+    PreprocessingPipelineConfig,
+    PipelineExecutionConfig,
+    DataHarmonizationConfig,  # Backwards compatibility alias
+    StepRegistry,
+    StepExecutionContext,
+    STEP_METADATA,
+    # Step config types for type hints
+    DataHarmonizationStepConfig,
+    BiasFieldCorrectionStepConfig,
+    ResamplingStepConfig,
+    RegistrationStepConfig,
+    SkullStrippingStepConfig,
+    IntensityNormalizationStepConfig,
+)
 from mengrowth.preprocessing.src.data_harmonization.io import NRRDtoNIfTIConverter
 from mengrowth.preprocessing.src.data_harmonization.orient import Reorienter
 from mengrowth.preprocessing.src.data_harmonization.head_masking.conservative import ConservativeBackgroundRemover
@@ -39,315 +53,300 @@ class PreprocessingOrchestrator:
     - Overwrite protection
     """
 
-    def __init__(self, config: DataHarmonizationConfig, verbose: bool = False) -> None:
-        """Initialize preprocessing orchestrator.
+    def __init__(self, config: PipelineExecutionConfig, verbose: bool = False) -> None:
+        """Initialize preprocessing orchestrator with lazy component loading.
 
         Args:
-            config: Data harmonization configuration
+            config: Pipeline execution configuration
             verbose: Enable verbose logging
         """
         self.config = config
         self.verbose = verbose
         self.logger = logging.getLogger(__name__)
 
-        # Initialize preprocessing steps
-        self.converter = NRRDtoNIfTIConverter(verbose=verbose)
-        self.reorienter = Reorienter(
-            target_orientation=config.step0_data_harmonization.reorient_to,
-            verbose=verbose
+        # Initialize step registry
+        self.step_registry = StepRegistry()
+        self._register_step_handlers()
+
+        # Component cache for lazy initialization
+        self._components = {}
+        self._step_results = {}  # Store results from previous steps
+
+        # State variables
+        self.selected_reference_modality = None
+
+        self.logger.info("Preprocessing orchestrator initialized with dynamic pipeline execution")
+
+    def _register_step_handlers(self) -> None:
+        """Register all step handler functions with the registry."""
+        from mengrowth.preprocessing.src.steps import (
+            data_harmonization,
+            bias_field_correction,
+            intensity_normalization,
+            resampling,
+            registration,
+            skull_stripping
         )
 
-        # Select background removal algorithm based on method
-        bg_method = config.step0_data_harmonization.background_zeroing.method
-        if bg_method is None:
-            self.background_remover = None
-            self.logger.info("Preprocessing orchestrator initialized with background removal disabled")
-        elif bg_method == "border_connected_percentile":
-            self.background_remover = ConservativeBackgroundRemover(
-                config=config.step0_data_harmonization.background_zeroing,
-                verbose=verbose
-            )
-            self.logger.info(f"Preprocessing orchestrator initialized with background method: {bg_method}")
-        elif bg_method == "self_head_mask":
-            self.background_remover = SELFBackgroundRemover(
-                config=config.step0_data_harmonization.background_zeroing,
-                verbose=verbose
-            )
-            self.logger.info(f"Preprocessing orchestrator initialized with background method: {bg_method}")
-        else:
-            raise ValueError(
-                f"Unknown background removal method: {bg_method}. "
-                "Must be None, 'border_connected_percentile', or 'self_head_mask'"
-            )
+        self.step_registry.register("data_harmonization", data_harmonization.execute)
+        self.step_registry.register("bias_field_correction", bias_field_correction.execute)
+        self.step_registry.register("intensity_normalization", intensity_normalization.execute)
+        self.step_registry.register("resampling", resampling.execute)
+        self.step_registry.register("registration", registration.execute)
+        self.step_registry.register("skull_stripping", skull_stripping.execute)
 
-        # Select bias field correction algorithm based on method
-        bf_method = config.step1_bias_field_correction.bias_field_correction.method
-        if bf_method is None:
-            self.bias_corrector = None
-            self.logger.info("Preprocessing orchestrator initialized with bias field correction disabled")
-        elif bf_method == "n4":
-            # Convert BiasFieldCorrectionConfig to dictionary for initializer
+        self.logger.debug(f"Registered {len(self.step_registry.list_patterns())} step patterns")
+
+    def _get_component(self, component_type: str, config: Any) -> Any:
+        """Get or create a component instance (lazy initialization).
+
+        Args:
+            component_type: Type of component (e.g., "normalizer_kde", "resampler_bspline")
+            config: Configuration for the component
+
+        Returns:
+            Component instance (cached for reuse)
+        """
+        if component_type not in self._components:
+            self._components[component_type] = self._create_component(component_type, config)
+        return self._components[component_type]
+
+    def _create_component(self, component_type: str, config: Any) -> Any:
+        """Create a component instance based on type and config.
+
+        Args:
+            component_type: Type identifier (e.g., "normalizer_kde", "resampler_bspline")
+            config: Configuration dict or dataclass
+
+        Returns:
+            Initialized component instance
+        """
+        # Parse component type
+        if component_type == "converter":
+            return NRRDtoNIfTIConverter(verbose=self.verbose)
+        elif component_type == "reorienter":
+            return Reorienter(
+                target_orientation=config.reorient_to,
+                verbose=self.verbose
+            )
+        elif component_type.startswith("background_remover_"):
+            method = component_type.split("_", 2)[2]  # Extract method from "background_remover_METHOD"
+            return self._create_background_remover(method, config)
+        elif component_type.startswith("bias_corrector_"):
+            parts = component_type.split("_", 3)
+            method = parts[2] if len(parts) > 2 else "unknown"
+            return self._create_bias_corrector(method, config)
+        elif component_type.startswith("normalizer_"):
+            # Extract method from "normalizer_METHOD_stepname"
+            parts = component_type.split("_", 2)
+            method = parts[1] if len(parts) > 1 else "unknown"
+            return self._create_normalizer(method, config)
+        elif component_type.startswith("resampler_"):
+            parts = component_type.split("_", 2)
+            method = parts[1] if len(parts) > 1 else "unknown"
+            return self._create_resampler(method, config)
+        elif component_type.startswith("intra_study_to_ref_"):
+            return self._create_intra_study_registrator(config)
+        elif component_type.startswith("intra_study_to_atlas_"):
+            return self._create_atlas_registrator(config)
+        elif component_type.startswith("skull_stripper_"):
+            parts = component_type.split("_", 3)
+            method = parts[2] if len(parts) > 2 else "unknown"
+            return self._create_skull_stripper(method, config)
+        else:
+            raise ValueError(f"Unknown component type: {component_type}")
+
+    def _create_background_remover(self, method: str, config: Any) -> Any:
+        """Create background remover instance."""
+        if method == "border_connected_percentile":
+            return ConservativeBackgroundRemover(
+                config=config.background_zeroing,
+                verbose=self.verbose
+            )
+        elif method == "self_head_mask":
+            return SELFBackgroundRemover(
+                config=config.background_zeroing,
+                verbose=self.verbose
+            )
+        else:
+            raise ValueError(f"Unknown background removal method: {method}")
+
+    def _create_bias_corrector(self, method: str, config: Any) -> Any:
+        """Create bias field corrector instance."""
+        if method == "n4":
             bf_config_dict = {
-                "shrink_factor": config.step1_bias_field_correction.bias_field_correction.shrink_factor,
-                "max_iterations": config.step1_bias_field_correction.bias_field_correction.max_iterations,
-                "bias_field_fwhm": config.step1_bias_field_correction.bias_field_correction.bias_field_fwhm,
-                "convergence_threshold": config.step1_bias_field_correction.bias_field_correction.convergence_threshold,
+                "shrink_factor": config.bias_field_correction.shrink_factor,
+                "max_iterations": config.bias_field_correction.max_iterations,
+                "bias_field_fwhm": config.bias_field_correction.bias_field_fwhm,
+                "convergence_threshold": config.bias_field_correction.convergence_threshold,
             }
-            self.bias_corrector = N4BiasFieldCorrector(
+            return N4BiasFieldCorrector(
                 config=bf_config_dict,
-                verbose=verbose
+                verbose=self.verbose
             )
-            self.logger.info(f"Preprocessing orchestrator initialized with bias correction method: {bf_method}")
         else:
-            raise ValueError(
-                f"Unknown bias field correction method: {bf_method}. Must be None or 'n4'"
-            )
+            raise ValueError(f"Unknown bias field correction method: {method}")
 
-        # Select normalization algorithm based on method (applied before resampling)
-        norm_method = config.step2_resampling.resampling.normalize_method
-        if norm_method is None:
-            self.normalizer = None
-            self.logger.info("Preprocessing orchestrator initialized with normalization disabled")
-        elif norm_method == "zscore":
-            # Convert config to dictionary for initializer
+    def _create_normalizer(self, method: str, config: Any) -> Any:
+        """Create normalizer instance based on method."""
+        if method == "zscore":
             norm_config_dict = {
-                "norm_value": config.step2_resampling.resampling.norm_value,
+                "norm_value": config.intensity_normalization.norm_value,
             }
-            self.normalizer = ZScoreNormalizer(
-                config=norm_config_dict,
-                verbose=verbose
-            )
-            self.logger.info(f"Preprocessing orchestrator initialized with normalization method: {norm_method}")
-        elif norm_method == "kde":
-            # Convert config to dictionary for initializer
+            return ZScoreNormalizer(config=norm_config_dict, verbose=self.verbose)
+        elif method == "kde":
             norm_config_dict = {
-                "norm_value": config.step2_resampling.resampling.norm_value,
+                "norm_value": config.intensity_normalization.norm_value,
             }
-            self.normalizer = KDENormalizer(
-                config=norm_config_dict,
-                verbose=verbose
-            )
-            self.logger.info(f"Preprocessing orchestrator initialized with normalization method: {norm_method}")
-        elif norm_method == "percentile_minmax":
-            # Convert config to dictionary for initializer
+            return KDENormalizer(config=norm_config_dict, verbose=self.verbose)
+        elif method == "percentile_minmax":
             norm_config_dict = {
-                "p1": config.step2_resampling.resampling.p1,
-                "p2": config.step2_resampling.resampling.p2,
+                "p1": config.intensity_normalization.p1,
+                "p2": config.intensity_normalization.p2,
             }
-            self.normalizer = PercentileMinMaxNormalizer(
-                config=norm_config_dict,
-                verbose=verbose
-            )
-            self.logger.info(f"Preprocessing orchestrator initialized with normalization method: {norm_method}")
-        elif norm_method == "whitestripe":
-            # Convert config to dictionary for initializer
+            return PercentileMinMaxNormalizer(config=norm_config_dict, verbose=self.verbose)
+        elif method == "whitestripe":
             norm_config_dict = {
-                "width": config.step2_resampling.resampling.whitestripe_width,
-                "width_l": config.step2_resampling.resampling.whitestripe_width_l,
-                "width_u": config.step2_resampling.resampling.whitestripe_width_u,
+                "width": config.intensity_normalization.width,
+                "width_l": config.intensity_normalization.width_l,
+                "width_u": config.intensity_normalization.width_u,
             }
-            self.normalizer = WhiteStripeNormalizer(
-                config=norm_config_dict,
-                verbose=verbose
-            )
-            self.logger.info(f"Preprocessing orchestrator initialized with normalization method: {norm_method}")
-        elif norm_method == "fcm":
-            # Convert config to dictionary for initializer
+            return WhiteStripeNormalizer(config=norm_config_dict, verbose=self.verbose)
+        elif method == "fcm":
             norm_config_dict = {
-                "n_clusters": config.step2_resampling.resampling.fcm_n_clusters,
-                "tissue_type": config.step2_resampling.resampling.fcm_tissue_type,
-                "max_iter": config.step2_resampling.resampling.fcm_max_iter,
-                "error_threshold": config.step2_resampling.resampling.fcm_error_threshold,
-                "fuzziness": config.step2_resampling.resampling.fcm_fuzziness,
+                "n_clusters": config.intensity_normalization.n_clusters,
+                "tissue_type": config.intensity_normalization.tissue_type,
+                "max_iter": config.intensity_normalization.max_iter,
+                "error_threshold": config.intensity_normalization.error_threshold,
+                "fuzziness": config.intensity_normalization.fuzziness,
             }
-            self.normalizer = FCMNormalizer(
-                config=norm_config_dict,
-                verbose=verbose
-            )
-            self.logger.info(f"Preprocessing orchestrator initialized with normalization method: {norm_method}")
-        elif norm_method == "lsq":
-            # Convert config to dictionary for initializer
+            return FCMNormalizer(config=norm_config_dict, verbose=self.verbose)
+        elif method == "lsq":
             norm_config_dict = {
-                "norm_value": config.step2_resampling.resampling.norm_value,
+                "norm_value": config.intensity_normalization.norm_value,
             }
-            self.normalizer = LSQNormalizer(
-                config=norm_config_dict,
-                verbose=verbose
-            )
-            self.logger.info(f"Preprocessing orchestrator initialized with normalization method: {norm_method} (population-based)")
+            return LSQNormalizer(config=norm_config_dict, verbose=self.verbose)
         else:
-            raise ValueError(
-                f"Unknown normalization method: {norm_method}. "
-                "Must be None, 'zscore', 'kde', 'percentile_minmax', 'whitestripe', 'fcm', or 'lsq'"
-            )
+            raise ValueError(f"Unknown normalization method: {method}")
 
-        # Select resampling algorithm based on method
-        resample_method = config.step2_resampling.resampling.method
-        if resample_method is None:
-            self.resampler = None
-            self.logger.info("Preprocessing orchestrator initialized with resampling disabled")
-        elif resample_method == "bspline":
-            # Convert ResamplingConfig to dictionary for initializer
+    def _create_resampler(self, method: str, config: Any) -> Any:
+        """Create resampler instance based on method."""
+        if method == "bspline":
             resample_config_dict = {
-                "bspline_order": config.step2_resampling.resampling.bspline_order,
+                "bspline_order": config.resampling.bspline_order,
             }
-            self.resampler = BSplineResampler(
-                target_voxel_size=config.step2_resampling.resampling.target_voxel_size,
+            return BSplineResampler(
+                target_voxel_size=config.resampling.target_voxel_size,
                 config=resample_config_dict,
-                verbose=verbose
+                verbose=self.verbose
             )
-            self.logger.info(f"Preprocessing orchestrator initialized with resampling method: {resample_method}")
-        elif resample_method == "eclare":
-            # Convert ResamplingConfig to dictionary for initializer
+        elif method == "eclare":
             resample_config_dict = {
-                "conda_environment_eclare": config.step2_resampling.resampling.conda_environment_eclare,
-                "batch_size": config.step2_resampling.resampling.batch_size,
-                "n_patches": config.step2_resampling.resampling.n_patches,
-                "patch_sampling": config.step2_resampling.resampling.patch_sampling,
-                "suffix": config.step2_resampling.resampling.suffix,
-                "gpu_id": config.step2_resampling.resampling.gpu_id,
-                "verbose": config.step2_resampling.resampling.verbose if hasattr(config.step2_resampling.resampling, "verbose") else verbose,
+                "conda_environment_eclare": config.resampling.conda_environment_eclare,
+                "batch_size": config.resampling.batch_size,
+                "n_patches": config.resampling.n_patches,
+                "patch_sampling": config.resampling.patch_sampling,
+                "suffix": config.resampling.suffix,
+                "gpu_id": config.resampling.gpu_id,
+                "verbose": config.resampling.verbose if hasattr(config.resampling, "verbose") else self.verbose,
             }
-            self.resampler = EclareResampler(
-                target_voxel_size=config.step2_resampling.resampling.target_voxel_size,
+            return EclareResampler(
+                target_voxel_size=config.resampling.target_voxel_size,
                 config=resample_config_dict,
-                verbose=verbose
+                verbose=self.verbose
             )
-            self.logger.info(f"Preprocessing orchestrator initialized with resampling method: {resample_method}")
-        elif resample_method == "composite":
-            # Convert ResamplingConfig to dictionary for initializer
-            # Composite needs parameters for both BSpline and ECLARE
+        elif method == "composite":
             resample_config_dict = {
-                # Composite-specific parameters
-                "composite_interpolator": config.step2_resampling.resampling.composite_interpolator,
-                "composite_dl_method": config.step2_resampling.resampling.composite_dl_method,
-                "max_mm_interpolator": config.step2_resampling.resampling.max_mm_interpolator,
-                "max_mm_dl_method": config.step2_resampling.resampling.max_mm_dl_method,
-                "resample_mm_to_interpolator_if_max_mm_dl_method": config.step2_resampling.resampling.resample_mm_to_interpolator_if_max_mm_dl_method,
-                # BSpline parameters
-                "bspline_order": config.step2_resampling.resampling.bspline_order,
-                # ECLARE parameters
-                "conda_environment_eclare": config.step2_resampling.resampling.conda_environment_eclare,
-                "batch_size": config.step2_resampling.resampling.batch_size,
-                "n_patches": config.step2_resampling.resampling.n_patches,
-                "patch_sampling": config.step2_resampling.resampling.patch_sampling,
-                "suffix": config.step2_resampling.resampling.suffix,
-                "gpu_id": config.step2_resampling.resampling.gpu_id,
+                "composite_interpolator": config.resampling.composite_interpolator,
+                "composite_dl_method": config.resampling.composite_dl_method,
+                "max_mm_interpolator": config.resampling.max_mm_interpolator,
+                "max_mm_dl_method": config.resampling.max_mm_dl_method,
+                "resample_mm_to_interpolator_if_max_mm_dl_method": config.resampling.resample_mm_to_interpolator_if_max_mm_dl_method,
+                "bspline_order": config.resampling.bspline_order,
+                "conda_environment_eclare": config.resampling.conda_environment_eclare,
+                "batch_size": config.resampling.batch_size,
+                "n_patches": config.resampling.n_patches,
+                "patch_sampling": config.resampling.patch_sampling,
+                "suffix": config.resampling.suffix,
+                "gpu_id": config.resampling.gpu_id,
             }
-            self.resampler = CompositeResampler(
-                target_voxel_size=config.step2_resampling.resampling.target_voxel_size,
+            return CompositeResampler(
+                target_voxel_size=config.resampling.target_voxel_size,
                 config=resample_config_dict,
-                verbose=verbose
+                verbose=self.verbose
             )
-            self.logger.info(f"Preprocessing orchestrator initialized with resampling method: {resample_method}")
         else:
-            raise ValueError(
-                f"Unknown resampling method: {resample_method}. Must be None, 'bspline', 'eclare', or 'composite'"
-            )
+            raise ValueError(f"Unknown resampling method: {method}")
 
-        # Step 3a: Intra-study to reference registration
-        intra_study_to_ref_method = config.step3_registration.intra_study_to_reference.method
-        if intra_study_to_ref_method is None:
-            self.intra_study_to_ref_registrator = None
-            self.selected_reference_modality = None
-            self.logger.info("Intra-study to reference registration disabled")
-        elif intra_study_to_ref_method == "ants":
-            from mengrowth.preprocessing.src.registration.factory import create_multi_modal_coregistration
-            from mengrowth.preprocessing.src.registration.constants import DEFAULT_REGISTRATION_ENGINE
-            # Convert config to dictionary
-            intra_study_to_ref_config = {
-                "reference_modality_priority": config.step3_registration.intra_study_to_reference.reference_modality_priority,
-                "transform_type": config.step3_registration.intra_study_to_reference.transform_type,
-                "metric": config.step3_registration.intra_study_to_reference.metric,
-                "metric_bins": config.step3_registration.intra_study_to_reference.metric_bins,
-                "sampling_strategy": config.step3_registration.intra_study_to_reference.sampling_strategy,
-                "sampling_percentage": config.step3_registration.intra_study_to_reference.sampling_percentage,
-                "number_of_iterations": config.step3_registration.intra_study_to_reference.number_of_iterations,
-                "shrink_factors": config.step3_registration.intra_study_to_reference.shrink_factors,
-                "smoothing_sigmas": config.step3_registration.intra_study_to_reference.smoothing_sigmas,
-                "convergence_threshold": config.step3_registration.intra_study_to_reference.convergence_threshold,
-                "convergence_window_size": config.step3_registration.intra_study_to_reference.convergence_window_size,
-                "write_composite_transform": config.step3_registration.intra_study_to_reference.write_composite_transform,
-                "interpolation": config.step3_registration.intra_study_to_reference.interpolation,
-                "engine": config.step3_registration.intra_study_to_reference.engine or DEFAULT_REGISTRATION_ENGINE,
-            }
-            self.intra_study_to_ref_registrator = create_multi_modal_coregistration(
-                config=intra_study_to_ref_config,
-                verbose=verbose
-            )
-            self.selected_reference_modality = None  # Will be set during execution
-            self.logger.info(f"Intra-study to reference registration initialized: {intra_study_to_ref_method}")
-        else:
-            raise ValueError(
-                f"Unknown intra-study to reference method: {intra_study_to_ref_method}. Must be None or 'ants'"
-            )
+    def _create_intra_study_registrator(self, config: Any) -> Any:
+        """Create intra-study to reference registrator."""
+        from mengrowth.preprocessing.src.registration.factory import create_multi_modal_coregistration
+        from mengrowth.preprocessing.src.registration.constants import DEFAULT_REGISTRATION_ENGINE
 
-        # Step 3b: Intra-study to atlas registration
-        intra_study_to_atlas_method = config.step3_registration.intra_study_to_atlas.method
-        if intra_study_to_atlas_method is None:
-            self.intra_study_to_atlas_registrator = None
-            self.logger.info("Intra-study to atlas registration disabled")
-        elif intra_study_to_atlas_method == "ants":
-            from mengrowth.preprocessing.src.registration.constants import DEFAULT_REGISTRATION_ENGINE
-            # Convert config to dictionary
-            intra_study_to_atlas_config = {
-                "atlas_path": config.step3_registration.intra_study_to_atlas.atlas_path,
-                "transforms": config.step3_registration.intra_study_to_atlas.transforms,
-                "create_composite_transforms": config.step3_registration.intra_study_to_atlas.create_composite_transforms,
-                "metric": config.step3_registration.intra_study_to_atlas.metric,
-                "metric_bins": config.step3_registration.intra_study_to_atlas.metric_bins,
-                "sampling_strategy": config.step3_registration.intra_study_to_atlas.sampling_strategy,
-                "sampling_percentage": config.step3_registration.intra_study_to_atlas.sampling_percentage,
-                "number_of_iterations": config.step3_registration.intra_study_to_atlas.number_of_iterations,
-                "shrink_factors": config.step3_registration.intra_study_to_atlas.shrink_factors,
-                "smoothing_sigmas": config.step3_registration.intra_study_to_atlas.smoothing_sigmas,
-                "convergence_threshold": config.step3_registration.intra_study_to_atlas.convergence_threshold,
-                "convergence_window_size": config.step3_registration.intra_study_to_atlas.convergence_window_size,
-                "interpolation": config.step3_registration.intra_study_to_atlas.interpolation,
-                "engine": config.step3_registration.intra_study_to_atlas.engine or DEFAULT_REGISTRATION_ENGINE,
-            }
-            # Note: reference_modality will be set after step 3a completes
-            self.intra_study_to_atlas_registrator = None  # Will be initialized with reference_modality later
-            self.intra_study_to_atlas_config = intra_study_to_atlas_config
-            self.logger.info(f"Intra-study to atlas registration will be initialized after reference selection")
-        else:
-            raise ValueError(
-                f"Unknown intra-study to atlas method: {intra_study_to_atlas_method}. Must be None or 'ants'"
-            )
+        intra_study_config = {
+            "reference_modality_priority": config.intra_study_to_reference.reference_modality_priority,
+            "transform_type": config.intra_study_to_reference.transform_type,
+            "metric": config.intra_study_to_reference.metric,
+            "metric_bins": config.intra_study_to_reference.metric_bins,
+            "sampling_strategy": config.intra_study_to_reference.sampling_strategy,
+            "sampling_percentage": config.intra_study_to_reference.sampling_percentage,
+            "number_of_iterations": config.intra_study_to_reference.number_of_iterations,
+            "shrink_factors": config.intra_study_to_reference.shrink_factors,
+            "smoothing_sigmas": config.intra_study_to_reference.smoothing_sigmas,
+            "convergence_threshold": config.intra_study_to_reference.convergence_threshold,
+            "convergence_window_size": config.intra_study_to_reference.convergence_window_size,
+            "write_composite_transform": config.intra_study_to_reference.write_composite_transform,
+            "interpolation": config.intra_study_to_reference.interpolation,
+            "engine": config.intra_study_to_reference.engine or DEFAULT_REGISTRATION_ENGINE,
+        }
+        return create_multi_modal_coregistration(config=intra_study_config, verbose=self.verbose)
 
-        # Step 4: Skull stripping (brain extraction)
-        skull_strip_method = config.step4_skull_stripping.skull_stripping.method
-        if skull_strip_method is None:
-            self.skull_stripper = None
-            self.logger.info("Skull stripping disabled")
-        elif skull_strip_method == "hdbet":
-            skull_strip_config_dict = {
-                "mode": config.step4_skull_stripping.skull_stripping.hdbet_mode,
-                "device": config.step4_skull_stripping.skull_stripping.hdbet_device,
-                "do_tta": config.step4_skull_stripping.skull_stripping.hdbet_do_tta,
-                "fill_value": config.step4_skull_stripping.skull_stripping.fill_value,
+    def _create_atlas_registrator(self, config: Any) -> Any:
+        """Create intra-study to atlas registrator."""
+        from mengrowth.preprocessing.src.registration.factory import create_intra_study_to_atlas
+        from mengrowth.preprocessing.src.registration.constants import DEFAULT_REGISTRATION_ENGINE
+
+        atlas_config = {
+            "atlas_path": config.intra_study_to_atlas.atlas_path,
+            "transforms": config.intra_study_to_atlas.transforms,
+            "create_composite_transforms": config.intra_study_to_atlas.create_composite_transforms,
+            "metric": config.intra_study_to_atlas.metric,
+            "metric_bins": config.intra_study_to_atlas.metric_bins,
+            "sampling_strategy": config.intra_study_to_atlas.sampling_strategy,
+            "sampling_percentage": config.intra_study_to_atlas.sampling_percentage,
+            "number_of_iterations": config.intra_study_to_atlas.number_of_iterations,
+            "shrink_factors": config.intra_study_to_atlas.shrink_factors,
+            "smoothing_sigmas": config.intra_study_to_atlas.smoothing_sigmas,
+            "convergence_threshold": config.intra_study_to_atlas.convergence_threshold,
+            "convergence_window_size": config.intra_study_to_atlas.convergence_window_size,
+            "interpolation": config.intra_study_to_atlas.interpolation,
+            "engine": config.intra_study_to_atlas.engine or DEFAULT_REGISTRATION_ENGINE,
+        }
+        return create_intra_study_to_atlas(
+            config=atlas_config,
+            reference_modality=self.selected_reference_modality,
+            verbose=self.verbose
+        )
+
+    def _create_skull_stripper(self, method: str, config: Any) -> Any:
+        """Create skull stripper instance."""
+        if method == "hdbet":
+            skull_strip_config = {
+                "mode": config.skull_stripping.hdbet_mode,
+                "device": config.skull_stripping.hdbet_device,
+                "do_tta": config.skull_stripping.hdbet_do_tta,
+                "fill_value": config.skull_stripping.fill_value,
             }
-            self.skull_stripper = HDBetSkullStripper(
-                config=skull_strip_config_dict,
-                verbose=verbose
-            )
-            self.logger.info(f"Initialized skull stripper: {skull_strip_method}")
-        elif skull_strip_method == "synthstrip":
-            skull_strip_config_dict = {
-                "border": config.step4_skull_stripping.skull_stripping.synthstrip_border,
-                "device": config.step4_skull_stripping.skull_stripping.synthstrip_device,
-                "fill_value": config.step4_skull_stripping.skull_stripping.fill_value,
+            return HDBetSkullStripper(config=skull_strip_config, verbose=self.verbose)
+        elif method == "synthstrip":
+            skull_strip_config = {
+                "border": config.skull_stripping.synthstrip_border,
+                "device": config.skull_stripping.synthstrip_device,
+                "fill_value": config.skull_stripping.fill_value,
             }
-            self.skull_stripper = SynthStripSkullStripper(
-                config=skull_strip_config_dict,
-                verbose=verbose
-            )
-            self.logger.info(f"Initialized skull stripper: {skull_strip_method}")
+            return SynthStripSkullStripper(config=skull_strip_config, verbose=self.verbose)
         else:
-            raise ValueError(
-                f"Unknown skull stripping method: {skull_strip_method}. "
-                f"Must be None, 'hdbet', or 'synthstrip'"
-            )
+            raise ValueError(f"Unknown skull stripping method: {method}")
 
     def _get_study_directories(self, patient_id: str) -> List[Path]:
         """Get list of study directories for a patient.
@@ -646,7 +645,7 @@ class PreprocessingOrchestrator:
             raise RuntimeError(f"Visualization failed: {e}") from e
 
     def run_patient(self, patient_id: str) -> None:
-        """Run preprocessing pipeline for a single patient.
+        """Run preprocessing pipeline for a single patient with dynamic step execution.
 
         Args:
             patient_id: Patient ID to process
@@ -657,21 +656,26 @@ class PreprocessingOrchestrator:
         """
         self.logger.info(f"{'='*80}")
         self.logger.info(f"Processing patient: {patient_id}")
-        self.logger.info(f"Mode: {self.config.mode}, Overwrite: {self.config.overwrite}")
         self.logger.info(f"{'='*80}")
 
         # Get study directories
         study_dirs = self._get_study_directories(patient_id)
 
+        # Log and save pipeline configuration
+        self._log_pipeline_order(patient_id)
+
         total_processed = 0
         total_skipped = 0
         total_errors = 0
+
+        # Categorize steps into per-modality and study-level
+        per_modality_steps, study_level_steps = self._categorize_steps()
 
         # Process each study
         for study_idx, study_dir in enumerate(study_dirs, 1):
             self.logger.info(f"\n[Study {study_idx}/{len(study_dirs)}] {study_dir.name}")
 
-            # Process each modality
+            # Execute per-modality steps
             for modality in self.config.modalities:
                 self.logger.info(f"  Processing modality: {modality}")
 
@@ -701,189 +705,14 @@ class PreprocessingOrchestrator:
                             total_skipped += 1
                             continue
 
-                    # Determine total steps (Step 0: convert + reorient + background, Step 1: bias field, Step 2: resampling)
-                    step0_substeps = 2 if self.background_remover is None else 3
-                    total_steps = step0_substeps + (1 if self.bias_corrector is not None else 0) + (1 if self.resampler is not None else 0)
-
-                    # Step 0.1: NRRD -> NIfTI
-                    self.logger.info(f"    [1/{total_steps}] Converting NRRD to NIfTI...")
-                    self.converter.execute(
-                        input_file,
-                        paths["nifti"],
-                        allow_overwrite=self.config.overwrite
+                    # Execute per-modality steps dynamically
+                    self._execute_per_modality_steps(
+                        patient_id=patient_id,
+                        study_dir=study_dir,
+                        modality=modality,
+                        paths=paths,
+                        steps=per_modality_steps
                     )
-
-                    if self.config.step0_data_harmonization.save_visualization:
-                        self.converter.visualize(
-                            input_file,
-                            paths["nifti"],
-                            paths["viz_convert"]
-                        )
-
-                    # Step 0.2: Reorient (in-place)
-                    self.logger.info(
-                        f"    [2/{total_steps}] Reorienting to {self.config.step0_data_harmonization.reorient_to}..."
-                    )
-                    # Create temp path for reorientation
-                    temp_reoriented = paths["reoriented"].parent / f"_temp_{modality}_reoriented.nii.gz"
-
-                    self.reorienter.execute(
-                        paths["nifti"],
-                        temp_reoriented,
-                        allow_overwrite=True
-                    )
-
-                    if self.config.step0_data_harmonization.save_visualization:
-                        self.reorienter.visualize(
-                            paths["nifti"],
-                            temp_reoriented,
-                            paths["viz_reorient"]
-                        )
-
-                    # Replace original with reoriented
-                    temp_reoriented.replace(paths["nifti"])
-
-                    # Step 0.3: Background removal (in-place) - only if enabled
-                    if self.background_remover is not None:
-                        self.logger.info(f"    [3/{total_steps}] Removing background...")
-                        temp_masked = paths["masked"].parent / f"_temp_{modality}_masked.nii.gz"
-
-                        self.background_remover.execute(
-                            paths["nifti"],
-                            temp_masked,
-                            allow_overwrite=True
-                        )
-
-                        if self.config.step0_data_harmonization.save_visualization:
-                            self.background_remover.visualize(
-                                paths["nifti"],
-                                temp_masked,
-                                paths["viz_background"]
-                            )
-
-                        # Replace with masked version
-                        temp_masked.replace(paths["nifti"])
-                    else:
-                        self.logger.info("    [Background removal skipped - method is None]")
-
-                    # Step 1: Bias field correction (in-place) - only if enabled
-                    if self.bias_corrector is not None:
-                        step_num = step0_substeps + 1
-                        self.logger.info(f"    [{step_num}/{total_steps}] Applying N4 bias field correction...")
-                        temp_corrected = paths["bias_corrected"].parent / f"_temp_{modality}_bias_corrected.nii.gz"
-
-                        # Determine where to save bias field artifact
-                        if self.config.step1_bias_field_correction.save_artifact:
-                            bias_field_path = paths["bias_field"]
-                            self.logger.debug(f"    Saving bias field artifact to: {bias_field_path}")
-                        else:
-                            # Use temporary file that will be deleted
-                            import tempfile
-                            temp_dir = Path(tempfile.gettempdir())
-                            bias_field_path = temp_dir / f"_temp_{modality}_bias_field.nii.gz"
-                            self.logger.debug("    Bias field artifact will not be saved (save_artifact=False)")
-
-                        # Execute bias correction and get results
-                        result = self.bias_corrector.execute(
-                            paths["nifti"],
-                            temp_corrected,
-                            allow_overwrite=True,
-                            bias_field_output_path=bias_field_path
-                        )
-
-                        if self.config.step1_bias_field_correction.save_visualization:
-                            self.bias_corrector.visualize(
-                                paths["nifti"],
-                                temp_corrected,
-                                paths["viz_bias_field"],
-                                bias_field_path=result["bias_field_path"],
-                                convergence_data=result["convergence_data"]
-                            )
-
-                        # Replace with bias-corrected version
-                        temp_corrected.replace(paths["nifti"])
-
-                        # Clean up temporary bias field if not saving
-                        if not self.config.step1_bias_field_correction.save_artifact:
-                            if result["bias_field_path"].exists():
-                                result["bias_field_path"].unlink()
-                                self.logger.debug("    Temporary bias field artifact deleted")
-                    else:
-                        self.logger.info("    [Bias field correction skipped - method is None]")
-
-                    # Step 2a: Normalization (before resampling) - only if enabled
-                    norm_result = None
-                    temp_normalized = None
-                    if self.normalizer is not None:
-                        step_num = total_steps - 1 if self.resampler is not None else total_steps
-                        self.logger.info(f"    [{step_num}/{total_steps}] Applying intensity normalization...")
-                        temp_normalized = paths["resampled"].parent / f"_temp_{modality}_normalized.nii.gz"
-
-                        # Execute normalization and get results
-                        norm_result = self.normalizer.execute(
-                            paths["nifti"],
-                            temp_normalized,
-                            allow_overwrite=True
-                        )
-
-                        # Note: Visualization will be done after resampling (if both are enabled)
-                        # to show original → normalized → resampled in one figure
-
-                    # Step 2b: Resampling (in-place) - only if enabled
-                    if self.resampler is not None:
-                        step_num = total_steps
-                        self.logger.info(f"    [{step_num}/{total_steps}] Resampling to isotropic resolution...")
-                        temp_resampled = paths["resampled"].parent / f"_temp_{modality}_resampled.nii.gz"
-
-                        # Use normalized image if normalization was applied, otherwise use original
-                        input_for_resampling = temp_normalized if temp_normalized is not None else paths["nifti"]
-
-                        # Execute resampling and get results
-                        resample_result = self.resampler.execute(
-                            input_for_resampling,
-                            temp_resampled,
-                            allow_overwrite=True
-                        )
-
-                        # Generate visualization
-                        if self.config.step2_resampling.save_visualization:
-                            if self.normalizer is not None:
-                                # Combined visualization: original → normalized → resampled
-                                self._visualize_normalization_and_resampling(
-                                    original_path=paths["nifti"],
-                                    normalized_path=temp_normalized,
-                                    resampled_path=temp_resampled,
-                                    output_path=paths["viz_resampling"],
-                                    norm_result=norm_result,
-                                    resample_result=resample_result
-                                )
-                            else:
-                                # Standard visualization: original → resampled (with histogram)
-                                self.resampler.visualize(
-                                    paths["nifti"],
-                                    temp_resampled,
-                                    paths["viz_resampling"],
-                                    original_spacing=resample_result["original_spacing"],
-                                    target_spacing=resample_result["target_spacing"],
-                                    original_shape=resample_result["original_shape"],
-                                    resampled_shape=resample_result["resampled_shape"]
-                                )
-
-                        # Replace with resampled version
-                        temp_resampled.replace(paths["nifti"])
-
-                        # Clean up temporary normalized file if it exists
-                        if temp_normalized is not None and temp_normalized.exists():
-                            temp_normalized.unlink()
-                            self.logger.debug("    Temporary normalized file deleted")
-                    else:
-                        if self.normalizer is not None:
-                            # Only normalization, no resampling
-                            # Replace with normalized version
-                            temp_normalized.replace(paths["nifti"])
-                            self.logger.info("    [Resampling skipped - method is None]")
-                        else:
-                            self.logger.info("    [Normalization and resampling skipped - methods are None]")
 
                     self.logger.info(f"    Successfully processed {modality}")
                     total_processed += 1
@@ -896,219 +725,12 @@ class PreprocessingOrchestrator:
                     total_errors += 1
                     # Continue with next modality
 
-            # Step 3a: Intra-study multi-modal coregistration to reference
-            intra_study_transforms = {}  # Store transforms for step 3b
-            if self.intra_study_to_ref_registrator is not None:
-                self.logger.info(f"\n  [Step 3a] Intra-study multi-modal coregistration to reference")
-                try:
-                    # Determine study output directory based on mode
-                    if self.config.mode == "test":
-                        study_output_dir = Path(self.config.output_root) / patient_id / study_dir.name
-                        artifacts_base = Path(self.config.preprocessing_artifacts_path) / patient_id / study_dir.name
-                        viz_base = Path(self.config.viz_root) / patient_id / study_dir.name
-                    else:
-                        study_output_dir = study_dir
-                        artifacts_base = Path(self.config.preprocessing_artifacts_path) / patient_id / study_dir.name
-                        viz_base = Path(self.config.viz_root) / patient_id / study_dir.name
-
-                    # Execute intra-study to reference registration
-                    reg_result = self.intra_study_to_ref_registrator.execute(
-                        study_dir=study_output_dir,
-                        artifacts_dir=artifacts_base,
-                        modalities=self.config.modalities
-                    )
-
-                    # Store selected reference modality and transforms for step 3b
-                    self.selected_reference_modality = reg_result["reference_modality"]
-                    intra_study_transforms = reg_result["transforms"]
-                    self.logger.info(f"  Reference modality: {self.selected_reference_modality}")
-
-                    # Generate visualizations if enabled
-                    if self.config.step3_registration.save_visualization:
-                        reference_path = study_output_dir / f"{self.selected_reference_modality}.nii.gz"
-
-                        for modality in reg_result["registered_modalities"]:
-                            # Note: The file has already been replaced with registered version
-                            moving_path = study_output_dir / f"{modality}.nii.gz"  # Now contains registered version
-                            registered_path = moving_path  # Same (already replaced)
-                            transform_path = reg_result["transforms"].get(modality)
-
-                            viz_output = viz_base / f"step3a_intra_study_to_ref_{modality}_to_{self.selected_reference_modality}.png"
-
-                            try:
-                                self.intra_study_to_ref_registrator.visualize(
-                                    reference_path=reference_path,
-                                    moving_path=moving_path,  # Actually the registered version
-                                    registered_path=registered_path,
-                                    output_path=viz_output,
-                                    modality=modality,
-                                    transform_path=transform_path
-                                )
-                            except Exception as viz_error:
-                                self.logger.warning(f"  Failed to generate visualization for {modality}: {viz_error}")
-
-                    self.logger.info(
-                        f"  Successfully registered {len(reg_result['registered_modalities'])} modalities to reference"
-                    )
-
-                except Exception as e:
-                    self.logger.error(f"  [Error] Intra-study to reference registration failed: {e}")
-                    total_errors += 1
-                    # Continue with next study
-            else:
-                self.logger.info("  [Step 3a: Intra-study to reference registration skipped - method is None]")
-
-            # Step 3b: Intra-study to atlas registration (register reference to atlas, propagate transforms)
-            if self.intra_study_to_atlas_config is not None and self.selected_reference_modality is not None:
-                self.logger.info(f"\n  [Step 3b] Intra-study to atlas registration")
-                try:
-                    # Initialize atlas registrator with reference modality from step 3a
-                    from mengrowth.preprocessing.src.registration.factory import create_intra_study_to_atlas
-
-                    atlas_registrator = create_intra_study_to_atlas(
-                        config=self.intra_study_to_atlas_config,
-                        reference_modality=self.selected_reference_modality,
-                        verbose=self.verbose
-                    )
-
-                    # Determine study output directory based on mode
-                    if self.config.mode == "test":
-                        study_output_dir = Path(self.config.output_root) / patient_id / study_dir.name
-                        artifacts_base = Path(self.config.preprocessing_artifacts_path) / patient_id / study_dir.name
-                        viz_base = Path(self.config.viz_root) / patient_id / study_dir.name
-                    else:
-                        study_output_dir = study_dir
-                        artifacts_base = Path(self.config.preprocessing_artifacts_path) / patient_id / study_dir.name
-                        viz_base = Path(self.config.viz_root) / patient_id / study_dir.name
-
-                    # Execute atlas registration
-                    atlas_result = atlas_registrator.execute(
-                        study_dir=study_output_dir,
-                        artifacts_dir=artifacts_base,
-                        modalities=self.config.modalities,
-                        intra_study_transforms=intra_study_transforms
-                    )
-
-                    self.logger.info(f"  Reference registered to atlas: {atlas_result['atlas_path']}")
-
-                    # Generate visualizations if enabled
-                    if self.config.step3_registration.save_visualization:
-                        atlas_path = Path(self.intra_study_to_atlas_config["atlas_path"])
-                        reference_path = study_output_dir / f"{self.selected_reference_modality}.nii.gz"
-
-                        # Visualize reference to atlas alignment
-                        viz_output_ref = viz_base / f"step3b_atlas_registration_reference_{self.selected_reference_modality}.png"
-                        try:
-                            atlas_registrator.visualize_reference_to_atlas(
-                                atlas_path=atlas_path,
-                                reference_path=reference_path,
-                                output_path=viz_output_ref,
-                                ref_to_atlas_transform=atlas_result["ref_to_atlas_transform"]
-                            )
-                        except Exception as viz_error:
-                            self.logger.warning(f"  Failed to generate reference→atlas visualization: {viz_error}")
-
-                        # Visualize each modality in atlas space
-                        for modality in atlas_result["registered_modalities"]:
-                            modality_path = study_output_dir / f"{modality}.nii.gz"
-                            viz_output = viz_base / f"step3b_atlas_space_{modality}.png"
-
-                            try:
-                                atlas_registrator.visualize_modality_in_atlas_space(
-                                    atlas_path=atlas_path,
-                                    modality_path=modality_path,
-                                    output_path=viz_output,
-                                    modality=modality
-                                )
-                            except Exception as viz_error:
-                                self.logger.warning(f"  Failed to generate atlas space visualization for {modality}: {viz_error}")
-
-                    self.logger.info(
-                        f"  Successfully registered {len(atlas_result['registered_modalities'])} modalities to atlas space"
-                    )
-
-                except Exception as e:
-                    self.logger.error(f"  [Error] Intra-study to atlas registration failed: {e}")
-                    total_errors += 1
-                    # Continue with next study
-            elif self.intra_study_to_atlas_config is not None and self.selected_reference_modality is None:
-                self.logger.warning("  [Step 3b: Atlas registration skipped - no reference modality available from step 3a]")
-            else:
-                self.logger.info("  [Step 3b: Intra-study to atlas registration skipped - method is None]")
-
-            # Step 4: Skull stripping (brain extraction)
-            if self.skull_stripper is not None:
-                self.logger.info(f"\n  [Step 4] Skull stripping (brain extraction)")
-                try:
-                    # Determine output directories based on mode
-                    if self.config.mode == "test":
-                        study_output_dir = Path(self.config.output_root) / patient_id / study_dir.name
-                        artifacts_base = Path(self.config.preprocessing_artifacts_path) / patient_id / study_dir.name
-                        viz_base = Path(self.config.viz_root) / patient_id / study_dir.name
-                    else:
-                        study_output_dir = study_dir
-                        artifacts_base = Path(self.config.preprocessing_artifacts_path) / patient_id / study_dir.name
-                        viz_base = Path(self.config.viz_root) / patient_id / study_dir.name
-
-                    # Process each modality
-                    for modality in self.config.modalities:
-                        modality_path = study_output_dir / f"{modality}.nii.gz"
-
-                        # Skip if file doesn't exist
-                        if not modality_path.exists():
-                            self.logger.warning(f"  Skipping {modality} - file not found")
-                            continue
-
-                        self.logger.info(f"  Processing {modality}...")
-
-                        # Create temporary output path
-                        temp_skull_stripped = modality_path.parent / f"_temp_{modality}_skull_stripped.nii.gz"
-
-                        # Determine mask path
-                        if self.config.step4_skull_stripping.save_mask:
-                            mask_path = artifacts_base / f"{modality}_brain_mask.nii.gz"
-                        else:
-                            import tempfile
-                            temp_dir = Path(tempfile.gettempdir())
-                            mask_path = temp_dir / f"_temp_{modality}_brain_mask.nii.gz"
-
-                        # Execute skull stripping
-                        result = self.skull_stripper.execute(
-                            modality_path,
-                            temp_skull_stripped,
-                            mask_path=mask_path,
-                            allow_overwrite=True
-                        )
-
-                        # Generate visualization if enabled
-                        if self.config.step4_skull_stripping.save_visualization:
-                            viz_output = viz_base / f"step4_skull_stripping_{modality}.png"
-                            self.skull_stripper.visualize(
-                                modality_path,
-                                temp_skull_stripped,
-                                viz_output,
-                                **result
-                            )
-
-                        # Replace original with skull-stripped version (in-place)
-                        temp_skull_stripped.replace(modality_path)
-
-                        # Clean up temporary mask if not saving
-                        if not self.config.step4_skull_stripping.save_mask and mask_path.exists():
-                            mask_path.unlink()
-
-                        self.logger.info(
-                            f"  {modality}: brain_volume={result['brain_volume_mm3']:.1f} mm³, "
-                            f"coverage={result['brain_coverage_percent']:.1f}%"
-                        )
-
-                    self.logger.info(f"  Step 4 completed successfully")
-
-                except Exception as e:
-                    self.logger.error(f"  [Error] Skull stripping failed: {e}")
-                    total_errors += 1
-            else:
-                self.logger.info("  [Step 4: Skull stripping skipped - method is None]")
+            # Execute study-level steps dynamically
+            self._execute_study_level_steps(
+                patient_id=patient_id,
+                study_dir=study_dir,
+                steps=study_level_steps
+            )
 
         # Summary
         self.logger.info(f"\n{'='*80}")
@@ -1118,12 +740,180 @@ class PreprocessingOrchestrator:
         self.logger.info(f"  Errors:    {total_errors}")
         self.logger.info(f"{'='*80}\n")
 
+    def _log_pipeline_order(self, patient_id: str) -> None:
+        """Log pipeline configuration to console and JSON file."""
+        from mengrowth.preprocessing.src.utils.pipeline_logger import PipelineOrderRecord
 
-def run_preprocessing(config: PreprocessingPipelineConfig, patient_id: Optional[str] = None) -> None:
+        # Console logging
+        self.logger.info("="*80)
+        self.logger.info("PIPELINE CONFIGURATION")
+        self.logger.info("="*80)
+        self.logger.info(f"Mode: {self.config.mode}, Overwrite: {self.config.overwrite}")
+        self.logger.info(f"Step Order ({len(self.config.steps)} steps):")
+        for i, step_name in enumerate(self.config.steps, 1):
+            # Find matching config pattern
+            pattern = None
+            for p in self.config.step_configs.keys():
+                if p in step_name:
+                    pattern = p
+                    break
+            self.logger.info(f"  {i}. {step_name} (config: {pattern})")
+
+        self.logger.info(f"Modalities: {', '.join(self.config.modalities)}")
+        self.logger.info("="*80)
+
+        # JSON logging
+        from pathlib import Path
+        artifacts_path = Path(self.config.preprocessing_artifacts_path)
+        json_path = artifacts_path / patient_id / "pipeline_order.json"
+
+        record = PipelineOrderRecord.from_config(patient_id, self.config)
+        record.save(json_path)
+
+    def _categorize_steps(self) -> Tuple[List[str], List[str]]:
+        """Categorize steps into per-modality and study-level using STEP_METADATA.
+
+        Returns:
+            Tuple of (per_modality_steps, study_level_steps)
+        """
+        per_modality_steps = []
+        study_level_steps = []
+
+        for step_name in self.config.steps:
+            # Find matching pattern in STEP_METADATA
+            step_level = "modality"  # Default
+            for pattern, metadata in STEP_METADATA.items():
+                if pattern in step_name:
+                    step_level = metadata.level
+                    break
+            
+            if step_level == "study":
+                study_level_steps.append(step_name)
+            else:
+                per_modality_steps.append(step_name)
+
+        return per_modality_steps, study_level_steps
+
+    def _execute_per_modality_steps(
+        self,
+        patient_id: str,
+        study_dir: Path,
+        modality: str,
+        paths: Dict[str, Path],
+        steps: List[str]
+    ) -> None:
+        """Execute per-modality steps in order.
+
+        Args:
+            patient_id: Patient ID
+            study_dir: Study directory
+            modality: Modality being processed
+            paths: Output paths dict
+            steps: List of step names to execute
+        """
+        total_steps = len(steps)
+
+        for step_num, step_name in enumerate(steps, 1):
+            # Get step config
+            step_config = self._get_step_config(step_name)
+
+            # Create execution context
+            context = StepExecutionContext(
+                patient_id=patient_id,
+                study_dir=study_dir,
+                modality=modality,
+                paths=paths,
+                orchestrator=self,
+                step_name=step_name,
+                step_config=step_config
+            )
+
+            # Get handler function
+            pattern, handler_func = self.step_registry.get_handler(step_name)
+
+            # Execute step
+            try:
+                result = handler_func(context, total_steps, step_num)
+                # Store result for potential use by downstream steps
+                self._step_results[step_name] = result
+            except Exception as e:
+                self.logger.error(f"    Step '{step_name}' failed: {e}")
+                raise RuntimeError(f"Step '{step_name}' failed") from e
+
+    def _execute_study_level_steps(
+        self,
+        patient_id: str,
+        study_dir: Path,
+        steps: List[str]
+    ) -> None:
+        """Execute study-level steps (registration, skull stripping).
+
+        Args:
+            patient_id: Patient ID
+            study_dir: Study directory
+            steps: List of study-level step names
+        """
+        for step_name in steps:
+            # Get step config
+            step_config = self._get_step_config(step_name)
+
+            # Create context (no specific modality)
+            context = StepExecutionContext(
+                patient_id=patient_id,
+                study_dir=study_dir,
+                modality=None,  # N/A for study-level
+                paths=None,     # Will be computed per-modality internally
+                orchestrator=self,
+                step_name=step_name,
+                step_config=step_config
+            )
+
+            # Get handler and execute
+            pattern, handler_func = self.step_registry.get_handler(step_name)
+            try:
+                result = handler_func(context, total_steps=0, current_step_num=0)
+                self._step_results[step_name] = result
+            except Exception as e:
+                self.logger.error(f"  Study-level step '{step_name}' failed: {e}")
+                # Continue anyway - don't halt for study-level failures
+
+    def _get_step_config(
+        self, 
+        step_name: str
+    ) -> Union[
+        DataHarmonizationStepConfig,
+        BiasFieldCorrectionStepConfig,
+        ResamplingStepConfig,
+        RegistrationStepConfig,
+        SkullStrippingStepConfig,
+        IntensityNormalizationStepConfig,
+    ]:
+        """Get configuration for a step name using substring matching.
+
+        Args:
+            step_name: Full step name (e.g., "intensity_normalization_2")
+
+        Returns:
+            Typed configuration object for the step
+
+        Raises:
+            ValueError: If no matching config found
+        """
+        for pattern, config in self.config.step_configs.items():
+            if pattern in step_name:
+                return config
+
+        raise ValueError(
+            f"No configuration found for step '{step_name}'. "
+            f"Available patterns: {list(self.config.step_configs.keys())}"
+        )
+
+
+def run_preprocessing(config: PipelineExecutionConfig, patient_id: Optional[str] = None) -> None:
     """Run preprocessing pipeline on selected patients.
 
     Args:
-        config: Preprocessing pipeline configuration
+        config: Pipeline execution configuration (returned by loader)
         patient_id: Specific patient to process (overrides config.patient_selector)
 
     Raises:
@@ -1131,29 +921,26 @@ def run_preprocessing(config: PreprocessingPipelineConfig, patient_id: Optional[
         FileNotFoundError: If patient directory not found
         RuntimeError: If processing fails
     """
-    # Extract data harmonization config
-    dh_config = config.data_harmonization
-
-    if not dh_config.enabled:
-        logger.info("Data harmonization is disabled in config - exiting")
+    if not config.enabled:
+        logger.info("Pipeline is disabled in config - exiting")
         return
 
     # Override patient_id if provided
     if patient_id is not None:
-        dh_config.patient_id = patient_id
-        dh_config.patient_selector = "single"
+        config.patient_id = patient_id
+        config.patient_selector = "single"
         logger.info(f"Overriding config: processing single patient {patient_id}")
 
     # Initialize orchestrator
-    orchestrator = PreprocessingOrchestrator(dh_config, verbose=True)
+    orchestrator = PreprocessingOrchestrator(config, verbose=True)
 
     # Process patients
-    if dh_config.patient_selector == "single":
-        orchestrator.run_patient(dh_config.patient_id)
+    if config.patient_selector == "single":
+        orchestrator.run_patient(config.patient_id)
 
-    elif dh_config.patient_selector == "all":
+    elif config.patient_selector == "all":
         # Get all patient directories
-        dataset_root = Path(dh_config.dataset_root)
+        dataset_root = Path(config.dataset_root)
         patient_dirs = sorted([d for d in dataset_root.iterdir() if d.is_dir() and d.name.startswith("MenGrowth-")])
 
         logger.info(f"Processing all patients: {len(patient_dirs)} found")
@@ -1175,5 +962,5 @@ def run_preprocessing(config: PreprocessingPipelineConfig, patient_id: Optional[
 
     else:
         raise ValueError(
-            f"Invalid patient_selector: {dh_config.patient_selector}. Must be 'single' or 'all'"
+            f"Invalid patient_selector: {config.patient_selector}. Must be 'single' or 'all'"
         )

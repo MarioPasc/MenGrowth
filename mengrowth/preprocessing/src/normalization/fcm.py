@@ -16,7 +16,6 @@ import logging
 
 import nibabel as nib
 import numpy as np
-from scipy import stats
 
 from intensity_normalization.normalizers.individual.fcm import FCMNormalizer as FCMNormalize
 from intensity_normalization.domain.models import TissueType
@@ -164,7 +163,19 @@ class FCMNormalizer(BaseNormalizer):
             # Load NIfTI with nibabel
             self.logger.debug(f"Loading image: {input_path}")
             input_img = nib.load(str(input_path))
-            input_data = input_img.get_fdata()
+
+            # Compatibility fix for nibabel >= 5.0 and intensity-normalization
+            # intensity-normalization calls get_data(), which raises ExpiredDeprecationError in nibabel 5.0+
+            # We monkeypatch the instance to use get_fdata() instead
+            try:
+                input_img.get_data = input_img.get_fdata
+            except Exception:
+                pass
+
+            if type(input_img) is not np.ndarray:
+                input_data = input_img.get_fdata()
+            else:
+                input_data = input_img
 
             # Store original range
             original_range = [float(input_data.min()), float(input_data.max())]
@@ -180,7 +191,23 @@ class FCMNormalizer(BaseNormalizer):
             )
             modality = infer_modality_from_filename(input_path)
             self.logger.info(f"Inferred modality: {modality}, input: {input_path}")
-            normalized_data = normalizer(input_data, modality=modality)
+            
+            # Pass nibabel image to normalizer
+            normalized_result = normalizer(input_path)
+            
+            self.logger.info(type(normalized_result))
+            
+            # Extract data from result
+            if hasattr(normalized_result, 'get_fdata'):
+                normalized_data = normalized_result.get_fdata()
+            elif isinstance(normalized_result, np.ndarray):
+                normalized_data = normalized_result
+            else:
+                # Fallback
+                try:
+                    normalized_data = normalized_result.get_data()
+                except Exception:
+                    normalized_data = np.asanyarray(normalized_result.dataobj)
 
             # Store normalized range
             normalized_range = [float(normalized_data.min()), float(normalized_data.max())]
@@ -263,10 +290,18 @@ class FCMNormalizer(BaseNormalizer):
         try:
             # Load images
             before_img = nib.load(str(before_path))
-            before_data = before_img.get_fdata()
-
             after_img = nib.load(str(after_path))
-            after_data = after_img.get_fdata()
+            
+
+            if type(before_data) is not np.ndarray:
+                before_data = before_img.get_fdata()
+            else:
+                before_data = before_img
+            
+            if type(after_data) is not np.ndarray:
+                after_data = after_img.get_fdata()
+            else:
+                after_data = after_img
 
             # Get middle slices for each view
             # Axial (XY plane, slice along Z)

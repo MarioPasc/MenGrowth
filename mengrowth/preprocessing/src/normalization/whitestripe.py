@@ -128,11 +128,12 @@ class WhiteStripeNormalizer(BaseNormalizer):
             normalizer = WSNormalize(
                 width=self.width,
                 width_l=self.width_l,
-                width_u=self.width_u
+                width_u=self.width_u,
+                modality=modality
             )
             modality = infer_modality_from_filename(input_path)
             self.logger.info(f"Inferred modality: {modality}, input: {input_path}")
-            normalized_data = normalizer(input_data, modality=modality)
+            normalized_data = normalizer(input_data)
 
             # Store normalized range
             normalized_range = [float(normalized_data.min()), float(normalized_data.max())]

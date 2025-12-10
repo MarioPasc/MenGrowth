@@ -1,0 +1,93 @@
+"""Bias field correction step using N4 algorithm.
+
+Removes intensity non-uniformity artifacts from MRI images.
+"""
+
+from typing import Dict, Any
+from pathlib import Path
+import tempfile
+import logging
+from mengrowth.preprocessing.src.config import StepExecutionContext
+from mengrowth.preprocessing.src.steps.utils import (
+    get_artifact_path,
+    get_temp_path,
+    log_step_start,
+)
+
+logger = logging.getLogger(__name__)
+
+
+def execute(
+    context: StepExecutionContext,
+    total_steps: int,
+    current_step_num: int
+) -> Dict[str, Any]:
+    """Execute bias field correction step.
+
+    Args:
+        context: Execution context with patient, study, modality info
+        total_steps: Total number of per-modality steps in pipeline
+        current_step_num: Current step number (1-indexed for logging)
+
+    Returns:
+        Dict with bias field path and convergence data
+
+    Raises:
+        RuntimeError: If bias correction fails
+    """
+    config = context.step_config
+    orchestrator = context.orchestrator
+    paths = context.paths
+    modality = context.modality
+
+    # Check if bias correction is enabled
+    method = config.bias_field_correction.method
+    if method is None:
+        logger.info(f"    [{current_step_num}/{total_steps}] Bias field correction skipped (method=None)")
+        return {}
+
+    log_step_start(logger, current_step_num, total_steps, context.step_name, method)
+
+    # Get or create bias corrector component
+    bias_corrector = orchestrator._get_component(f"bias_corrector_{method}_{context.step_name}", config)
+
+    # Create temp file for corrected output
+    temp_corrected = get_temp_path(context, modality, "bias_corrected")
+
+    # Determine where to save bias field artifact
+    if config.save_artifact:
+        bias_field_path = paths["bias_field"]
+        logger.debug(f"    Saving bias field artifact to: {bias_field_path}")
+    else:
+        # Use temporary file that will be deleted
+        bias_field_path = get_temp_path(context, modality, "bias_field")
+        logger.debug("    Bias field artifact will not be saved (save_artifact=False)")
+
+    # Execute bias correction
+    result = bias_corrector.execute(
+        paths["nifti"],
+        temp_corrected,
+        allow_overwrite=True,
+        bias_field_output_path=bias_field_path
+    )
+
+    # Visualization if enabled
+    if config.save_visualization:
+        bias_corrector.visualize(
+            paths["nifti"],
+            temp_corrected,
+            paths["viz_bias_field"],
+            bias_field_path=result["bias_field_path"],
+            convergence_data=result["convergence_data"]
+        )
+
+    # Replace original with bias-corrected version (in-place processing)
+    temp_corrected.replace(paths["nifti"])
+
+    # Clean up temporary bias field if not saving
+    if not config.save_artifact:
+        if result["bias_field_path"].exists():
+            result["bias_field_path"].unlink()
+            logger.debug("    Temporary bias field artifact deleted")
+
+    return result
