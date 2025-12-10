@@ -164,7 +164,7 @@ preprocessing:
 
         # Metric: cross-correlation works well across T1/T2/FLAIR
         metric: "CC"                     # CC ignores metric_bins internally
-        metric_bins: 32                  # kept for compatibility
+        metric_bins: 4                  # kept for compatibility
         sampling_strategy: "Regular"     # more stable than Random for partial FOV
         sampling_percentage: 0.4         # higher fraction for anisotropic T2/T2F
 
