@@ -181,27 +181,34 @@ class MultiModalCoregistration(BaseRegistrator):
         reg.inputs.fixed_image = str(fixed_path)
         reg.inputs.moving_image = str(moving_path)
 
-        # Transform configuration
-        transform_type = self.config.get("transform_type", "Rigid")
-        reg.inputs.transforms = [transform_type]
+        # Transform configuration (can be string or list)
+        transform_type_config = self.config.get("transform_type", "Rigid")
+
+        # Normalize to list for uniform handling
+        if isinstance(transform_type_config, str):
+            transforms = [transform_type_config]
+        else:
+            transforms = transform_type_config
+
+        reg.inputs.transforms = transforms
 
         # Transform parameters (gradient step for optimization)
-        # For Rigid: [gradient_step]
-        # Typical value is 0.1 for rigid registration
-        reg.inputs.transform_parameters = [(0.1,)]
+        # One parameter tuple per transform
+        # For Rigid/Affine: [gradient_step], typical value is 0.1
+        reg.inputs.transform_parameters = [(0.1,)] * len(transforms)
 
-        # Metric configuration
+        # Metric configuration (one per transform)
         metric = self.config.get("metric", "Mattes")
         metric_bins = self.config.get("metric_bins", 32)
-        reg.inputs.metric = [metric]
-        reg.inputs.metric_weight = [1.0]
-        reg.inputs.radius_or_number_of_bins = [metric_bins]
+        reg.inputs.metric = [metric] * len(transforms)
+        reg.inputs.metric_weight = [1.0] * len(transforms)
+        reg.inputs.radius_or_number_of_bins = [metric_bins] * len(transforms)
 
-        # Sampling strategy
+        # Sampling strategy (one per transform)
         sampling_strategy = self.config.get("sampling_strategy", "Random")
         sampling_percentage = self.config.get("sampling_percentage", 0.2)
-        reg.inputs.sampling_strategy = [sampling_strategy]
-        reg.inputs.sampling_percentage = [sampling_percentage]
+        reg.inputs.sampling_strategy = [sampling_strategy] * len(transforms)
+        reg.inputs.sampling_percentage = [sampling_percentage] * len(transforms)
 
         # Multi-resolution schedule
         number_of_iterations = self.config.get("number_of_iterations", [[1000, 500, 250]])
@@ -213,13 +220,11 @@ class MultiModalCoregistration(BaseRegistrator):
         reg.inputs.smoothing_sigmas = smoothing_sigmas
         reg.inputs.sigma_units = ["vox"]
 
-        # Convergence
-        reg.inputs.convergence_threshold = [
-            self.config.get("convergence_threshold", 1e-6)
-        ]
-        reg.inputs.convergence_window_size = [
-            self.config.get("convergence_window_size", 10)
-        ]
+        # Convergence (one per transform)
+        convergence_threshold = self.config.get("convergence_threshold", 1e-6)
+        convergence_window_size = self.config.get("convergence_window_size", 10)
+        reg.inputs.convergence_threshold = [convergence_threshold] * len(transforms)
+        reg.inputs.convergence_window_size = [convergence_window_size] * len(transforms)
 
         # Output configuration
         write_composite = self.config.get("write_composite_transform", True)

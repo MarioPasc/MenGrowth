@@ -197,24 +197,64 @@ class AntsPyXMultiModalCoregistration(BaseRegistrator):
             fixed_img = ants.image_read(str(fixed_path))
             moving_img = ants.image_read(str(moving_path))
 
-            # Map configuration parameters
-            transform_type = self.config.get("transform_type", "Rigid")
+            # Get transform types from config (can be string or list)
+            transform_type_config = self.config.get("transform_type", "Rigid")
+
+            # Normalize to list for uniform handling
+            if isinstance(transform_type_config, str):
+                transforms = [transform_type_config]
+            else:
+                transforms = transform_type_config
+
+            # Map to AntsPyX type_of_transform
+            # For ["Rigid", "Affine"], use "Affine" (includes rigid initialization)
+            # For more complex cases, may need sequential calls
+            if transforms == ["Rigid"]:
+                type_of_transform = "Rigid"
+            elif transforms == ["Rigid", "Affine"] or transforms == ["Affine"]:
+                type_of_transform = "Affine"  # Includes rigid
+            elif "SyN" in transforms:
+                type_of_transform = "SyN"  # Includes affine and rigid
+            else:
+                # Default to the last transform type
+                type_of_transform = transforms[-1] if transforms else "Rigid"
+
+            # Extract parameters
             metric = self.config.get("metric", "Mattes").lower()
             metric_bins = self.config.get("metric_bins", 32)
             sampling_percentage = self.config.get("sampling_percentage", 0.2)
 
-            # Extract multi-resolution parameters (first element since single transform)
-            number_of_iterations = self.config.get("number_of_iterations", [[1000, 500, 250]])[0]
-            shrink_factors = self.config.get("shrink_factors", [[4, 2, 1]])[0]
-            smoothing_sigmas = self.config.get("smoothing_sigmas", [[2, 1, 0]])[0]
+            # Multi-resolution parameters
+            number_of_iterations_list = self.config.get(
+                "number_of_iterations",
+                [[1000, 500, 250]]
+            )
+            shrink_factors_list = self.config.get(
+                "shrink_factors",
+                [[4, 2, 1]]
+            )
+            smoothing_sigmas_list = self.config.get(
+                "smoothing_sigmas",
+                [[2, 1, 0]]
+            )
 
-            # Transform type mapping
-            type_map = {
-                "Rigid": "Rigid",
-                "Affine": "Affine",
-                "SyN": "SyN"
-            }
-            ants_transform_type = type_map.get(transform_type, "Rigid")
+            # For multi-stage, use parameters from the final stage
+            # AntsPyX handles multi-resolution internally for composite transforms
+            if len(number_of_iterations_list) > 0:
+                # For Affine (which includes Rigid), use the affine parameters
+                # Typically the second set of parameters if available
+                if len(number_of_iterations_list) > 1 and type_of_transform in ["Affine", "SyN"]:
+                    aff_iterations = tuple(number_of_iterations_list[-1])
+                    aff_shrink_factors = tuple(shrink_factors_list[-1])
+                    aff_smoothing_sigmas = tuple(smoothing_sigmas_list[-1])
+                else:
+                    aff_iterations = tuple(number_of_iterations_list[0])
+                    aff_shrink_factors = tuple(shrink_factors_list[0])
+                    aff_smoothing_sigmas = tuple(smoothing_sigmas_list[0])
+            else:
+                aff_iterations = (1000, 500, 250)
+                aff_shrink_factors = (4, 2, 1)
+                aff_smoothing_sigmas = (2, 1, 0)
 
             # Construct output prefix (without extension)
             # AntsPyX will create files like: prefix0GenericAffine.mat or prefixComposite.h5
@@ -222,13 +262,14 @@ class AntsPyXMultiModalCoregistration(BaseRegistrator):
 
             if self.verbose:
                 self.logger.debug(f"[DEBUG] [AntsPyX] Calling ants.registration with:")
-                self.logger.debug(f"  type_of_transform: {ants_transform_type}")
+                self.logger.debug(f"  transforms: {transforms}")
+                self.logger.debug(f"  type_of_transform: {type_of_transform}")
                 self.logger.debug(f"  aff_metric: {metric}")
                 self.logger.debug(f"  aff_sampling: {metric_bins}")
                 self.logger.debug(f"  aff_random_sampling_rate: {sampling_percentage}")
-                self.logger.debug(f"  aff_iterations: {tuple(number_of_iterations)}")
-                self.logger.debug(f"  aff_shrink_factors: {tuple(shrink_factors)}")
-                self.logger.debug(f"  aff_smoothing_sigmas: {tuple(smoothing_sigmas)}")
+                self.logger.debug(f"  aff_iterations: {aff_iterations}")
+                self.logger.debug(f"  aff_shrink_factors: {aff_shrink_factors}")
+                self.logger.debug(f"  aff_smoothing_sigmas: {aff_smoothing_sigmas}")
                 self.logger.debug(f"  outprefix: {transform_prefix}")
 
             # Perform registration
@@ -241,14 +282,14 @@ class AntsPyXMultiModalCoregistration(BaseRegistrator):
                     result = ants.registration(
                         fixed=fixed_img,
                         moving=moving_img,
-                        type_of_transform=ants_transform_type,
+                        type_of_transform=type_of_transform,
                         outprefix=transform_prefix,
                         aff_metric=metric,
                         aff_sampling=metric_bins,
                         aff_random_sampling_rate=sampling_percentage,
-                        aff_iterations=tuple(number_of_iterations),
-                        aff_shrink_factors=tuple(shrink_factors),
-                        aff_smoothing_sigmas=tuple(smoothing_sigmas),
+                        aff_iterations=aff_iterations,
+                        aff_shrink_factors=aff_shrink_factors,
+                        aff_smoothing_sigmas=aff_smoothing_sigmas,
                         write_composite_transform=write_composite,
                         verbose=True  # Force verbose for stdout capture
                     )
@@ -257,14 +298,14 @@ class AntsPyXMultiModalCoregistration(BaseRegistrator):
                 result = ants.registration(
                     fixed=fixed_img,
                     moving=moving_img,
-                    type_of_transform=ants_transform_type,
+                    type_of_transform=type_of_transform,
                     outprefix=transform_prefix,
                     aff_metric=metric,
                     aff_sampling=metric_bins,
                     aff_random_sampling_rate=sampling_percentage,
-                    aff_iterations=tuple(number_of_iterations),
-                    aff_shrink_factors=tuple(shrink_factors),
-                    aff_smoothing_sigmas=tuple(smoothing_sigmas),
+                    aff_iterations=aff_iterations,
+                    aff_shrink_factors=aff_shrink_factors,
+                    aff_smoothing_sigmas=aff_smoothing_sigmas,
                     write_composite_transform=write_composite,
                     verbose=self.verbose
                 )
@@ -321,14 +362,15 @@ class AntsPyXMultiModalCoregistration(BaseRegistrator):
                     moving_path=moving_path,
                     transform_path=actual_transform_path,
                     config_params={
-                        "transform_type": transform_type,
+                        "transforms": transforms,
+                        "type_of_transform": type_of_transform,
                         "metric": metric,
                         "metric_bins": metric_bins,
                         "sampling_strategy": self.config.get("sampling_strategy", "Random"),
                         "sampling_percentage": sampling_percentage,
-                        "number_of_iterations": self.config.get("number_of_iterations", [[1000, 500, 250]]),
-                        "shrink_factors": self.config.get("shrink_factors", [[4, 2, 1]]),
-                        "smoothing_sigmas": self.config.get("smoothing_sigmas", [[2, 1, 0]]),
+                        "number_of_iterations": number_of_iterations_list,
+                        "shrink_factors": shrink_factors_list,
+                        "smoothing_sigmas": smoothing_sigmas_list,
                         "convergence_threshold": self.config.get("convergence_threshold", 1e-6),
                         "convergence_window_size": self.config.get("convergence_window_size", 10),
                         "write_composite_transform": write_composite,

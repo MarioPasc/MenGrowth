@@ -662,7 +662,8 @@ class IntraStudyToReferenceConfig:
         method: Registration method ("ants" or None to skip)
         reference_modality_priority: Priority order for selecting reference modality
                                       e.g., "t1c > t1n > t2f > t2w"
-        transform_type: Type of transform ("Rigid", "Affine", or "SyN")
+        transform_type: Type of transform(s) - single string ("Rigid", "Affine", "SyN")
+                       or list of transforms (e.g., ["Rigid", "Affine"])
         metric: Similarity metric for registration ("Mattes", "MI", "CC", etc.)
         metric_bins: Number of bins for mutual information metric
         sampling_strategy: Sampling strategy ("Random", "Regular", or "None")
@@ -678,7 +679,7 @@ class IntraStudyToReferenceConfig:
     method: Optional[Literal["ants"]] = "ants"
     engine: Optional[Literal["nipype", "antspyx"]] = None
     reference_modality_priority: str = "t1c > t1n > t2f > t2w"
-    transform_type: str = "Rigid"
+    transform_type: Union[str, List[str]] = "Rigid"
     metric: str = "Mattes"
     metric_bins: int = 32
     sampling_strategy: str = "Random"
@@ -722,10 +723,42 @@ class IntraStudyToReferenceConfig:
                     "reference_modality_priority must specify at least one modality"
                 )
 
-        # Validate transform_type
-        if self.transform_type not in ["Rigid", "Affine", "SyN"]:
+        # Validate transform_type (can be string or list of strings)
+        valid_transforms = ["Rigid", "Affine", "SyN"]
+        if isinstance(self.transform_type, str):
+            if self.transform_type not in valid_transforms:
+                raise ConfigurationError(
+                    f"transform_type must be one of {valid_transforms}, got {self.transform_type}"
+                )
+        elif isinstance(self.transform_type, list):
+            if not self.transform_type:
+                raise ConfigurationError(
+                    "transform_type list cannot be empty"
+                )
+            for t in self.transform_type:
+                if t not in valid_transforms:
+                    raise ConfigurationError(
+                        f"Invalid transform '{t}' in transform_type. Must be one of {valid_transforms}"
+                    )
+            # Validate that multi-resolution parameters match the number of transforms
+            if len(self.number_of_iterations) != len(self.transform_type):
+                raise ConfigurationError(
+                    f"number_of_iterations must have one sublist per transform. "
+                    f"Got {len(self.number_of_iterations)} sublists for {len(self.transform_type)} transforms"
+                )
+            if len(self.shrink_factors) != len(self.transform_type):
+                raise ConfigurationError(
+                    f"shrink_factors must have one sublist per transform. "
+                    f"Got {len(self.shrink_factors)} sublists for {len(self.transform_type)} transforms"
+                )
+            if len(self.smoothing_sigmas) != len(self.transform_type):
+                raise ConfigurationError(
+                    f"smoothing_sigmas must have one sublist per transform. "
+                    f"Got {len(self.smoothing_sigmas)} sublists for {len(self.transform_type)} transforms"
+                )
+        else:
             raise ConfigurationError(
-                f"transform_type must be 'Rigid', 'Affine', or 'SyN', got {self.transform_type}"
+                f"transform_type must be a string or list of strings, got {type(self.transform_type)}"
             )
 
         # Validate metric
