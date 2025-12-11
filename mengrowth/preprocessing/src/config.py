@@ -690,6 +690,7 @@ class IntraStudyToReferenceConfig:
     convergence_window_size: int = 10
     write_composite_transform: bool = True
     interpolation: str = "Linear"
+    save_detailed_registration_info: bool = False
 
     def __post_init__(self) -> None:
         """Validate configuration values."""
@@ -841,6 +842,7 @@ class IntraStudyToAtlasConfig:
     convergence_threshold: float = 1e-6
     convergence_window_size: int = 10
     interpolation: str = "Linear"
+    save_detailed_registration_info: bool = False
 
     def __post_init__(self) -> None:
         """Validate configuration values."""
@@ -954,6 +956,7 @@ class RegistrationStepConfig:
         intra_study_to_atlas: Configuration for atlas registration
     """
     save_visualization: bool = True
+    save_detailed_registration_info: bool = False
     intra_study_to_reference: IntraStudyToReferenceConfig = field(
         default_factory=IntraStudyToReferenceConfig
     )

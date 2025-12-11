@@ -298,6 +298,7 @@ class PreprocessingOrchestrator:
             "write_composite_transform": config.intra_study_to_reference.write_composite_transform,
             "interpolation": config.intra_study_to_reference.interpolation,
             "engine": config.intra_study_to_reference.engine or DEFAULT_REGISTRATION_ENGINE,
+            "save_detailed_registration_info": config.intra_study_to_reference.save_detailed_registration_info,
         }
         return create_multi_modal_coregistration(config=intra_study_config, verbose=self.verbose)
 
@@ -321,6 +322,7 @@ class PreprocessingOrchestrator:
             "convergence_window_size": config.intra_study_to_atlas.convergence_window_size,
             "interpolation": config.intra_study_to_atlas.interpolation,
             "engine": config.intra_study_to_atlas.engine or DEFAULT_REGISTRATION_ENGINE,
+            "save_detailed_registration_info": config.intra_study_to_atlas.save_detailed_registration_info,
         }
         return create_intra_study_to_atlas(
             config=atlas_config,

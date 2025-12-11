@@ -7,12 +7,19 @@ from pathlib import Path
 from typing import Dict, Any, List, Tuple, Optional
 import logging
 import time
+import json
+from datetime import datetime
 
 import nibabel as nib
 import numpy as np
 import matplotlib.pyplot as plt
 
 from mengrowth.preprocessing.src.registration.base import BaseRegistrator
+from mengrowth.preprocessing.src.registration.stdout_capture import capture_stdout
+from mengrowth.preprocessing.src.registration.diagnostic_parser import (
+    parse_ants_diagnostic_output,
+    extract_transform_types
+)
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +55,7 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
         super().__init__(config=config, verbose=verbose)
         self.reference_modality = reference_modality
         self.logger = logging.getLogger(__name__)
+        self.save_detailed_info = config.get("save_detailed_registration_info", False)
 
         # Validate antspyx is available
         try:
@@ -278,20 +286,40 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
                 self.logger.debug(f"  aff_iterations: {aff_iterations}")
 
             # Perform registration
-            result = ants.registration(
-                fixed=atlas_img,
-                moving=reference_img,
-                type_of_transform=type_of_transform,
-                outprefix=transform_prefix,
-                aff_metric=metric,
-                aff_sampling=metric_bins,
-                aff_random_sampling_rate=sampling_percentage,
-                aff_iterations=aff_iterations,
-                aff_shrink_factors=aff_shrink_factors,
-                aff_smoothing_sigmas=aff_smoothing_sigmas,
-                write_composite_transform=True,
-                verbose=self.verbose
-            )
+            # Capture stdout if detailed info is enabled
+            captured_stdout = None
+            if self.save_detailed_info:
+                with capture_stdout() as captured:
+                    result = ants.registration(
+                        fixed=atlas_img,
+                        moving=reference_img,
+                        type_of_transform=type_of_transform,
+                        outprefix=transform_prefix,
+                        aff_metric=metric,
+                        aff_sampling=metric_bins,
+                        aff_random_sampling_rate=sampling_percentage,
+                        aff_iterations=aff_iterations,
+                        aff_shrink_factors=aff_shrink_factors,
+                        aff_smoothing_sigmas=aff_smoothing_sigmas,
+                        write_composite_transform=True,
+                        verbose=True  # Force verbose for stdout capture
+                    )
+                captured_stdout = captured.getvalue()
+            else:
+                result = ants.registration(
+                    fixed=atlas_img,
+                    moving=reference_img,
+                    type_of_transform=type_of_transform,
+                    outprefix=transform_prefix,
+                    aff_metric=metric,
+                    aff_sampling=metric_bins,
+                    aff_random_sampling_rate=sampling_percentage,
+                    aff_iterations=aff_iterations,
+                    aff_shrink_factors=aff_shrink_factors,
+                    aff_smoothing_sigmas=aff_smoothing_sigmas,
+                    write_composite_transform=True,
+                    verbose=self.verbose
+                )
 
             if self.verbose:
                 self.logger.debug(f"[DEBUG] [AntsPyX] Registration completed")
@@ -324,6 +352,30 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
 
             if self.verbose:
                 self.logger.debug(f"[DEBUG] [AntsPyX] Replaced {reference_path.name} with atlas-space version")
+
+            # Save detailed registration info if enabled
+            if self.save_detailed_info and captured_stdout:
+                self._save_detailed_registration_info(
+                    stdout=captured_stdout,
+                    fixed_path=atlas_path,
+                    moving_path=reference_path,
+                    transform_path=actual_transform_path,
+                    config_params={
+                        "transforms": transforms,
+                        "type_of_transform": type_of_transform,
+                        "metric": metric,
+                        "metric_bins": metric_bins,
+                        "sampling_strategy": self.config.get("sampling_strategy", "Random"),
+                        "sampling_percentage": sampling_percentage,
+                        "number_of_iterations": number_of_iterations_list,
+                        "shrink_factors": shrink_factors_list,
+                        "smoothing_sigmas": smoothing_sigmas_list,
+                        "convergence_threshold": self.config.get("convergence_threshold", 1e-6),
+                        "convergence_window_size": self.config.get("convergence_window_size", 10),
+                        "interpolation": self.config.get("interpolation", "Linear")
+                    },
+                    registration_type="intra_study_to_atlas"
+                )
 
             return final_output, actual_transform_path
 
@@ -415,6 +467,104 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
             error_msg = f"AntsPyX transform application failed for {modality}: {str(e)}"
             self.logger.error(error_msg)
             raise RuntimeError(error_msg) from e
+
+    def _save_detailed_registration_info(
+        self,
+        stdout: str,
+        fixed_path: Path,
+        moving_path: Path,
+        transform_path: Path,
+        config_params: Dict[str, Any],
+        registration_type: str
+    ) -> None:
+        """Save detailed registration information to JSON.
+
+        Args:
+            stdout: Captured stdout from registration
+            fixed_path: Path to fixed image (atlas)
+            moving_path: Path to moving image (reference modality)
+            transform_path: Path to transform file
+            config_params: Registration parameters used
+            registration_type: "intra_study_to_reference" or "intra_study_to_atlas"
+        """
+        try:
+            # Parse diagnostic output
+            parsed_diagnostics = parse_ants_diagnostic_output(stdout)
+            transform_types = extract_transform_types(stdout)
+
+            # Build JSON structure
+            info = {
+                "metadata": {
+                    "registration_type": registration_type,
+                    "timestamp": datetime.now().isoformat(),
+                    "engine": "antspyx",
+                    "fixed_image": fixed_path.name,
+                    "moving_image": moving_path.name,
+                    "output_image": moving_path.name,  # In-place replacement
+                    "transform_file": transform_path.name,
+                    "success": True,
+                    "error_message": None
+                },
+                "parameters": config_params,
+                "timing": {
+                    "total_elapsed_time_seconds": parsed_diagnostics.get("total_elapsed_time_seconds"),
+                    "stages": [
+                        {
+                            "stage_index": stage["stage_index"],
+                            "transform_type": transform_types[stage["stage_index"]] if stage["stage_index"] < len(transform_types) else "Unknown",
+                            "elapsed_time_seconds": stage.get("elapsed_time_seconds")
+                        }
+                        for stage in parsed_diagnostics.get("stages", [])
+                    ]
+                },
+                "convergence": {
+                    "stages": parsed_diagnostics.get("stages", [])
+                },
+                "stdout_capture": {
+                    "full_output": stdout,
+                    "command_lines_ok": parsed_diagnostics.get("command_lines_ok", False)
+                }
+            }
+
+        except Exception as parse_error:
+            self.logger.warning(f"Failed to parse diagnostic output: {parse_error}")
+            # Fall back to minimal JSON with raw stdout
+            info = {
+                "metadata": {
+                    "registration_type": registration_type,
+                    "timestamp": datetime.now().isoformat(),
+                    "engine": "antspyx",
+                    "fixed_image": fixed_path.name,
+                    "moving_image": moving_path.name,
+                    "error_message": f"Parsing failed: {str(parse_error)}"
+                },
+                "stdout_capture": {
+                    "full_output": stdout
+                }
+            }
+
+        try:
+            # Determine output path
+            # For atlas registration, filename is: {reference_modality}_to_atlas_info.json
+            moving_modality = moving_path.stem.replace(".nii", "")
+
+            # Create detailed_info directory
+            detailed_info_dir = transform_path.parent / "detailed_info"
+            detailed_info_dir.mkdir(parents=True, exist_ok=True)
+
+            # Construct filename
+            json_filename = f"{moving_modality}_to_atlas_info.json"
+            json_path = detailed_info_dir / json_filename
+
+            # Write JSON
+            with open(json_path, 'w', encoding='utf-8') as f:
+                json.dump(info, f, indent=2, default=str)  # default=str handles inf, datetime
+
+            self.logger.info(f"Saved detailed registration info: {json_path.name}")
+
+        except Exception as write_error:
+            self.logger.error(f"Failed to write detailed registration info: {write_error}")
+            # Don't raise - registration succeeded, just diagnostic save failed
 
     def visualize(
         self,

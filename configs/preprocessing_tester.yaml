@@ -1,6 +1,10 @@
 preprocessing:
   # Pipeline step order
   steps: ["data_harmonization",
+          "bias_field_correction",
+          "resampling",
+          "registration_static",
+          "skull_stripping",
           "intensity_normalization"
           ]
 
@@ -147,26 +151,28 @@ preprocessing:
 
     registration_static:
         save_visualization: true  # One PNG per modality
+        save_detailed_registration_info: true  # Save detailed diagnostics (convergence, timing) to JSON
 
         # Step 3a: Intra-study multi-modal coregistration to reference
         intra_study_to_reference:
           method: "ants"                                # "ants" | null (null to skip)
           engine: "antspyx"                           # Optional: "nipype" (default) | "antspyx" - Registration engine to use
-          reference_modality_priority: "t1c > t1n > t2f > t2w"  # Priority order for reference selection
+          save_detailed_registration_info: true       # Optional: Per-substep override for detailed diagnostics
+          reference_modality_priority: "t1n > t1c > t2f > t2w"  # Priority order for reference selection
 
           # Transform parameters
-          transform_type: "Affine"                       # "Rigid" | "Affine" | "SyN"
+          transform_type: ["Rigid", "Affine"]                      # "Rigid" | "Affine" | "SyN"
 
           # Metric parameters
           metric: "Mattes"                              # "Mattes" | "MI" | "CC" | "MeanSquares" | "Demons"
-          metric_bins: 32                               # Number of bins for mutual information [8-128]
+          metric_bins: 64                               # Number of bins for mutual information [8-128]
           sampling_strategy: "Random"                   # "Random" | "Regular" | "None"
-          sampling_percentage: 0.2                      # Percentage of voxels to sample (0.0-1.0]
+          sampling_percentage: 0.5                      # Percentage of voxels to sample (0.0-1.0]
 
           # Multi-resolution schedule
-          number_of_iterations: [[1000, 500, 250]]      # Iterations per level (list of lists)
-          shrink_factors: [[4, 2, 1]]                   # Downsampling factors per level (list of lists)
-          smoothing_sigmas: [[2, 1, 0]]                 # Smoothing sigmas per level (list of lists)
+          number_of_iterations: [[1000, 500, 250, 0], [1000, 500, 250, 0]]      # Iterations per level (list of lists)
+          shrink_factors: [[8, 4, 2, 1], [8, 4, 2, 1]]                   # Downsampling factors per level (list of lists)
+          smoothing_sigmas: [[3, 2, 1, 0], [3, 2, 1, 0]]                 # Smoothing sigmas per level (list of lists)
 
           # Convergence parameters
           convergence_threshold: 1.0e-6                 # Convergence threshold for optimization
@@ -180,6 +186,7 @@ preprocessing:
         intra_study_to_atlas:
           method: "ants"                                # "ants" | null (null to skip atlas registration)
           engine: "antspyx"                           # Optional: "nipype" (default) | "antspyx" - Registration engine to use
+          save_detailed_registration_info: true       # Optional: Per-substep override for detailed diagnostics
           atlas_path: "/media/mpascual/PortableSSD/Meningiomas/ATLAS/sri24_spm8/templates/T1.nii"       # Path to atlas template (must be set if method != null)
 
           # Transform parameters (can specify multiple transforms)
@@ -189,10 +196,10 @@ preprocessing:
           create_composite_transforms: false            # true | false
 
           # Metric parameters
-          metric: "Mattes"                              # "Mattes" | "MI" | "CC" | "MeanSquares" | "Demons"
-          metric_bins: 32                               # Number of bins for mutual information [8-128]
+          metric: "MI"                              # "Mattes" | "MI" | "CC" | "MeanSquares" | "Demons"
+          metric_bins: 128                               # Number of bins for mutual information [8-128]
           sampling_strategy: "Random"                   # "Random" | "Regular" | "None"
-          sampling_percentage: 0.2                      # Percentage of voxels to sample (0.0-1.0]
+          sampling_percentage: 0.5                      # Percentage of voxels to sample (0.0-1.0]
 
           # Multi-resolution schedule (one sublist per transform)
           number_of_iterations: [[1000, 500, 250], [500, 250, 100]]  # First for Rigid, second for Affine
