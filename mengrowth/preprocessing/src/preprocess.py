@@ -78,7 +78,11 @@ class PreprocessingOrchestrator:
         self.logger.info("Preprocessing orchestrator initialized with dynamic pipeline execution")
 
     def _register_step_handlers(self) -> None:
-        """Register all step handler functions with the registry."""
+        """Register all step handler functions with the registry.
+
+        IMPORTANT: Order matters! More specific patterns must be registered before general ones
+        to ensure correct substring matching (e.g., "longitudinal_registration" before "registration").
+        """
         from mengrowth.preprocessing.src.steps import (
             data_harmonization,
             bias_field_correction,
@@ -93,9 +97,9 @@ class PreprocessingOrchestrator:
         self.step_registry.register("bias_field_correction", bias_field_correction.execute)
         self.step_registry.register("intensity_normalization", intensity_normalization.execute)
         self.step_registry.register("resampling", resampling.execute)
+        self.step_registry.register("longitudinal_registration", longitudinal_registration.execute)
         self.step_registry.register("registration", registration.execute)
         self.step_registry.register("skull_stripping", skull_stripping.execute)
-        self.step_registry.register("longitudinal_registration", longitudinal_registration.execute)
 
         self.logger.debug(f"Registered {len(self.step_registry.list_patterns())} step patterns")
 
