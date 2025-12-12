@@ -77,14 +77,15 @@ class LongitudinalRegistration(BaseRegistrator):
                 transform_type = [transform_type]
 
             # Convert transform types to ANTsPy format
-            # ANTsPy expects format like: "Rigid", "Affine", "SyN"
-            # For multiple transforms, it concatenates them
+            # ANTsPy expects a string like: "Rigid", "Affine", "SyN"
+            # Transform types in ANTs are hierarchical (Affine includes Rigid, SyN includes both)
+            # So if multiple transforms are specified, use the last (most comprehensive) one
             if len(transform_type) == 1:
                 type_of_transform = transform_type[0]
             else:
-                # For multiple transforms, ANTsPy can handle a list
-                # But we'll use the composite approach
-                type_of_transform = transform_type
+                # Use the last transform type as it's the most comprehensive
+                # (e.g., ["Rigid", "Affine"] -> "Affine" which includes Rigid)
+                type_of_transform = transform_type[-1]
 
             # Build registration parameters
             reg_params = {
