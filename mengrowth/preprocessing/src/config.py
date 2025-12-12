@@ -38,6 +38,7 @@ class StepMetadata:
 
 
 # Step metadata registry - defines execution level for each step type
+# IMPORTANT: Order matters for substring matching! More specific patterns before general ones
 STEP_METADATA: Dict[str, StepMetadata] = {
     "data_harmonization": StepMetadata(
         level="modality",
@@ -51,6 +52,10 @@ STEP_METADATA: Dict[str, StepMetadata] = {
         level="modality",
         description="Isotropic resampling (bspline, eclare, composite)"
     ),
+    "longitudinal_registration": StepMetadata(
+        level="patient",
+        description="Longitudinal registration across patient timestamps"
+    ),
     "registration": StepMetadata(
         level="study",
         description="Multi-modal coregistration and atlas registration"
@@ -62,10 +67,6 @@ STEP_METADATA: Dict[str, StepMetadata] = {
     "intensity_normalization": StepMetadata(
         level="modality",
         description="Intensity normalization (zscore, kde, fcm, etc.)"
-    ),
-    "longitudinal_registration": StepMetadata(
-        level="patient",
-        description="Longitudinal registration across patient timestamps"
     ),
 }
 
@@ -1504,13 +1505,15 @@ class PipelineExecutionConfig:
         # Validate each step name has a known handler
         registry = StepRegistry()
         # Register patterns temporarily for validation
+        # IMPORTANT: Order matters! More specific patterns must come before general ones
+        # (e.g., "longitudinal_registration" before "registration")
         registry.register("data_harmonization", lambda: None)
         registry.register("bias_field_correction", lambda: None)
         registry.register("intensity_normalization", lambda: None)
         registry.register("resampling", lambda: None)
+        registry.register("longitudinal_registration", lambda: None)
         registry.register("registration", lambda: None)
         registry.register("skull_stripping", lambda: None)
-        registry.register("longitudinal_registration", lambda: None)
 
         for step_name in self.steps:
             try:
@@ -1543,14 +1546,16 @@ class PipelineExecutionConfig:
         providing full type validation and IDE support.
         """
         # Registry mapping step patterns to their typed config classes
+        # IMPORTANT: Order matters! More specific patterns must come before general ones
+        # (e.g., "longitudinal_registration" before "registration")
         step_config_classes: Dict[str, type] = {
             "data_harmonization": DataHarmonizationStepConfig,
             "bias_field_correction": BiasFieldCorrectionStepConfig,
             "resampling": ResamplingStepConfig,
+            "longitudinal_registration": LongitudinalRegistrationStepConfig,
             "registration": RegistrationStepConfig,
             "skull_stripping": SkullStrippingStepConfig,
             "intensity_normalization": IntensityNormalizationStepConfig,
-            "longitudinal_registration": LongitudinalRegistrationStepConfig,
         }
 
         for step_name, config_data in list(self.step_configs.items()):
