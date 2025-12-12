@@ -359,24 +359,28 @@ class PreprocessingOrchestrator:
             raise ValueError(f"Unknown skull stripping method: {method}")
 
     def _create_longitudinal_registrator(self, config: Any) -> Any:
-        """Create longitudinal registrator instance."""
+        """Create longitudinal registrator instance.
+
+        Args:
+            config: LongitudinalRegistrationConfig object (not full StepExecutionConfig)
+        """
         from mengrowth.preprocessing.src.registration.longitudinal_registration import LongitudinalRegistration
         from mengrowth.preprocessing.src.registration.constants import DEFAULT_REGISTRATION_ENGINE
 
         long_config = {
-            "engine": config.longitudinal_registration.engine or DEFAULT_REGISTRATION_ENGINE,
-            "transform_type": config.longitudinal_registration.transform_type,
-            "metric": config.longitudinal_registration.metric,
-            "metric_bins": config.longitudinal_registration.metric_bins,
-            "sampling_strategy": config.longitudinal_registration.sampling_strategy,
-            "sampling_percentage": config.longitudinal_registration.sampling_percentage,
-            "number_of_iterations": config.longitudinal_registration.number_of_iterations,
-            "shrink_factors": config.longitudinal_registration.shrink_factors,
-            "smoothing_sigmas": config.longitudinal_registration.smoothing_sigmas,
-            "convergence_threshold": config.longitudinal_registration.convergence_threshold,
-            "convergence_window_size": config.longitudinal_registration.convergence_window_size,
-            "write_composite_transform": config.longitudinal_registration.write_composite_transform,
-            "interpolation": config.longitudinal_registration.interpolation,
+            "engine": config.engine or DEFAULT_REGISTRATION_ENGINE,
+            "transform_type": config.transform_type,
+            "metric": config.metric,
+            "metric_bins": config.metric_bins,
+            "sampling_strategy": config.sampling_strategy,
+            "sampling_percentage": config.sampling_percentage,
+            "number_of_iterations": config.number_of_iterations,
+            "shrink_factors": config.shrink_factors,
+            "smoothing_sigmas": config.smoothing_sigmas,
+            "convergence_threshold": config.convergence_threshold,
+            "convergence_window_size": config.convergence_window_size,
+            "write_composite_transform": config.write_composite_transform,
+            "interpolation": config.interpolation,
         }
 
         return LongitudinalRegistration(config=long_config, verbose=self.verbose)
