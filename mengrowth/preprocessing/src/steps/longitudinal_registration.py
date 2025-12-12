@@ -301,7 +301,8 @@ def _execute_single_reference_registration(
 
                 # Generate visualization if enabled
                 if config.save_visualization and pre_registration_path:
-                    viz_output = viz_base / "longitudinal_registration" / f"{timestamp}_{modality}_to_ref.png"
+                    # Save visualization in study-specific directory to match other steps
+                    viz_output = viz_base / study_dir.name / f"longitudinal_registration_{modality}.png"
                     viz_output.parent.mkdir(parents=True, exist_ok=True)
                     registrator.visualize(
                         reference_path=reference_path,
@@ -411,7 +412,8 @@ def _execute_per_modality_registration(
 
                 # Generate visualization if enabled
                 if config.save_visualization and pre_registration_path:
-                    viz_output = viz_base / "longitudinal_registration" / f"{timestamp}_{modality}_to_ref_{modality}.png"
+                    # Save visualization in study-specific directory to match other steps
+                    viz_output = viz_base / study_dir.name / f"longitudinal_registration_{modality}.png"
                     viz_output.parent.mkdir(parents=True, exist_ok=True)
                     registrator.visualize(
                         reference_path=reference_path,
