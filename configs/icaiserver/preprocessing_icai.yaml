@@ -290,7 +290,7 @@ preprocessing:
           #     Then: 001-t1n → 000-t1n, 001-t1c → 000-t1c, 001-t2w → 000-t2w
           #   - Use when: You want to track changes in each sequence type separately
           #   - Recommended for longitudinal analysis where each modality evolves independently
-          reference_modality_priority: "per_modality"
+          reference_modality_priority: "t1n > t1c > t2f > t2w"
 
           # Path to YAML file mapping patient IDs to reference timestamps
           # File format (configs/longitudinal_registration_matches.yaml):
