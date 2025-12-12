@@ -28,12 +28,12 @@ class ConfigurationError(Exception):
 @dataclass
 class StepMetadata:
     """Metadata describing step execution characteristics.
-    
+
     Attributes:
-        level: Whether step operates per-modality or at study level
+        level: Whether step operates per-modality, at study level, or at patient level
         description: Human-readable description of the step
     """
-    level: Literal["modality", "study"]
+    level: Literal["modality", "study", "patient"]
     description: str = ""
 
 
@@ -63,6 +63,10 @@ STEP_METADATA: Dict[str, StepMetadata] = {
         level="modality",
         description="Intensity normalization (zscore, kde, fcm, etc.)"
     ),
+    "longitudinal_registration": StepMetadata(
+        level="patient",
+        description="Longitudinal registration across patient timestamps"
+    ),
 }
 
 
@@ -72,20 +76,22 @@ class StepExecutionContext:
 
     Attributes:
         patient_id: Patient identifier
-        study_dir: Path to study directory
-        modality: Modality being processed (e.g., "t1c", "t1n"), None for study-level steps
+        study_dir: Path to study directory (None for patient-level steps)
+        modality: Modality being processed (e.g., "t1c", "t1n"), None for study-level and patient-level steps
         paths: Dictionary of output paths from _get_output_paths()
         orchestrator: Reference to PreprocessingOrchestrator instance
         step_name: Full step name from config (e.g., "intensity_normalization_2")
         step_config: Step-specific configuration object
+        all_study_dirs: List of all study directories for patient-level steps
     """
     patient_id: str
-    study_dir: Path
+    study_dir: Optional[Path]
     modality: Optional[str]
     paths: Optional[Dict[str, Path]]
     orchestrator: 'PreprocessingOrchestrator'
     step_name: str
     step_config: Any
+    all_study_dirs: Optional[List[Path]] = None
 
 
 class StepRegistry:
@@ -1228,6 +1234,187 @@ Step5IntensityNormalizationConfig = IntensityNormalizationStepConfig
 
 
 @dataclass
+class LongitudinalRegistrationConfig:
+    """Configuration for longitudinal registration across timestamps.
+
+    Attributes:
+        method: Registration method ("ants" or None to skip)
+        engine: Registration engine ("nipype" or "antspyx")
+        reference_modality_priority: Either:
+            - Priority string (e.g., "t1n > t1c > t2f > t2w") for single-reference mode
+            - "per_modality" for per-modality independent registration
+        reference_timestamp_per_study: Path to YAML file mapping patient_id to reference timestamp
+
+        # Registration parameters (same as intra_study_to_reference)
+        transform_type: Transform types (e.g., ["Rigid", "Affine"])
+        metric: Similarity metric
+        metric_bins: Number of bins for MI
+        sampling_strategy: Sampling strategy
+        sampling_percentage: Percentage of voxels to sample
+        number_of_iterations: Iterations per resolution level
+        shrink_factors: Downsampling factors per level
+        smoothing_sigmas: Smoothing sigmas per level
+        convergence_threshold: Convergence threshold
+        convergence_window_size: Window size for convergence
+        write_composite_transform: Write composite transform file
+        interpolation: Interpolation method
+        save_detailed_registration_info: Save detailed diagnostics
+    """
+    method: Optional[Literal["ants"]] = "ants"
+    engine: Optional[Literal["nipype", "antspyx"]] = None
+    reference_modality_priority: str = "t1n > t1c > t2f > t2w"
+    reference_timestamp_per_study: Optional[str] = None
+
+    # Transform parameters
+    transform_type: Union[str, List[str]] = field(default_factory=lambda: ["Rigid", "Affine"])
+
+    # Metric parameters
+    metric: str = "Mattes"
+    metric_bins: int = 64
+    sampling_strategy: str = "Random"
+    sampling_percentage: float = 0.5
+
+    # Multi-resolution schedule
+    number_of_iterations: List[List[int]] = field(default_factory=lambda: [[1000, 500, 250, 0], [1000, 500, 250, 0]])
+    shrink_factors: List[List[int]] = field(default_factory=lambda: [[8, 4, 2, 1], [8, 4, 2, 1]])
+    smoothing_sigmas: List[List[int]] = field(default_factory=lambda: [[3, 2, 1, 0], [3, 2, 1, 0]])
+
+    # Convergence parameters
+    convergence_threshold: float = 1.0e-6
+    convergence_window_size: int = 10
+
+    # Output parameters
+    write_composite_transform: bool = True
+    interpolation: str = "BSpline"
+    save_detailed_registration_info: bool = False
+
+    def __post_init__(self) -> None:
+        """Validate configuration values."""
+        # Validate method
+        if self.method is not None and self.method not in ["ants"]:
+            raise ConfigurationError(
+                f"method must be None or 'ants', got {self.method}"
+            )
+
+        # Validate engine (if specified)
+        if self.engine is not None and self.engine not in ["nipype", "antspyx"]:
+            raise ConfigurationError(
+                f"engine must be None, 'nipype', or 'antspyx', got {self.engine}"
+            )
+
+        # Skip validation if method is None (registration disabled)
+        if self.method is None:
+            return
+
+        # Validate reference_modality_priority
+        if not self.reference_modality_priority:
+            raise ConfigurationError(
+                "reference_modality_priority cannot be empty"
+            )
+
+        # Validate transform_type (can be string or list of strings)
+        valid_transforms = ["Rigid", "Affine", "SyN"]
+        if isinstance(self.transform_type, str):
+            if self.transform_type not in valid_transforms:
+                raise ConfigurationError(
+                    f"transform_type must be one of {valid_transforms}, got {self.transform_type}"
+                )
+        elif isinstance(self.transform_type, list):
+            if not self.transform_type:
+                raise ConfigurationError("transform_type list cannot be empty")
+            for t in self.transform_type:
+                if t not in valid_transforms:
+                    raise ConfigurationError(
+                        f"Invalid transform '{t}' in transform_type. Must be one of {valid_transforms}"
+                    )
+            # Validate that multi-resolution parameters match the number of transforms
+            if len(self.number_of_iterations) != len(self.transform_type):
+                raise ConfigurationError(
+                    f"number_of_iterations must have one sublist per transform. "
+                    f"Got {len(self.number_of_iterations)} sublists for {len(self.transform_type)} transforms"
+                )
+            if len(self.shrink_factors) != len(self.transform_type):
+                raise ConfigurationError(
+                    f"shrink_factors must have one sublist per transform. "
+                    f"Got {len(self.shrink_factors)} sublists for {len(self.transform_type)} transforms"
+                )
+            if len(self.smoothing_sigmas) != len(self.transform_type):
+                raise ConfigurationError(
+                    f"smoothing_sigmas must have one sublist per transform. "
+                    f"Got {len(self.smoothing_sigmas)} sublists for {len(self.transform_type)} transforms"
+                )
+        else:
+            raise ConfigurationError(
+                f"transform_type must be a string or list of strings, got {type(self.transform_type)}"
+            )
+
+        # Validate metric
+        valid_metrics = ["Mattes", "MI", "CC", "MeanSquares", "Demons"]
+        if self.metric not in valid_metrics:
+            raise ConfigurationError(
+                f"metric must be one of {valid_metrics}, got {self.metric}"
+            )
+
+        # Validate metric_bins
+        if not 8 <= self.metric_bins <= 128:
+            raise ConfigurationError(
+                f"metric_bins must be in [8, 128], got {self.metric_bins}"
+            )
+
+        # Validate sampling_strategy
+        if self.sampling_strategy not in ["Random", "Regular", "None"]:
+            raise ConfigurationError(
+                f"sampling_strategy must be 'Random', 'Regular', or 'None', got {self.sampling_strategy}"
+            )
+
+        # Validate sampling_percentage
+        if not 0.0 < self.sampling_percentage <= 1.0:
+            raise ConfigurationError(
+                f"sampling_percentage must be in (0.0, 1.0], got {self.sampling_percentage}"
+            )
+
+        # Validate convergence_threshold
+        if self.convergence_threshold <= 0:
+            raise ConfigurationError(
+                f"convergence_threshold must be positive, got {self.convergence_threshold}"
+            )
+
+        # Validate convergence_window_size
+        if self.convergence_window_size < 1:
+            raise ConfigurationError(
+                f"convergence_window_size must be >= 1, got {self.convergence_window_size}"
+            )
+
+        # Validate interpolation
+        valid_interpolations = ["Linear", "BSpline", "NearestNeighbor", "MultiLabel", "Gaussian"]
+        if self.interpolation not in valid_interpolations:
+            raise ConfigurationError(
+                f"interpolation must be one of {valid_interpolations}, got {self.interpolation}"
+            )
+
+
+@dataclass
+class LongitudinalRegistrationStepConfig:
+    """Configuration for longitudinal registration step.
+
+    Attributes:
+        save_visualization: Whether to save visualization outputs
+        longitudinal_registration: Configuration for longitudinal registration method
+    """
+    save_visualization: bool = True
+    longitudinal_registration: LongitudinalRegistrationConfig = field(
+        default_factory=LongitudinalRegistrationConfig
+    )
+
+    def __post_init__(self) -> None:
+        """Ensure longitudinal_registration is a LongitudinalRegistrationConfig instance."""
+        if isinstance(self.longitudinal_registration, dict):
+            self.longitudinal_registration = LongitudinalRegistrationConfig(
+                **self.longitudinal_registration
+            )
+
+
+@dataclass
 class PipelineExecutionConfig:
     """Configuration for the preprocessing pipeline execution.
 
@@ -1323,6 +1510,7 @@ class PipelineExecutionConfig:
         registry.register("resampling", lambda: None)
         registry.register("registration", lambda: None)
         registry.register("skull_stripping", lambda: None)
+        registry.register("longitudinal_registration", lambda: None)
 
         for step_name in self.steps:
             try:
@@ -1362,6 +1550,7 @@ class PipelineExecutionConfig:
             "registration": RegistrationStepConfig,
             "skull_stripping": SkullStrippingStepConfig,
             "intensity_normalization": IntensityNormalizationStepConfig,
+            "longitudinal_registration": LongitudinalRegistrationStepConfig,
         }
 
         for step_name, config_data in list(self.step_configs.items()):

@@ -85,7 +85,8 @@ class PreprocessingOrchestrator:
             intensity_normalization,
             resampling,
             registration,
-            skull_stripping
+            skull_stripping,
+            longitudinal_registration
         )
 
         self.step_registry.register("data_harmonization", data_harmonization.execute)
@@ -94,6 +95,7 @@ class PreprocessingOrchestrator:
         self.step_registry.register("resampling", resampling.execute)
         self.step_registry.register("registration", registration.execute)
         self.step_registry.register("skull_stripping", skull_stripping.execute)
+        self.step_registry.register("longitudinal_registration", longitudinal_registration.execute)
 
         self.logger.debug(f"Registered {len(self.step_registry.list_patterns())} step patterns")
 
@@ -153,6 +155,8 @@ class PreprocessingOrchestrator:
             parts = component_type.split("_", 3)
             method = parts[2] if len(parts) > 2 else "unknown"
             return self._create_skull_stripper(method, config)
+        elif component_type.startswith("longitudinal_reg_"):
+            return self._create_longitudinal_registrator(config)
         else:
             raise ValueError(f"Unknown component type: {component_type}")
 
@@ -349,6 +353,29 @@ class PreprocessingOrchestrator:
             return SynthStripSkullStripper(config=skull_strip_config, verbose=self.verbose)
         else:
             raise ValueError(f"Unknown skull stripping method: {method}")
+
+    def _create_longitudinal_registrator(self, config: Any) -> Any:
+        """Create longitudinal registrator instance."""
+        from mengrowth.preprocessing.src.registration.longitudinal_registration import LongitudinalRegistration
+        from mengrowth.preprocessing.src.registration.constants import DEFAULT_REGISTRATION_ENGINE
+
+        long_config = {
+            "engine": config.longitudinal_registration.engine or DEFAULT_REGISTRATION_ENGINE,
+            "transform_type": config.longitudinal_registration.transform_type,
+            "metric": config.longitudinal_registration.metric,
+            "metric_bins": config.longitudinal_registration.metric_bins,
+            "sampling_strategy": config.longitudinal_registration.sampling_strategy,
+            "sampling_percentage": config.longitudinal_registration.sampling_percentage,
+            "number_of_iterations": config.longitudinal_registration.number_of_iterations,
+            "shrink_factors": config.longitudinal_registration.shrink_factors,
+            "smoothing_sigmas": config.longitudinal_registration.smoothing_sigmas,
+            "convergence_threshold": config.longitudinal_registration.convergence_threshold,
+            "convergence_window_size": config.longitudinal_registration.convergence_window_size,
+            "write_composite_transform": config.longitudinal_registration.write_composite_transform,
+            "interpolation": config.longitudinal_registration.interpolation,
+        }
+
+        return LongitudinalRegistration(config=long_config, verbose=self.verbose)
 
     def _get_study_directories(self, patient_id: str) -> List[Path]:
         """Get list of study directories for a patient.
@@ -666,12 +693,48 @@ class PreprocessingOrchestrator:
         # Log and save pipeline configuration
         self._log_pipeline_order(patient_id)
 
+        # Separate patient-level from other steps
+        modality_study_groups, patient_level_steps = self._categorize_step_groups()
+
+        # PHASE 1: Process all studies (modality-level and study-level steps)
+        total_processed, total_skipped, total_errors = self._process_studies(
+            patient_id, study_dirs, modality_study_groups
+        )
+
+        # PHASE 2: Execute patient-level steps (new)
+        if patient_level_steps:
+            self.logger.info(f"\n{'='*80}")
+            self.logger.info(f"Executing patient-level steps for {patient_id}")
+            self.logger.info(f"{'='*80}")
+            self._execute_patient_level_steps(patient_id, study_dirs, patient_level_steps)
+
+        # Summary
+        self.logger.info(f"\n{'='*80}")
+        self.logger.info(f"Patient {patient_id} processing complete:")
+        self.logger.info(f"  Processed: {total_processed}")
+        self.logger.info(f"  Skipped:   {total_skipped}")
+        self.logger.info(f"  Errors:    {total_errors}")
+        self.logger.info(f"{'='*80}\n")
+
+    def _process_studies(
+        self,
+        patient_id: str,
+        study_dirs: List[Path],
+        step_groups: List[Tuple[str, List[str]]]
+    ) -> Tuple[int, int, int]:
+        """Process all studies with modality-level and study-level steps.
+
+        Args:
+            patient_id: Patient ID
+            study_dirs: List of all study directories
+            step_groups: List of (level, [step_names]) for modality/study steps
+
+        Returns:
+            Tuple of (total_processed, total_skipped, total_errors)
+        """
         total_processed = 0
         total_skipped = 0
         total_errors = 0
-
-        # Get ordered step groups (preserves user-specified order with interleaving)
-        step_groups = self._get_ordered_step_groups()
 
         # Process each study
         for study_idx, study_dir in enumerate(study_dirs, 1):
@@ -743,13 +806,7 @@ class PreprocessingOrchestrator:
                         steps=group_steps
                     )
 
-        # Summary
-        self.logger.info(f"\n{'='*80}")
-        self.logger.info(f"Patient {patient_id} processing complete:")
-        self.logger.info(f"  Processed: {total_processed}")
-        self.logger.info(f"  Skipped:   {total_skipped}")
-        self.logger.info(f"  Errors:    {total_errors}")
-        self.logger.info(f"{'='*80}\n")
+        return total_processed, total_skipped, total_errors
 
     def _log_pipeline_order(self, patient_id: str) -> None:
         """Log pipeline configuration to console and JSON file."""
@@ -805,45 +862,52 @@ class PreprocessingOrchestrator:
 
         return per_modality_steps, study_level_steps
 
-    def _get_ordered_step_groups(self) -> List[Tuple[str, List[str]]]:
-        """Group consecutive steps by execution level while preserving order.
-
-        This allows interleaving per-modality and study-level steps according
-        to the user-specified order in config.steps.
+    def _categorize_step_groups(self) -> Tuple[List[Tuple[str, List[str]]], List[str]]:
+        """Categorize steps into modality/study groups and patient-level steps.
 
         Returns:
-            List of (level, [step_names]) tuples in execution order.
-            level is either "modality" or "study".
+            Tuple of (modality_study_groups, patient_level_steps)
+            - modality_study_groups: List of (level, [step_names]) for modality/study steps
+            - patient_level_steps: List of patient-level step names
         """
-        groups = []
+        modality_study_groups = []
+        patient_level_steps = []
+
         current_level = None
         current_steps = []
 
         for step_name in self.config.steps:
-            # Find step level
+            # Find step level from STEP_METADATA
             step_level = "modality"  # Default
             for pattern, metadata in STEP_METADATA.items():
                 if pattern in step_name:
                     step_level = metadata.level
                     break
 
-            # Check if we need to start a new group
-            if step_level != current_level:
-                # Save previous group if it exists
+            # Separate patient-level steps
+            if step_level == "patient":
+                # Finalize any current group first
                 if current_steps:
-                    groups.append((current_level, current_steps))
-                # Start new group
-                current_level = step_level
-                current_steps = [step_name]
+                    modality_study_groups.append((current_level, current_steps))
+                    current_level = None
+                    current_steps = []
+                # Add to patient-level list
+                patient_level_steps.append(step_name)
             else:
-                # Add to current group
-                current_steps.append(step_name)
+                # Group modality/study steps
+                if step_level != current_level:
+                    if current_steps:
+                        modality_study_groups.append((current_level, current_steps))
+                    current_level = step_level
+                    current_steps = [step_name]
+                else:
+                    current_steps.append(step_name)
 
-        # Don't forget the last group
+        # Finalize last group
         if current_steps:
-            groups.append((current_level, current_steps))
+            modality_study_groups.append((current_level, current_steps))
 
-        return groups
+        return modality_study_groups, patient_level_steps
 
     def _execute_per_modality_steps(
         self,
@@ -927,6 +991,47 @@ class PreprocessingOrchestrator:
             except Exception as e:
                 self.logger.error(f"  Study-level step '{step_name}' failed: {e}")
                 # Continue anyway - don't halt for study-level failures
+
+    def _execute_patient_level_steps(
+        self,
+        patient_id: str,
+        study_dirs: List[Path],
+        steps: List[str]
+    ) -> None:
+        """Execute patient-level steps that operate across all timestamps.
+
+        Args:
+            patient_id: Patient ID
+            study_dirs: List of all study directories for this patient
+            steps: List of patient-level step names
+        """
+        for step_name in steps:
+            self.logger.info(f"\n  Executing patient-level step: {step_name}")
+
+            # Get step config
+            step_config = self._get_step_config(step_name)
+
+            # Create execution context
+            context = StepExecutionContext(
+                patient_id=patient_id,
+                study_dir=None,  # N/A for patient-level
+                modality=None,   # N/A for patient-level
+                paths=None,      # N/A for patient-level
+                orchestrator=self,
+                step_name=step_name,
+                step_config=step_config,
+                all_study_dirs=study_dirs  # NEW: Pass all study dirs
+            )
+
+            # Get handler and execute
+            pattern, handler_func = self.step_registry.get_handler(step_name)
+            try:
+                result = handler_func(context, total_steps=0, current_step_num=0)
+                self._step_results[step_name] = result
+                self.logger.info(f"  ✓ {step_name} completed successfully")
+            except Exception as e:
+                self.logger.error(f"  ✗ Patient-level step '{step_name}' failed: {e}")
+                raise RuntimeError(f"Patient-level step '{step_name}' failed") from e
 
     def _get_step_config(
         self, 

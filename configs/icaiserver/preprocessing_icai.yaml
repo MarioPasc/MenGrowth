@@ -5,7 +5,8 @@ preprocessing:
           "resampling",
           "registration_static",
           "skull_stripping",
-          "intensity_normalization"
+          "intensity_normalization",
+          "longitudinal_registration"
           ]
 
   general_configuration:
@@ -253,3 +254,240 @@ preprocessing:
           max_iter: 50
           error_threshold: 0.005
           fuzziness: 2.0
+
+  longitudinal_registration:
+      # Enable/disable visualization generation for longitudinal registration
+      # Generates PNG images showing registration quality across timestamps
+      save_visualization: true
+
+      longitudinal_registration:
+          # Registration method
+          # - "ants": Use ANTs (Advanced Normalization Tools) for registration
+          # - null: Skip longitudinal registration entirely
+          method: "ants"
+
+          # Registration engine backend
+          # - "antspyx": Use ANTsPy Python library (faster, recommended)
+          # - "nipype": Use Nipype wrapper around ANTs command-line tools
+          # - null: Use default engine (antspyx)
+          engine: "antspyx"
+
+          # Reference modality selection strategy
+          # This parameter determines HOW to perform longitudinal registration:
+          #
+          # Option 1: Priority string (e.g., "t1n > t1c > t2f > t2w")
+          #   - Single-reference mode
+          #   - Selects ONE reference modality from reference timestamp using priority
+          #   - Registers ALL modalities from other timestamps to that single reference
+          #   - Example: If ref_timestamp=000, ref_modality=t1n (highest priority available)
+          #     Then: 001-t1n → 000-t1n, 001-t1c → 000-t1n, 001-t2w → 000-t1n
+          #   - Use when: You want to align all sequences to one "master" reference
+          #
+          # Option 2: "per_modality"
+          #   - Per-modality mode
+          #   - Registers each modality type independently across timestamps
+          #   - Example: If ref_timestamp=000
+          #     Then: 001-t1n → 000-t1n, 001-t1c → 000-t1c, 001-t2w → 000-t2w
+          #   - Use when: You want to track changes in each sequence type separately
+          #   - Recommended for longitudinal analysis where each modality evolves independently
+          reference_modality_priority: "per_modality"
+
+          # Path to YAML file mapping patient IDs to reference timestamps
+          # File format (configs/longitudinal_registration_matches.yaml):
+          #   MenGrowth-0006: 001   # Use timestamp 001 as reference for this patient
+          #   MenGrowth-0007: 002   # Use timestamp 002 as reference for this patient
+          #   MenGrowth-0008: 001
+          #   MenGrowth-0009: 000
+          #
+          # Behavior:
+          #   - If patient IS in file: Use specified timestamp as reference
+          #   - If patient NOT in file: Use default "000" as reference
+          #   - If file path is null: Use default "000" for all patients
+          #   - If reference timestamp doesn't exist for patient: Error raised
+          #
+          # The reference timestamp is the "fixed" image - all other timestamps
+          # will be registered (warped) to align with this reference.
+          reference_timestamp_per_study: "configs/longitudinal_registration_matches.yaml"
+
+          # Transform type(s) to apply during registration
+          # Can be a single transform or a list of transforms applied sequentially
+          #
+          # Single transform examples:
+          #   transform_type: "Rigid"     # Only rotation + translation
+          #   transform_type: "Affine"    # Rotation + translation + scaling + shearing
+          #   transform_type: "SyN"       # Symmetric diffeomorphic deformable registration
+          #
+          # Multiple transforms (applied in sequence):
+          #   transform_type: ["Rigid", "Affine"]  # First rigid, then refine with affine
+          #   transform_type: ["Rigid", "Affine", "SyN"]  # Linear then non-linear
+          #
+          # Recommendations:
+          #   - For longitudinal MRI (same patient): ["Rigid", "Affine"] (account for positioning + growth)
+          #   - For minimal change expected: ["Rigid"] (faster, prevents overfitting)
+          #   - For tumor growth tracking: ["Rigid", "Affine", "SyN"] (capture deformation)
+          transform_type: ["Rigid", "Affine"]
+
+          # Similarity metric for registration optimization
+          # Determines how well two images are aligned
+          #
+          # Options:
+          #   - "Mattes": Mattes mutual information (default, robust, good for multi-modal)
+          #   - "MI": Mutual information (classic, similar to Mattes)
+          #   - "CC": Cross-correlation (good for same-modality, same contrast)
+          #   - "MeanSquares": Mean squared difference (simple, for same-modality only)
+          #   - "Demons": Demons algorithm metric (for deformable registration)
+          #
+          # Recommendations:
+          #   - Same modality (t1n → t1n): "CC" or "Mattes"
+          #   - Multi-modal (t1c → t1n): "Mattes" or "MI"
+          #   - Longitudinal same sequence: "CC" (faster) or "Mattes" (more robust)
+          metric: "Mattes"
+
+          # Number of histogram bins for mutual information metrics
+          # Only used when metric is "Mattes" or "MI"
+          #
+          # Range: 8-128 (powers of 2 recommended: 32, 64, 128)
+          # - Lower (32): Faster, less precise, better for low SNR images
+          # - Higher (128): Slower, more precise, better for high quality images
+          # - Default (64): Good balance for most MRI data
+          metric_bins: 64
+
+          # Sampling strategy for metric evaluation
+          # Determines which voxels are used to compute the similarity metric
+          #
+          # Options:
+          #   - "Random": Randomly sample voxels (fast, good default)
+          #   - "Regular": Sample on a regular grid (deterministic, slower)
+          #   - "None": Use all voxels (slowest, most accurate, memory intensive)
+          #
+          # Recommendations:
+          #   - Fast registration: "Random" with low sampling_percentage (0.2-0.3)
+          #   - Accurate registration: "Random" with high sampling_percentage (0.5-1.0)
+          #   - Reproducible results: "Regular" (same voxels every time)
+          sampling_strategy: "Random"
+
+          # Percentage of voxels to sample for metric computation
+          # Only used when sampling_strategy is "Random" or "Regular"
+          #
+          # Range: 0.0-1.0
+          # - 0.1 (10%): Very fast, less accurate
+          # - 0.2-0.3: Good balance for quick iterations
+          # - 0.5 (50%): Default, good accuracy/speed tradeoff
+          # - 1.0 (100%): Use all voxels (equivalent to sampling_strategy="None")
+          #
+          # Higher values increase computation time but improve accuracy
+          sampling_percentage: 0.5
+
+          # Multi-resolution pyramid schedule: Iterations per level
+          # List of lists, one sublist per transform type
+          #
+          # Format: [[iters_transform1_level1, level2, level3, ...], [iters_transform2_level1, ...]]
+          # - Each level represents a coarser-to-finer resolution
+          # - Level 1 = coarsest (downsampled), Last level = finest (full resolution)
+          # - 0 iterations = skip this level
+          #
+          # For transform_type: ["Rigid", "Affine"], need 2 sublists:
+          #   number_of_iterations:   [[1000, 500, 250, 0],      [1000, 500, 250, 0]]
+          #                          └── Rigid iterations ──┘  └── Affine iterations ──┘
+          #
+          # Tuning:
+          #   - More iterations = more accurate but slower
+          #   - Coarse levels (early): Can use fewer iterations (fast rough alignment)
+          #   - Fine levels (later): Need more iterations (precise alignment)
+          #   - Typical: Start high (1000) at coarse, decrease at fine levels
+          number_of_iterations: [[1000, 500, 250, 0], [1000, 500, 250, 0]]
+
+          # Multi-resolution pyramid schedule: Shrink factors per level
+          # Downsampling factors for each resolution level
+          #
+          # Format: Same structure as number_of_iterations
+          # - Factor of 8 = downsample by 8x (very coarse)
+          # - Factor of 4 = downsample by 4x (coarse)
+          # - Factor of 2 = downsample by 2x (medium)
+          # - Factor of 1 = full resolution (fine)
+          #
+          # Example: [[8, 4, 2, 1], [8, 4, 2, 1]]
+          #   - Level 1: 8x downsampled (fast, rough alignment)
+          #   - Level 2: 4x downsampled
+          #   - Level 3: 2x downsampled
+          #   - Level 4: Full resolution (precise alignment)
+          #
+          # Must match length of number_of_iterations sublists
+          shrink_factors: [[8, 4, 2, 1], [8, 4, 2, 1]]
+
+          # Multi-resolution pyramid schedule: Smoothing sigmas per level
+          # Gaussian smoothing applied at each resolution level (in voxels)
+          #
+          # Format: Same structure as number_of_iterations
+          # - Higher sigma = more smoothing (removes noise, finds global alignment)
+          # - Lower sigma = less smoothing (preserves detail, local refinement)
+          # - Sigma of 0 = no smoothing
+          #
+          # Example: [[3, 2, 1, 0], [3, 2, 1, 0]]
+          #   - Coarse levels: More smoothing (3, 2) - focus on large-scale alignment
+          #   - Fine levels: Less smoothing (1, 0) - preserve anatomical detail
+          #
+          # Rule of thumb: smoothing_sigmas[i] ≈ shrink_factors[i] / 2
+          # Must match length of number_of_iterations sublists
+          smoothing_sigmas: [[3, 2, 1, 0], [3, 2, 1, 0]]
+
+          # Convergence threshold for optimization
+          # Stops iterations early if improvement falls below this value
+          #
+          # Range: 1e-10 to 1e-3
+          # - 1e-6: Default, good balance (recommended)
+          # - 1e-8: Stricter convergence (more iterations, better alignment)
+          # - 1e-4: Looser convergence (fewer iterations, faster)
+          #
+          # Lower values = more precise but slower
+          convergence_threshold: 1.0e-6
+
+          # Convergence window size
+          # Number of recent iterations to evaluate for convergence
+          #
+          # Range: 5-20
+          # - Smaller (5): Faster convergence detection, may stop prematurely
+          # - Larger (15-20): More stable convergence, slower to detect
+          # - Default (10): Good balance
+          #
+          # Algorithm stops if metric improvement over last N iterations < threshold
+          convergence_window_size: 10
+
+          # Write composite transform file
+          # Save combined transform as single .h5 file (instead of separate files per transform type)
+          #
+          # Options:
+          #   - true: Single .h5 file with all transforms (easier to apply, recommended)
+          #   - false: Separate transform files for each type (Rigid.mat, Affine.mat)
+          #
+          # Composite transforms are easier to apply and manage
+          write_composite_transform: true
+
+          # Interpolation method for resampling registered images
+          # Determines how intensity values are computed at non-grid positions
+          #
+          # Options:
+          #   - "Linear": Fast, smooth, good for most cases
+          #   - "BSpline": Slower, smoother, better quality (recommended for final output)
+          #   - "NearestNeighbor": Fastest, preserves discrete values (for label maps only)
+          #   - "Gaussian": Smooth, good for anti-aliasing
+          #   - "MultiLabel": For multi-label segmentation masks
+          #
+          # Recommendations:
+          #   - Intensity images: "BSpline" (best quality)
+          #   - Quick preview: "Linear" (faster)
+          #   - Segmentation masks: "NearestNeighbor" or "MultiLabel"
+          interpolation: "BSpline"
+
+          # Save detailed registration diagnostics
+          # Generates JSON file with convergence history, timing, and quality metrics
+          #
+          # Options:
+          #   - true: Save detailed info to artifacts/longitudinal_registration/*.json
+          #   - false: Only save transforms and registered images
+          #
+          # Useful for:
+          #   - Debugging registration failures
+          #   - Quality control and validation
+          #   - Optimizing registration parameters
+          save_detailed_registration_info: false

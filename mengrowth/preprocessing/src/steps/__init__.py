@@ -11,6 +11,7 @@ from . import (
     resampling,
     registration,
     skull_stripping,
+    longitudinal_registration,
     utils,
 )
 
@@ -21,5 +22,6 @@ __all__ = [
     'resampling',
     'registration',
     'skull_stripping',
+    'longitudinal_registration',
     'utils',
 ]
