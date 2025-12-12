@@ -1288,6 +1288,7 @@ class LongitudinalRegistrationConfig:
     write_composite_transform: bool = True
     interpolation: str = "BSpline"
     save_detailed_registration_info: bool = False
+    save_visualization: bool = True
 
     def __post_init__(self) -> None:
         """Validate configuration values."""

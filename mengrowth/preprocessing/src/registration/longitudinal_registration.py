@@ -165,12 +165,105 @@ class LongitudinalRegistration(BaseRegistrator):
             "The execute() method is not applicable for patient-level operations."
         )
 
-    def visualize(self, *args, **kwargs):
-        """Visualization for longitudinal registration.
+    def visualize(
+        self,
+        reference_path: Path,
+        pre_registration_path: Path,
+        post_registration_path: Path,
+        output_path: Path
+    ) -> None:
+        """Generate visualization comparing pre and post registration to reference.
 
-        TODO: Implement visualization similar to other registration steps.
-        Could show before/after registration, checkerboard overlay, etc.
+        Creates a 3×2 grid visualization:
+        - Rows: Axial, Sagittal, Coronal views
+        - Column 1: Reference (target) volume in grayscale
+        - Column 2: Overlay of pre-registration (jet colormap) with post-registration (gray) on top
+
+        Args:
+            reference_path: Path to reference (target) image
+            pre_registration_path: Path to pre-registration moving image
+            post_registration_path: Path to post-registration (aligned) image
+            output_path: Path to save visualization PNG
+
+        Raises:
+            RuntimeError: If visualization generation fails
         """
-        # Optional: implement visualization similar to other registration steps
-        logger.debug("Visualization not yet implemented for longitudinal registration")
-        pass
+        try:
+            import matplotlib
+            matplotlib.use('Agg')  # Headless rendering
+            import matplotlib.pyplot as plt
+            import nibabel as nib
+            import numpy as np
+
+            # Load images
+            logger.debug(f"Loading images for visualization")
+            reference_img = nib.load(str(reference_path))
+            pre_reg_img = nib.load(str(pre_registration_path))
+            post_reg_img = nib.load(str(post_registration_path))
+
+            reference_data = reference_img.get_fdata()
+            pre_reg_data = pre_reg_img.get_fdata()
+            post_reg_data = post_reg_img.get_fdata()
+
+            # Get middle slices for each view
+            shape = reference_data.shape
+            axial_slice = shape[2] // 2
+            sagittal_slice = shape[0] // 2
+            coronal_slice = shape[1] // 2
+
+            # Create figure with 3 rows × 2 columns
+            fig, axes = plt.subplots(3, 2, figsize=(12, 18))
+
+            # Define views and slices
+            views = [
+                ("Axial",
+                 reference_data[:, :, axial_slice],
+                 pre_reg_data[:, :, axial_slice],
+                 post_reg_data[:, :, axial_slice]),
+                ("Sagittal",
+                 reference_data[sagittal_slice, :, :],
+                 pre_reg_data[sagittal_slice, :, :],
+                 post_reg_data[sagittal_slice, :, :]),
+                ("Coronal",
+                 reference_data[:, coronal_slice, :],
+                 pre_reg_data[:, coronal_slice, :],
+                 post_reg_data[:, coronal_slice, :])
+            ]
+
+            for row, (view_name, ref_slice, pre_slice, post_slice) in enumerate(views):
+                # Column 0: Reference (target) volume
+                axes[row, 0].imshow(ref_slice.T, cmap='gray', origin='lower')
+                axes[row, 0].set_title(f'{view_name}: Reference (Target)', fontsize=10)
+                axes[row, 0].axis('off')
+
+                # Column 1: Overlay of pre-registration (jet) with post-registration (gray) on top
+                # First, show pre-registration in jet colormap
+                axes[row, 1].imshow(pre_slice.T, cmap='jet', origin='lower', alpha=1.0)
+                # Then overlay post-registration in grayscale with some transparency
+                axes[row, 1].imshow(post_slice.T, cmap='gray', origin='lower', alpha=0.6)
+                axes[row, 1].set_title(
+                    f'{view_name}: Pre-reg (jet) + Post-reg (gray overlay)',
+                    fontsize=10
+                )
+                axes[row, 1].axis('off')
+
+            # Add overall title
+            fig.suptitle(
+                f'Longitudinal Registration Comparison\n'
+                f'Reference: {reference_path.name}\n'
+                f'Moving: {pre_registration_path.name}',
+                fontsize=12,
+                y=0.995
+            )
+
+            # Adjust layout and save
+            plt.tight_layout(rect=[0, 0, 1, 0.99])
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            plt.savefig(output_path, dpi=150, bbox_inches='tight')
+            plt.close(fig)
+
+            logger.debug(f"Visualization saved: {output_path}")
+
+        except Exception as e:
+            logger.error(f"Visualization generation failed: {e}")
+            raise RuntimeError(f"Visualization generation failed: {e}") from e

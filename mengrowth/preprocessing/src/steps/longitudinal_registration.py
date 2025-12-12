@@ -10,6 +10,8 @@ from typing import Dict, Any, Optional, List
 from pathlib import Path
 import logging
 import yaml
+import shutil
+import tempfile
 
 from mengrowth.preprocessing.src.config import StepExecutionContext
 
@@ -277,6 +279,14 @@ def _execute_single_reference_registration(
             transform_dir.mkdir(parents=True, exist_ok=True)
             transform_path = transform_dir / f"{timestamp}_{modality}_to_ref.h5"
 
+            # Save pre-registration image for visualization
+            pre_registration_path = None
+            if config.save_visualization:
+                temp_file = tempfile.NamedTemporaryFile(suffix=".nii.gz", delete=False)
+                temp_file.close()
+                pre_registration_path = Path(temp_file.name)
+                shutil.copy(moving_path, pre_registration_path)
+
             try:
                 # Perform registration (implementation depends on registrator)
                 registrator.register_pair(
@@ -289,9 +299,24 @@ def _execute_single_reference_registration(
                 results["transforms"][f"{timestamp}_{modality}"] = str(transform_path)
                 logger.info(f"      ✓ {modality} registered")
 
+                # Generate visualization if enabled
+                if config.save_visualization and pre_registration_path:
+                    viz_output = viz_base / "longitudinal_registration" / f"{timestamp}_{modality}_to_ref.png"
+                    viz_output.parent.mkdir(parents=True, exist_ok=True)
+                    registrator.visualize(
+                        reference_path=reference_path,
+                        pre_registration_path=pre_registration_path,
+                        post_registration_path=moving_path,
+                        output_path=viz_output
+                    )
+
             except Exception as e:
                 logger.error(f"      ✗ Failed to register {modality}: {e}")
                 continue
+            finally:
+                # Clean up temporary pre-registration file
+                if pre_registration_path and pre_registration_path.exists():
+                    pre_registration_path.unlink()
 
         results["registered_studies"].append(study_dir.name)
 
@@ -361,6 +386,14 @@ def _execute_per_modality_registration(
             transform_dir.mkdir(parents=True, exist_ok=True)
             transform_path = transform_dir / f"{timestamp}_{modality}_to_ref_{modality}.h5"
 
+            # Save pre-registration image for visualization
+            pre_registration_path = None
+            if config.save_visualization:
+                temp_file = tempfile.NamedTemporaryFile(suffix=".nii.gz", delete=False)
+                temp_file.close()
+                pre_registration_path = Path(temp_file.name)
+                shutil.copy(moving_path, pre_registration_path)
+
             try:
                 # Perform registration
                 registrator.register_pair(
@@ -376,9 +409,24 @@ def _execute_per_modality_registration(
                 # Mark this study as having at least one successful registration
                 registered_studies_set.add(study_dir.name)
 
+                # Generate visualization if enabled
+                if config.save_visualization and pre_registration_path:
+                    viz_output = viz_base / "longitudinal_registration" / f"{timestamp}_{modality}_to_ref_{modality}.png"
+                    viz_output.parent.mkdir(parents=True, exist_ok=True)
+                    registrator.visualize(
+                        reference_path=reference_path,
+                        pre_registration_path=pre_registration_path,
+                        post_registration_path=moving_path,
+                        output_path=viz_output
+                    )
+
             except Exception as e:
                 logger.error(f"      ✗ Failed: {e}")
                 continue
+            finally:
+                # Clean up temporary pre-registration file
+                if pre_registration_path and pre_registration_path.exists():
+                    pre_registration_path.unlink()
 
     # Convert set to list for results
     results["registered_studies"] = sorted(list(registered_studies_set))
