@@ -81,9 +81,11 @@ def execute(
         )
 
     # Step 2: Determine registration mode and reference modality/modalities
+    # Need to use output directory where preprocessed files are located
+    reference_output_dir = _get_study_output_dir(orchestrator, patient_id, reference_study_dir)
     mode, reference_modalities = _determine_registration_mode(
         config=config,
-        reference_study_dir=reference_study_dir,
+        reference_study_dir=reference_output_dir,
         modalities=orchestrator.config.modalities
     )
 
@@ -247,7 +249,9 @@ def _execute_single_reference_registration(
         config
     )
 
-    reference_path = reference_study_dir / f"{reference_modality}.nii.gz"
+    # Get output directory where preprocessed files are located
+    reference_output_dir = _get_study_output_dir(orchestrator, patient_id, reference_study_dir)
+    reference_path = reference_output_dir / f"{reference_modality}.nii.gz"
 
     # Register each non-reference study
     for study_dir in all_study_dirs:
@@ -322,6 +326,9 @@ def _execute_per_modality_registration(
         config
     )
 
+    # Get output directory where preprocessed files are located
+    reference_output_dir = _get_study_output_dir(orchestrator, patient_id, reference_study_dir)
+
     # Track which studies have been registered (at least one modality succeeded)
     registered_studies_set = set()
 
@@ -329,7 +336,7 @@ def _execute_per_modality_registration(
     for modality in reference_modalities:
         logger.info(f"    Processing modality: {modality}")
 
-        reference_path = reference_study_dir / f"{modality}.nii.gz"
+        reference_path = reference_output_dir / f"{modality}.nii.gz"
 
         if not reference_path.exists():
             logger.warning(f"      Reference {modality} not found - skipping")

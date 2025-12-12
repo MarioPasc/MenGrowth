@@ -113,6 +113,15 @@ def execute(
             mask_path.unlink()
             logger.debug("    Temporary brain mask deleted")
 
+        # Clean up any additional temporary files created by skull stripping libraries
+        # These can include _temp__temp_* pattern files and *_mask.nii.gz files
+        temp_pattern_files = list(study_output_dir.glob(f"_temp_*{modality}*.nii.gz"))
+        for temp_file in temp_pattern_files:
+            # Only remove files that match temporary skull stripping patterns
+            if temp_file != modality_path and temp_file.exists():
+                temp_file.unlink()
+                logger.debug(f"    Cleaned up temporary file: {temp_file.name}")
+
         logger.info(
             f"  {modality}: brain_volume={result['brain_volume_mm3']:.1f} mm³, "
             f"coverage={result['brain_coverage_percent']:.1f}%"
