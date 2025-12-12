@@ -1590,6 +1590,7 @@ class PreprocessingPipelineConfig:
         step_configs: Dictionary of step-specific configurations
         skull_stripping: Optional skull stripping configuration (top-level)
         intensity_normalization: Optional intensity normalization configuration (top-level)
+        longitudinal_registration: Optional longitudinal registration configuration (top-level)
     """
     steps: List[str] = field(default_factory=list)
     general_configuration: PipelineExecutionConfig = field(
@@ -1598,6 +1599,7 @@ class PreprocessingPipelineConfig:
     step_configs: Dict[str, Any] = field(default_factory=dict)
     skull_stripping: Optional[Dict[str, Any]] = None
     intensity_normalization: Optional[Dict[str, Any]] = None
+    longitudinal_registration: Optional[Dict[str, Any]] = None
 
     def __post_init__(self) -> None:
         """Validate and convert configuration."""
@@ -1610,6 +1612,8 @@ class PreprocessingPipelineConfig:
             self.step_configs['skull_stripping'] = self.skull_stripping
         if self.intensity_normalization:
             self.step_configs['intensity_normalization'] = self.intensity_normalization
+        if self.longitudinal_registration:
+            self.step_configs['longitudinal_registration'] = self.longitudinal_registration
 
         # Add steps and step_configs to general_configuration for orchestrator access
         self.general_configuration.steps = self.steps
