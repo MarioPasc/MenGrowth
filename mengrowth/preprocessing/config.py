@@ -441,12 +441,16 @@ def load_quality_analysis_config(config_path: Path) -> QualityAnalysisConfig:
         raise ValueError(f"Empty configuration file: {config_path}")
 
     # Extract quality_analysis section
-    if "quality_analysis" not in yaml_data:
+    if "quality_analysis" in yaml_data:
+        qa_dict = yaml_data["quality_analysis"]
+    elif "preprocessing" in yaml_data and "quality_analysis" in yaml_data["preprocessing"]:
+        qa_dict = yaml_data["preprocessing"]["quality_analysis"]
+    else:
         raise KeyError(
             "Missing required 'quality_analysis' section in configuration"
         )
 
-    qa_dict = yaml_data["quality_analysis"]
+
 
     # Validate required top-level fields
     required_fields = ["input_dir", "output_dir"]
