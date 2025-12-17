@@ -4,10 +4,10 @@
 quality_analysis:
   # Dataset paths
   # Input directory containing patient folders (MenGrowth-XXXX/MenGrowth-XXXX-YYY/*.nrrd or *.nii.gz)
-  input_dir: "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/raw/MenGrowth-2025"
+  input_dir: "/media/hddb/mario/results/mengrowth/preprocessed/MenGrowth-2025"
 
   # Output directory for analysis results (CSV, NPZ, JSON files)
-  output_dir: "/home/mpascual/PortableSSD/Meningiomas/MenGrowth/results/quality_analysis"
+  output_dir: "/media/hddb/mario/results/mengrowth/preprocessed/quality_analysis"
 
   # File format: "auto" (detect from extension), "nrrd", or "nifti"
   # Before preprocessing: .nrrd files
@@ -70,7 +70,7 @@ quality_analysis:
 
     # Figure settings
     figure:
-      dpi: 150
+      dpi: 300
       format: "png"  # "png", "pdf", "svg"
       width: 10  # inches
       height: 6  # inches
@@ -94,7 +94,7 @@ quality_analysis:
     save_per_patient_csv: true
 
     # Save intensity distributions and histograms to NPZ (NumPy compressed)
-    save_intensity_distributions_npz: true
+    save_intensity_distributions_npz: false
 
     # Save overall summary statistics to JSON
     save_summary_json: true
