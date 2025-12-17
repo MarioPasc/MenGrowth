@@ -13,7 +13,7 @@ preprocessing:
     enabled: true
 
     # Selection
-    patient_selector: "single"        # "single" | "all"
+    patient_selector: "all"        # "single" | "all"
     patient_id: "MenGrowth-0006"      # used only if patient_selector == "single"
 
     # I/O mode
