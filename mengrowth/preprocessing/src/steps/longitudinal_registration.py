@@ -299,6 +299,39 @@ def _execute_single_reference_registration(
                 results["transforms"][f"{timestamp}_{modality}"] = str(transform_path)
                 logger.info(f"      ✓ {modality} registered")
 
+                # Warp skull-strip mask if QC enabled and longitudinal Dice requested
+                if (orchestrator.qc_manager and
+                    orchestrator.qc_manager.config.metrics.mask_plausibility.longitudinal_dice):
+
+                    # Determine mask paths
+                    ref_mask_path = artifacts_base.parent / reference_study_dir.name / f"{modality}_brain_mask.nii.gz"
+                    moving_mask_path = artifacts_base.parent / study_dir.name / f"{modality}_brain_mask.nii.gz"
+
+                    if ref_mask_path.exists() and moving_mask_path.exists():
+                        # Create warped mask directory
+                        warped_mask_dir = transform_dir / "warped_masks"
+                        warped_mask_dir.mkdir(parents=True, exist_ok=True)
+                        warped_mask_path = warped_mask_dir / f"{timestamp}_{modality}_mask_warped.nii.gz"
+
+                        try:
+                            _warp_mask(
+                                mask_path=moving_mask_path,
+                                transform_path=transform_path,
+                                reference_path=reference_path,
+                                output_path=warped_mask_path
+                            )
+
+                            # Store warped mask paths for QC
+                            if "warped_masks" not in results:
+                                results["warped_masks"] = {}
+                            results["warped_masks"][f"{timestamp}_{modality}"] = {
+                                "ref_mask": ref_mask_path,
+                                "warped_mask": warped_mask_path
+                            }
+                            logger.info(f"      ✓ {modality} mask warped for QC")
+                        except Exception as e:
+                            logger.warning(f"      ! Failed to warp mask for {modality}: {e}")
+
                 # Generate visualization if enabled
                 if config.save_visualization and pre_registration_path:
                     # Save visualization in study-specific directory to match other steps
@@ -410,6 +443,39 @@ def _execute_per_modality_registration(
                 # Mark this study as having at least one successful registration
                 registered_studies_set.add(study_dir.name)
 
+                # Warp skull-strip mask if QC enabled and longitudinal Dice requested
+                if (orchestrator.qc_manager and
+                    orchestrator.qc_manager.config.metrics.mask_plausibility.longitudinal_dice):
+
+                    # Determine mask paths
+                    ref_mask_path = artifacts_base.parent / reference_study_dir.name / f"{modality}_brain_mask.nii.gz"
+                    moving_mask_path = artifacts_base.parent / study_dir.name / f"{modality}_brain_mask.nii.gz"
+
+                    if ref_mask_path.exists() and moving_mask_path.exists():
+                        # Create warped mask directory
+                        warped_mask_dir = transform_dir / "warped_masks"
+                        warped_mask_dir.mkdir(parents=True, exist_ok=True)
+                        warped_mask_path = warped_mask_dir / f"{timestamp}_{modality}_mask_warped.nii.gz"
+
+                        try:
+                            _warp_mask(
+                                mask_path=moving_mask_path,
+                                transform_path=transform_path,
+                                reference_path=reference_path,
+                                output_path=warped_mask_path
+                            )
+
+                            # Store warped mask paths for QC
+                            if "warped_masks" not in results:
+                                results["warped_masks"] = {}
+                            results["warped_masks"][f"{timestamp}_{modality}"] = {
+                                "ref_mask": ref_mask_path,
+                                "warped_mask": warped_mask_path
+                            }
+                            logger.info(f"      ✓ {modality} mask warped for QC")
+                        except Exception as e:
+                            logger.warning(f"      ! Failed to warp mask for {modality}: {e}")
+
                 # Generate visualization if enabled
                 if config.save_visualization and pre_registration_path:
                     # Save visualization in study-specific directory to match other steps
@@ -449,3 +515,35 @@ def _get_study_output_dir(orchestrator: Any, patient_id: str, study_dir: Path) -
         return Path(orchestrator.config.output_root) / patient_id / study_dir.name
     else:  # pipeline mode
         return study_dir
+
+
+def _warp_mask(
+    mask_path: Path,
+    transform_path: Path,
+    reference_path: Path,
+    output_path: Path
+) -> None:
+    """Warp binary mask using computed transform.
+
+    Uses nearest neighbor interpolation to preserve binary values.
+
+    Args:
+        mask_path: Path to moving mask
+        transform_path: Path to transform file (.h5)
+        reference_path: Path to reference image
+        output_path: Path to save warped mask
+    """
+    import SimpleITK as sitk
+
+    mask = sitk.ReadImage(str(mask_path))
+    reference = sitk.ReadImage(str(reference_path))
+    transform = sitk.ReadTransform(str(transform_path))
+
+    resampler = sitk.ResampleImageFilter()
+    resampler.SetReferenceImage(reference)
+    resampler.SetTransform(transform)
+    resampler.SetInterpolator(sitk.sitkNearestNeighbor)
+    resampler.SetDefaultPixelValue(0)
+
+    warped_mask = resampler.Execute(mask)
+    sitk.WriteImage(warped_mask, str(output_path))

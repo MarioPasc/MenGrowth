@@ -1416,6 +1416,213 @@ class LongitudinalRegistrationStepConfig:
             )
 
 
+# ============================================================================
+# QC Metrics Configuration
+# ============================================================================
+
+@dataclass
+class QCGeometryMetricsConfig:
+    """Configuration for geometry/header consistency metrics.
+
+    Attributes:
+        enabled: Whether geometry metrics are enabled
+        check_orientation: Verify image orientation consistency
+        check_spacing: Validate voxel spacing
+        check_affine_det: Check affine determinant sign
+    """
+    enabled: bool = True
+    check_orientation: bool = True
+    check_spacing: bool = True
+    check_affine_det: bool = True
+
+
+@dataclass
+class QCRegistrationSimilarityConfig:
+    """Configuration for registration similarity metrics.
+
+    Attributes:
+        enabled: Whether registration similarity metrics are enabled
+        nmi_multimodal: Compute NMI for multi-modal registration
+        ncc_longitudinal: Compute NCC for longitudinal (same modality) registration
+        use_mask: Apply skull-stripped mask when computing similarity
+    """
+    enabled: bool = True
+    nmi_multimodal: bool = True
+    ncc_longitudinal: bool = True
+    use_mask: bool = True
+
+
+@dataclass
+class QCMaskPlausibilityConfig:
+    """Configuration for mask plausibility metrics.
+
+    Attributes:
+        enabled: Whether mask plausibility metrics are enabled
+        check_volume: Compute brain volume in cubic centimeters
+        boundary_gradient_score: Compute gradient score at mask boundary
+        longitudinal_dice: Compute Dice coefficient between warped longitudinal masks
+    """
+    enabled: bool = True
+    check_volume: bool = True
+    boundary_gradient_score: bool = True
+    longitudinal_dice: bool = True
+
+
+@dataclass
+class QCIntensityStabilityConfig:
+    """Configuration for intensity stability metrics.
+
+    Attributes:
+        enabled: Whether intensity stability metrics are enabled
+        median_iqr: Compute masked median and IQR
+        wasserstein_distance: Compute Wasserstein distance to reference distribution
+        reference_mode: How to compute reference distribution ("site_modality" or "global")
+        histogram_bins: Number of bins for histogram computation
+        histogram_range_percentiles: Percentile range for clipping intensities (low, high)
+    """
+    enabled: bool = True
+    median_iqr: bool = True
+    wasserstein_distance: bool = True
+    reference_mode: Literal["site_modality", "global"] = "site_modality"
+    histogram_bins: int = 256
+    histogram_range_percentiles: Tuple[float, float] = (0.5, 99.5)
+
+
+@dataclass
+class QCOutlierDetectionConfig:
+    """Configuration for outlier detection.
+
+    Attributes:
+        enabled: Whether outlier detection is enabled
+        method: Outlier detection method ("mad" for Median Absolute Deviation or "iqr")
+        mad_threshold: MAD threshold for outlier detection (typically 3.5)
+        iqr_multiplier: IQR multiplier for outlier detection (typically 3.0)
+    """
+    enabled: bool = True
+    method: Literal["mad", "iqr"] = "mad"
+    mad_threshold: float = 3.5
+    iqr_multiplier: float = 3.0
+
+
+@dataclass
+class QCOutputConfig:
+    """Configuration for QC output formats.
+
+    Attributes:
+        save_long_csv: Save tidy/long format CSV (one metric per row)
+        save_wide_csv: Save wide format CSV (one row per image)
+        save_summary_csv: Save summary CSV with aggregated stats and outlier flags
+        save_metadata_json: Save run metadata JSON with config snapshot
+    """
+    save_long_csv: bool = True
+    save_wide_csv: bool = True
+    save_summary_csv: bool = True
+    save_metadata_json: bool = True
+
+
+@dataclass
+class QCMetricsConfig:
+    """Configuration for all QC metric families.
+
+    Attributes:
+        geometry: Geometry/header consistency metrics configuration
+        registration_similarity: Registration similarity metrics configuration
+        mask_plausibility: Mask plausibility metrics configuration
+        intensity_stability: Intensity stability metrics configuration
+    """
+    geometry: QCGeometryMetricsConfig = field(default_factory=QCGeometryMetricsConfig)
+    registration_similarity: QCRegistrationSimilarityConfig = field(
+        default_factory=QCRegistrationSimilarityConfig
+    )
+    mask_plausibility: QCMaskPlausibilityConfig = field(
+        default_factory=QCMaskPlausibilityConfig
+    )
+    intensity_stability: QCIntensityStabilityConfig = field(
+        default_factory=QCIntensityStabilityConfig
+    )
+
+    def __post_init__(self) -> None:
+        """Convert dict to dataclass instances if needed."""
+        if isinstance(self.geometry, dict):
+            self.geometry = QCGeometryMetricsConfig(**self.geometry)
+        if isinstance(self.registration_similarity, dict):
+            self.registration_similarity = QCRegistrationSimilarityConfig(
+                **self.registration_similarity
+            )
+        if isinstance(self.mask_plausibility, dict):
+            self.mask_plausibility = QCMaskPlausibilityConfig(**self.mask_plausibility)
+        if isinstance(self.intensity_stability, dict):
+            self.intensity_stability = QCIntensityStabilityConfig(**self.intensity_stability)
+
+
+@dataclass
+class QCConfig:
+    """Main configuration for QC metrics collection.
+
+    This configuration enables lightweight, label-free quality control that runs
+    after specified preprocessing steps. QC is optional and designed to be cheap
+    via downsampling and masking.
+
+    Attributes:
+        enabled: Whether QC metrics collection is enabled
+        output_dir: Directory for QC outputs (CSVs, JSONs)
+        artifacts_dir: Directory for QC-specific artifacts
+        overwrite: Allow overwriting existing QC files
+        compute_after_steps: List of step names to trigger QC computation
+        downsample_to_mm: Downsample to this resolution for cheap computation (e.g., 2.0 mm)
+        max_voxels: Maximum voxels to process (for very large images)
+        random_seed: Seed for reproducible downsampling
+        mask_source: Mask source strategy
+        site_metadata: Optional path to YAML mapping patient_id -> site
+        outlier_detection: Outlier detection configuration
+        metrics: Metrics families configuration
+        outputs: Output formats configuration
+    """
+    enabled: bool = False
+    output_dir: str = ""
+    artifacts_dir: str = ""
+    overwrite: bool = True
+    compute_after_steps: List[str] = field(default_factory=list)
+    downsample_to_mm: float = 2.0
+    max_voxels: int = 250000
+    random_seed: int = 1234
+    mask_source: Literal["skullstrip_else_otsu", "skullstrip_only", "otsu_only", "none"] = (
+        "skullstrip_else_otsu"
+    )
+    site_metadata: Optional[str] = None
+
+    outlier_detection: QCOutlierDetectionConfig = field(default_factory=QCOutlierDetectionConfig)
+    metrics: QCMetricsConfig = field(default_factory=QCMetricsConfig)
+    outputs: QCOutputConfig = field(default_factory=QCOutputConfig)
+
+    def __post_init__(self) -> None:
+        """Validate QC configuration."""
+        if self.enabled:
+            # Validate required directories
+            if not self.output_dir:
+                raise ConfigurationError("qc_metrics.output_dir must be specified when enabled=True")
+            if not self.artifacts_dir:
+                raise ConfigurationError(
+                    "qc_metrics.artifacts_dir must be specified when enabled=True"
+                )
+
+            # Validate numeric parameters
+            if self.downsample_to_mm <= 0:
+                raise ConfigurationError(
+                    f"downsample_to_mm must be positive, got {self.downsample_to_mm}"
+                )
+            if self.max_voxels <= 0:
+                raise ConfigurationError(f"max_voxels must be positive, got {self.max_voxels}")
+
+        # Convert nested configs from dicts if needed
+        if isinstance(self.outlier_detection, dict):
+            self.outlier_detection = QCOutlierDetectionConfig(**self.outlier_detection)
+        if isinstance(self.metrics, dict):
+            self.metrics = QCMetricsConfig(**self.metrics)
+        if isinstance(self.outputs, dict):
+            self.outputs = QCOutputConfig(**self.outputs)
+
+
 @dataclass
 class PipelineExecutionConfig:
     """Configuration for the preprocessing pipeline execution.
@@ -1436,6 +1643,7 @@ class PipelineExecutionConfig:
         modalities: List of modalities to process
         steps: Ordered list of step names to execute
         step_configs: Dictionary mapping step patterns to their typed configurations
+        qc_metrics: QC metrics configuration
     """
     enabled: bool = True
     patient_selector: Literal["single", "all"] = "single"
@@ -1452,8 +1660,15 @@ class PipelineExecutionConfig:
     steps: List[str] = field(default_factory=list)
     step_configs: Dict[str, Any] = field(default_factory=dict)
 
+    # QC metrics configuration
+    qc_metrics: QCConfig = field(default_factory=QCConfig)
+
     def __post_init__(self) -> None:
         """Validate configuration and convert step configs to typed dataclasses."""
+        # Convert qc_metrics to QCConfig instance if needed
+        if isinstance(self.qc_metrics, dict):
+            self.qc_metrics = QCConfig(**self.qc_metrics)
+
         # Validate dynamic pipeline configuration if steps are provided
         if self.steps and self.step_configs:
             self._validate_dynamic_config()

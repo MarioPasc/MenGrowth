@@ -75,6 +75,14 @@ class PreprocessingOrchestrator:
         # State variables
         self.selected_reference_modality = None
 
+        # Initialize QC Manager if enabled
+        self.qc_manager = None
+        if config.qc_metrics.enabled:
+            site_map = self._load_site_map(config.qc_metrics.site_metadata)
+            from mengrowth.preprocessing.quality_analysis.qc_manager import QCManager
+            self.qc_manager = QCManager(config.qc_metrics, site_map=site_map)
+            self.logger.info("QC Manager initialized")
+
         self.logger.info("Preprocessing orchestrator initialized with dynamic pipeline execution")
 
     def _register_step_handlers(self) -> None:
@@ -102,6 +110,87 @@ class PreprocessingOrchestrator:
         self.step_registry.register("skull_stripping", skull_stripping.execute)
 
         self.logger.debug(f"Registered {len(self.step_registry.list_patterns())} step patterns")
+
+    def _load_site_map(self, yaml_path: Optional[str]) -> Dict[str, str]:
+        """Load optional site metadata YAML mapping patient_id -> site.
+
+        Args:
+            yaml_path: Path to YAML file with site metadata
+
+        Returns:
+            Dictionary mapping patient_id to site, empty if file not found
+        """
+        if not yaml_path or not Path(yaml_path).exists():
+            return {}
+
+        try:
+            import yaml
+            with open(yaml_path, 'r') as f:
+                return yaml.safe_load(f) or {}
+        except Exception as e:
+            self.logger.warning(f"Failed to load site metadata from {yaml_path}: {e}")
+            return {}
+
+    def _trigger_qc_if_needed(
+        self,
+        step_name: str,
+        context: 'StepExecutionContext',
+        result: Dict[str, Any]
+    ) -> None:
+        """Trigger QC metric collection if this step is configured for QC.
+
+        Args:
+            step_name: Name of completed step
+            context: Step execution context
+            result: Step execution result dict
+        """
+        if not self.qc_manager:
+            return
+
+        # Build case_metadata from context
+        case_metadata = {
+            "patient_id": context.patient_id,
+        }
+
+        # Add study_id if available
+        if context.study_dir:
+            case_metadata["study_id"] = context.study_dir.name
+
+        # Add modality if available
+        if context.modality:
+            case_metadata["modality"] = context.modality
+
+        # Check for is_longitudinal flag in result
+        if result and "reference_timestamp" in result:
+            case_metadata["is_longitudinal"] = True
+            case_metadata["reference_timestamp"] = result.get("reference_timestamp")
+
+        # Build image_paths
+        image_paths = {}
+        if context.paths:
+            # Try to find output path
+            output_file = context.paths.get("nifti") or context.paths.get("resampled")
+            if output_file and output_file.exists():
+                image_paths["output"] = output_file
+
+        # Build artifact_paths
+        artifact_paths = {}
+        if context.paths:
+            # Check for mask artifacts (from skull stripping)
+            mask_artifact = context.paths.get("mask_artifact")
+            if mask_artifact and mask_artifact.exists():
+                artifact_paths["mask"] = mask_artifact
+
+        # Call QCManager
+        try:
+            self.qc_manager.on_step_completed(
+                step_name=step_name,
+                case_metadata=case_metadata,
+                image_paths=image_paths,
+                artifact_paths=artifact_paths
+            )
+        except Exception as e:
+            self.logger.warning(f"QC trigger failed for {step_name}: {e}")
 
     def _get_component(self, component_type: str, config: Any) -> Any:
         """Get or create a component instance (lazy initialization).
@@ -716,6 +805,15 @@ class PreprocessingOrchestrator:
             self.logger.info(f"{'='*80}")
             self._execute_patient_level_steps(patient_id, study_dirs, patient_level_steps)
 
+        # PHASE 3: Finalize QC for this patient (if enabled)
+        if self.qc_manager:
+            try:
+                qc_outputs = self.qc_manager.finalize()
+                if qc_outputs:
+                    self.logger.info(f"\nQC finalized: {list(qc_outputs.keys())}")
+            except Exception as e:
+                self.logger.error(f"QC finalization failed: {e}", exc_info=True)
+
         # Summary
         self.logger.info(f"\n{'='*80}")
         self.logger.info(f"Patient {patient_id} processing complete:")
@@ -959,6 +1057,10 @@ class PreprocessingOrchestrator:
                 result = handler_func(context, total_steps, step_num)
                 # Store result for potential use by downstream steps
                 self._step_results[step_name] = result
+
+                # Trigger QC if enabled
+                self._trigger_qc_if_needed(step_name, context, result)
+
             except Exception as e:
                 self.logger.error(f"    Step '{step_name}' failed: {e}")
                 raise RuntimeError(f"Step '{step_name}' failed") from e
@@ -996,6 +1098,10 @@ class PreprocessingOrchestrator:
             try:
                 result = handler_func(context, total_steps=0, current_step_num=0)
                 self._step_results[step_name] = result
+
+                # Trigger QC if enabled
+                self._trigger_qc_if_needed(step_name, context, result)
+
             except Exception as e:
                 self.logger.error(f"  Study-level step '{step_name}' failed: {e}")
                 # Continue anyway - don't halt for study-level failures
@@ -1036,6 +1142,10 @@ class PreprocessingOrchestrator:
             try:
                 result = handler_func(context, total_steps=0, current_step_num=0)
                 self._step_results[step_name] = result
+
+                # Trigger QC if enabled
+                self._trigger_qc_if_needed(step_name, context, result)
+
                 self.logger.info(f"  ✓ {step_name} completed successfully")
             except Exception as e:
                 self.logger.error(f"  ✗ Patient-level step '{step_name}' failed: {e}")

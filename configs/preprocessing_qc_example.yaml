@@ -1,0 +1,151 @@
+# Example preprocessing configuration with QC metrics enabled
+# This file demonstrates how to enable lightweight, label-free QC for the preprocessing pipeline
+
+preprocessing:
+  enabled: true
+  patient_selector: "single"
+  patient_id: "MenGrowth-0015"
+  mode: "test"  # or "pipeline"
+
+  # Dataset paths (CHANGE THESE TO YOUR PATHS)
+  dataset_root: "/path/to/your/MenGrowth/raw/data"
+  output_root: "/path/to/your/MenGrowth/preprocessed/output"
+  preprocessing_artifacts_path: "/path/to/your/MenGrowth/preprocessed/artifacts"
+  viz_root: "/path/to/your/MenGrowth/preprocessed/viz"
+
+  overwrite: true
+  modalities: ["t1c", "t1n", "t2w", "t2f"]
+
+  # Preprocessing steps (example pipeline)
+  steps:
+    - "data_harmonization"
+    - "bias_field_correction_1"
+    - "resampling_1"
+    - "registration_static"
+    - "skull_stripping"
+    - "intensity_normalization_1"
+    - "longitudinal_registration"
+
+  # Step configurations (abbreviated - see full preprocessing.yaml for complete configs)
+  step_configs:
+    data_harmonization:
+      save_visualization: true
+      reorient_to: "RAS"
+      background_zeroing:
+        method: "border_connected_percentile"
+
+    bias_field_correction_1:
+      save_visualization: true
+      save_artifact: false
+      bias_field_correction:
+        method: "n4"
+
+    resampling_1:
+      save_visualization: true
+      resampling:
+        method: "bspline"
+        target_spacing: [1.0, 1.0, 1.0]
+
+    registration_static:
+      save_visualization: true
+      intra_study_to_reference:
+        method: "ants"
+        reference_modality: "t1c"
+      intra_study_to_atlas:
+        method: null  # Disable atlas registration
+
+    skull_stripping:
+      save_visualization: true
+      save_mask: true
+      skull_stripping:
+        method: "synthstrip"
+
+    intensity_normalization_1:
+      save_visualization: true
+      intensity_normalization:
+        method: "zscore"
+
+    longitudinal_registration:
+      save_visualization: true
+      longitudinal_registration:
+        method: "ants"
+        reference_modality_priority: "t1n > t1c > t2f > t2w"
+
+  # ============================================================================
+  # QC METRICS CONFIGURATION
+  # ============================================================================
+
+  qc_metrics:
+    # Enable QC metrics collection
+    enabled: true
+
+    # Output paths (CHANGE THESE TO YOUR PATHS)
+    output_dir: "/path/to/your/MenGrowth/preprocessed/qc"
+    artifacts_dir: "/path/to/your/MenGrowth/preprocessed/artifacts/qc"
+    overwrite: true
+
+    # Which preprocessing steps should trigger QC computation
+    compute_after_steps:
+      - "data_harmonization"
+      - "bias_field_correction"
+      - "resampling"
+      - "registration"
+      - "skull_stripping"
+      - "intensity_normalization"
+      - "longitudinal_registration"
+
+    # Computational efficiency settings
+    downsample_to_mm: 2.0            # Resample to 2mm for QC (not pipeline outputs)
+    max_voxels: 250000               # Cap sampled voxels for very large images
+    random_seed: 1234                # Reproducible downsampling
+    mask_source: "skullstrip_else_otsu"  # skullstrip_else_otsu | skullstrip_only | otsu_only | none
+
+    # Optional: Site metadata for site-specific reference distributions
+    # site_metadata: "/path/to/site_map.yaml"  # YAML with {patient_id: site}
+    site_metadata: null
+
+    # Outlier detection configuration
+    outlier_detection:
+      enabled: true
+      method: "mad"                  # "mad" (robust) or "iqr"
+      mad_threshold: 3.5             # Typical robust threshold
+      iqr_multiplier: 3.0            # Used if method is "iqr"
+
+    # Metric families (all enabled by default)
+    metrics:
+      # Geometry/header consistency checks
+      geometry:
+        enabled: true
+        check_orientation: true      # Verify RAS/LPS orientation
+        check_spacing: true           # Validate voxel spacing
+        check_affine_det: true        # Check affine determinant sign
+
+      # Registration similarity metrics
+      registration_similarity:
+        enabled: true
+        nmi_multimodal: true          # NMI for multi-modal registration
+        ncc_longitudinal: true        # NCC for longitudinal (same modality)
+        use_mask: true                # Apply skull-stripped mask
+
+      # Mask plausibility metrics
+      mask_plausibility:
+        enabled: true
+        check_volume: true            # Brain volume in cubic centimeters
+        boundary_gradient_score: true  # Gradient at mask boundary
+        longitudinal_dice: true       # Dice between warped masks
+
+      # Intensity stability metrics
+      intensity_stability:
+        enabled: true
+        median_iqr: true              # Robust central tendency
+        wasserstein_distance: true    # Distribution similarity
+        reference_mode: "site_modality"  # "site_modality" or "global"
+        histogram_bins: 256
+        histogram_range_percentiles: [0.5, 99.5]
+
+    # Output formats
+    outputs:
+      save_long_csv: true             # Tidy format (one metric per row)
+      save_wide_csv: true             # One row per image
+      save_summary_csv: true          # Aggregated stats + outlier flags
+      save_metadata_json: true        # Config snapshot, versions, timestamps
