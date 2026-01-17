@@ -27,6 +27,7 @@ from mengrowth.preprocessing.src.data_harmonization.io import NRRDtoNIfTIConvert
 from mengrowth.preprocessing.src.data_harmonization.orient import Reorienter
 from mengrowth.preprocessing.src.data_harmonization.head_masking.conservative import ConservativeBackgroundRemover
 from mengrowth.preprocessing.src.data_harmonization.head_masking.self import SELFBackgroundRemover
+from mengrowth.preprocessing.src.data_harmonization.head_masking.otsu_foreground import OtsuForegroundRemover
 from mengrowth.preprocessing.src.bias_field_correction.n4_sitk import N4BiasFieldCorrector
 from mengrowth.preprocessing.src.normalization.zscore import ZScoreNormalizer
 from mengrowth.preprocessing.src.normalization.kde import KDENormalizer
@@ -82,6 +83,19 @@ class PreprocessingOrchestrator:
             from mengrowth.preprocessing.quality_analysis.qc_manager import QCManager
             self.qc_manager = QCManager(config.qc_metrics, site_map=site_map)
             self.logger.info("QC Manager initialized")
+
+        # Initialize Checkpoint Manager if enabled
+        self.checkpoint_manager = None
+        checkpoint_config = getattr(config, 'checkpoints', None)
+        if checkpoint_config and checkpoint_config.get('enabled', False):
+            from mengrowth.preprocessing.src.checkpoint import CheckpointManager
+            checkpoint_dir = Path(checkpoint_config.get('checkpoint_dir', ''))
+            if checkpoint_dir:
+                self.checkpoint_manager = CheckpointManager(
+                    checkpoint_dir=checkpoint_dir,
+                    enabled=True
+                )
+                self.logger.info(f"Checkpoint Manager initialized: {checkpoint_dir}")
 
         self.logger.info("Preprocessing orchestrator initialized with dynamic pipeline execution")
 
@@ -262,6 +276,11 @@ class PreprocessingOrchestrator:
             )
         elif method == "self_head_mask":
             return SELFBackgroundRemover(
+                config=config.background_zeroing,
+                verbose=self.verbose
+            )
+        elif method == "otsu_foreground":
+            return OtsuForegroundRemover(
                 config=config.background_zeroing,
                 verbose=self.verbose
             )
@@ -1034,7 +1053,29 @@ class PreprocessingOrchestrator:
         """
         total_steps = len(steps)
 
+        # Capture baseline before first step (if QC enabled)
+        if self.qc_manager and total_steps > 0:
+            input_file = self._get_modality_file(study_dir, modality)
+            if input_file and input_file.exists():
+                case_metadata = {
+                    "patient_id": patient_id,
+                    "study_id": study_dir.name,
+                    "modality": modality,
+                }
+                try:
+                    self.qc_manager.capture_baseline(case_metadata, input_file)
+                except Exception as e:
+                    self.logger.warning(f"    Baseline capture failed for {modality}: {e}")
+
         for step_num, step_name in enumerate(steps, 1):
+            # Check if step can be skipped due to checkpoint
+            if self.checkpoint_manager:
+                if self.checkpoint_manager.is_step_completed(
+                    patient_id, study_dir.name, modality, step_name
+                ):
+                    self.logger.info(f"    [{step_num}/{total_steps}] {step_name} - skipped (checkpoint exists)")
+                    continue
+
             # Get step config
             step_config = self._get_step_config(step_name)
 
@@ -1060,6 +1101,19 @@ class PreprocessingOrchestrator:
 
                 # Trigger QC if enabled
                 self._trigger_qc_if_needed(step_name, context, result)
+
+                # Save checkpoint after successful step completion
+                if self.checkpoint_manager:
+                    output_path = paths.get("nifti") or paths.get("resampled")
+                    if output_path:
+                        self.checkpoint_manager.save_checkpoint(
+                            patient_id=patient_id,
+                            study_id=study_dir.name,
+                            modality=modality,
+                            step_name=step_name,
+                            output_path=output_path,
+                            metadata=result
+                        )
 
             except Exception as e:
                 self.logger.error(f"    Step '{step_name}' failed: {e}")
@@ -1145,6 +1199,13 @@ class PreprocessingOrchestrator:
 
                 # Trigger QC if enabled
                 self._trigger_qc_if_needed(step_name, context, result)
+
+                # Store warped masks info for longitudinal registration
+                if result and "warped_masks" in result and self.qc_manager:
+                    self.qc_manager.store_warped_masks_info(
+                        patient_id=patient_id,
+                        warped_masks=result["warped_masks"]
+                    )
 
                 self.logger.info(f"  ✓ {step_name} completed successfully")
             except Exception as e:

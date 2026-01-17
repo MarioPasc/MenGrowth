@@ -1,10 +1,13 @@
 preprocessing:
   # Pipeline step order
+  # NOTE: skull_stripping is now BEFORE registration_static
+  # This is the standard approach: skull stripping improves atlas registration quality
+  # by removing non-brain tissue that can interfere with metric computation
   steps: ["data_harmonization",
           "bias_field_correction",
           "resampling",
-          "registration_static",
           "skull_stripping",
+          "registration_static",
           "intensity_normalization",
           "longitudinal_registration"
           ]
@@ -37,7 +40,7 @@ preprocessing:
 
       # Background zeroing (conservative)
       background_zeroing:
-        method: null # "border_connected_percentile" | "self_head_mask" | null
+        method: null # "border_connected_percentile" | "self_head_mask" | "otsu_foreground" | null
 
         # if method == "border_connected_percentile"
         percentile_low: 2              # [0.1-2.0], conservative default
@@ -62,6 +65,15 @@ preprocessing:
         air_border_margin: 0           # Voxels to erode the air mask (MORE conservative - shrinks air region)
         expand_air_mask: 3             # Voxels to dilate the air mask (LESS conservative - expands air region)
         # Note: Use EITHER air_border_margin OR expand_air_mask, not both > 0
+
+        # if method == "otsu_foreground" - Otsu-based foreground extraction
+        # This method performs robust percentile scaling, Gaussian smoothing,
+        # Otsu thresholding, and connected component analysis to extract foreground
+        gaussian_sigma_px: 1.0         # Gaussian smoothing sigma in pixels
+        n_components_to_keep: 1        # Number of largest components to keep (usually 1 for brain)
+        relaxed_threshold_factor: 0.1  # Factor for including smaller components (0.0-1.0)
+        p_low: 1.0                     # Lower percentile for intensity scaling
+        p_high: 99.0                   # Upper percentile for intensity scaling
 
     bias_field_correction:
       save_visualization: true # Save visualization for bias field correction
@@ -214,7 +226,7 @@ preprocessing:
           # Output parameters
           interpolation: "BSpline"                       # "Linear" | "BSpline" | "NearestNeighbor"
 
-  skull_stripping:
+    skull_stripping:
       save_visualization: true      # Save visualization PNGs
       save_mask: true              # Save brain mask NIfTI to artifacts directory
 
@@ -230,8 +242,8 @@ preprocessing:
           # SynthStrip specific parameters (used if method == "synthstrip")
           synthstrip_border: 1     # Border parameter in mm
           synthstrip_device: 0     # GPU id (int) or "cpu" (str)
-          
-  intensity_normalization:
+
+    intensity_normalization:
       save_visualization: true # Save visualization for intensity normalization step
       intensity_normalization:
           method: fcm  # null | "zscore" | "kde" | "percentile_minmax" | "whitestripe" | "fcm" | "lsq"
@@ -255,7 +267,7 @@ preprocessing:
           error_threshold: 0.005
           fuzziness: 2.0
 
-  longitudinal_registration:
+    longitudinal_registration:
       # Enable/disable visualization generation for longitudinal registration
       # Generates PNG images showing registration quality across timestamps
       save_visualization: true
@@ -491,6 +503,119 @@ preprocessing:
           #   - Quality control and validation
           #   - Optimizing registration parameters
           save_detailed_registration_info: false
+
+          # Mask propagation settings (NEW)
+          # When enabled, warps the reference timestamp's brain mask to other timestamps
+          # This allows comparing independently computed masks vs propagated masks
+          # for QC purposes (Dice coefficient, volume consistency)
+          propagate_reference_mask: true
+
+          # Compute comparison metrics between independent and propagated masks
+          # Produces Dice coefficient, volume difference, and overlap metrics
+          # Results are included in QC report
+          compute_mask_comparison: true
+
+  # Per-step QC Metrics Configuration
+  # This is lightweight QC that runs DURING preprocessing (after specified steps)
+  # Different from quality_analysis which runs AFTER preprocessing on final outputs
+  qc_metrics:
+    enabled: true
+    output_dir: "/media/hddb/mario/results/mengrowth/preprocessed/qc"
+    artifacts_dir: "/media/hddb/mario/results/mengrowth/preprocessed/qc/artifacts"
+    overwrite: true
+
+    # Steps after which to compute QC metrics
+    compute_after_steps:
+      - "data_harmonization"
+      - "bias_field_correction"
+      - "resampling"
+      - "skull_stripping"
+      - "registration_static"
+      - "intensity_normalization"
+      - "longitudinal_registration"
+
+    # Downsampling for cheap QC computation
+    downsample_to_mm: 2.0    # Target resolution in mm for QC (reduces computation)
+    max_voxels: 250000       # Maximum voxels after downsampling
+    random_seed: 1234        # For reproducible downsampling
+
+    # Mask source for QC metrics
+    # Options: "skullstrip_else_otsu" | "skullstrip_only" | "otsu_only" | "none"
+    mask_source: "skullstrip_else_otsu"
+
+    # Outlier detection configuration
+    outlier_detection:
+      enabled: true
+      method: "mad"          # "mad" (Median Absolute Deviation) | "iqr"
+      mad_threshold: 3.5     # Threshold for MAD-based outlier detection
+      iqr_multiplier: 3.0    # Multiplier for IQR-based outlier detection
+
+    # Metric families
+    metrics:
+      # Geometry/header consistency checks
+      geometry:
+        enabled: true
+        check_orientation: true
+        check_spacing: true
+        check_affine_det: true
+
+      # Registration similarity (for registration steps)
+      registration_similarity:
+        enabled: true
+        nmi_multimodal: true        # NMI for multi-modal registration
+        ncc_longitudinal: true      # NCC for longitudinal registration
+        use_mask: true
+
+      # Mask plausibility checks
+      mask_plausibility:
+        enabled: true
+        check_volume: true
+        boundary_gradient_score: true
+        longitudinal_dice: true     # Compare masks across timestamps
+
+      # Intensity stability metrics
+      intensity_stability:
+        enabled: true
+        median_iqr: true
+        wasserstein_distance: true
+        reference_mode: "site_modality"  # "site_modality" | "global"
+        histogram_bins: 256
+        histogram_range_percentiles: [0.5, 99.5]
+
+      # SNR/CNR metrics (NEW)
+      snr_cnr:
+        enabled: true
+        background_percentile: 5.0   # Percentile for background detection
+        foreground_percentile: 75.0  # Percentile for foreground/signal detection
+        edge_erosion_iters: 3        # Erosion for Kaufman method
+        intensity_low_pct: 25.0      # Lower percentile for CNR region
+        intensity_mid_pct: 50.0      # Mid percentile for CNR
+        intensity_high_pct: 75.0     # Upper percentile for CNR region
+
+      # Baseline capture (NEW) - captures metrics before preprocessing
+      baseline:
+        enabled: true
+        capture_before_first_step: true
+        metrics_to_capture: ["geometry", "intensity", "snr_cnr"]
+
+      # Pre-vs-post comparison (NEW)
+      comparison:
+        enabled: true
+        compute_deltas: true         # Compute (post - baseline)
+        compute_ratios: true         # Compute (post / baseline)
+        flag_degradation_threshold_pct: 10.0  # Flag if quality degrades by >10%
+
+    # Output formats
+    outputs:
+      save_long_csv: true       # Tidy format (one metric per row)
+      save_wide_csv: true       # One row per image
+      save_summary_csv: true    # Aggregated stats with outlier flags
+      save_metadata_json: true  # Config snapshot and run metadata
+
+  # Checkpoint system configuration
+  checkpoints:
+    enabled: true
+    checkpoint_dir: "/media/hddb/mario/results/mengrowth/preprocessed/checkpoints"
 
   quality_analysis:
     # Input directory: Point this to your PREPROCESSED data output

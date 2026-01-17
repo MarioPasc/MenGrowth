@@ -163,10 +163,11 @@ class StepRegistry:
 class BackgroundZeroingConfig:
     """Configuration for background removal.
 
-    Supports three options:
+    Supports four options:
     - None: Skip background removal entirely
     - "border_connected_percentile": Conservative percentile-based approach
     - "self_head_mask": SELF algorithm for head-air separation
+    - "otsu_foreground": Otsu-based foreground extraction (robust, recommended)
 
     Attributes:
         method: Background removal method (None to skip)
@@ -191,12 +192,20 @@ class BackgroundZeroingConfig:
         close_iters: Number of iterations for final morphological smoothing (default: 1)
         connectivity: Connectivity structure: 1=6-conn, 2=18-conn, 3=26-conn (default: 2)
 
+        # Parameters for "otsu_foreground" - Otsu-based extraction
+        gaussian_sigma_px: Gaussian smoothing sigma in pixels (default: 1.0)
+        min_component_voxels: Minimum component size in voxels (default: 1000)
+        n_components_to_keep: Number of largest components to keep (default: 1)
+        relaxed_threshold_factor: Factor for secondary components threshold (default: 0.1)
+        p_low: Lower percentile for intensity scaling (default: 1.0)
+        p_high: Upper percentile for intensity scaling (default: 99.0)
+
         # Common parameters for controlling conservativeness
         air_border_margin: Voxels to erode air mask (MORE conservative - shrinks air) (default: 1)
         expand_air_mask: Voxels to dilate air mask (LESS conservative - expands air) (default: 0)
         Note: Use either air_border_margin OR expand_air_mask, not both > 0
     """
-    method: Optional[Literal["border_connected_percentile", "self_head_mask"]] = "border_connected_percentile"
+    method: Optional[Literal["border_connected_percentile", "self_head_mask", "otsu_foreground"]] = "border_connected_percentile"
 
     # Parameters for border_connected_percentile
     percentile_low: float = 0.7
@@ -218,6 +227,14 @@ class BackgroundZeroingConfig:
     close_iters: int = 1
     connectivity: int = 2
 
+    # Parameters for otsu_foreground
+    gaussian_sigma_px: float = 1.0
+    min_component_voxels: int = 1000
+    n_components_to_keep: int = 1
+    relaxed_threshold_factor: float = 0.1
+    p_low: float = 1.0
+    p_high: float = 99.0
+
     # Common parameters
     air_border_margin: int = 1
     expand_air_mask: int = 0
@@ -225,9 +242,10 @@ class BackgroundZeroingConfig:
     def __post_init__(self) -> None:
         """Validate configuration values."""
         # Validate method
-        if self.method is not None and self.method not in ["border_connected_percentile", "self_head_mask"]:
+        valid_methods = ["border_connected_percentile", "self_head_mask", "otsu_foreground"]
+        if self.method is not None and self.method not in valid_methods:
             raise ConfigurationError(
-                f"method must be None, 'border_connected_percentile', or 'self_head_mask', got {self.method}"
+                f"method must be None or one of {valid_methods}, got {self.method}"
             )
 
         # Skip validation if method is None (background removal disabled)
@@ -288,6 +306,37 @@ class BackgroundZeroingConfig:
             if self.connectivity not in [1, 2, 3]:
                 raise ConfigurationError(
                     f"connectivity must be 1, 2, or 3, got {self.connectivity}"
+                )
+
+        # Validate otsu_foreground parameters
+        if self.method == "otsu_foreground":
+            if self.gaussian_sigma_px < 0:
+                raise ConfigurationError(
+                    f"gaussian_sigma_px must be non-negative, got {self.gaussian_sigma_px}"
+                )
+            if self.min_component_voxels < 0:
+                raise ConfigurationError(
+                    f"min_component_voxels must be non-negative, got {self.min_component_voxels}"
+                )
+            if self.n_components_to_keep < 1:
+                raise ConfigurationError(
+                    f"n_components_to_keep must be >= 1, got {self.n_components_to_keep}"
+                )
+            if not 0.0 <= self.relaxed_threshold_factor <= 1.0:
+                raise ConfigurationError(
+                    f"relaxed_threshold_factor must be in [0.0, 1.0], got {self.relaxed_threshold_factor}"
+                )
+            if not 0.0 <= self.p_low <= 100.0:
+                raise ConfigurationError(
+                    f"p_low must be in [0.0, 100.0], got {self.p_low}"
+                )
+            if not 0.0 <= self.p_high <= 100.0:
+                raise ConfigurationError(
+                    f"p_high must be in [0.0, 100.0], got {self.p_high}"
+                )
+            if self.p_low >= self.p_high:
+                raise ConfigurationError(
+                    f"p_low ({self.p_low}) must be less than p_high ({self.p_high})"
                 )
 
         # Validate common parameters
@@ -1489,6 +1538,70 @@ class QCIntensityStabilityConfig:
 
 
 @dataclass
+class QCSNRCNRConfig:
+    """Configuration for SNR/CNR quality metrics.
+
+    SNR (Signal-to-Noise Ratio) and CNR (Contrast-to-Noise Ratio) provide
+    quantitative measures of image quality.
+
+    Attributes:
+        enabled: Whether SNR/CNR metrics are enabled
+        background_percentile: Percentile for background region detection (default: 5)
+        foreground_percentile: Percentile for foreground/signal detection (default: 75)
+        edge_erosion_iters: Erosion iterations for edge removal in Kaufman method (default: 3)
+        intensity_low_pct: Lower percentile for CNR region 1 (default: 25)
+        intensity_mid_pct: Mid percentile boundary for CNR (default: 50)
+        intensity_high_pct: Upper percentile for CNR region 2 (default: 75)
+    """
+    enabled: bool = True
+    background_percentile: float = 5.0
+    foreground_percentile: float = 75.0
+    edge_erosion_iters: int = 3
+    intensity_low_pct: float = 25.0
+    intensity_mid_pct: float = 50.0
+    intensity_high_pct: float = 75.0
+
+
+@dataclass
+class QCBaselineConfig:
+    """Configuration for baseline metrics capture.
+
+    Baseline metrics are captured before any preprocessing to enable
+    pre-vs-post comparison and track quality improvements/degradations.
+
+    Attributes:
+        enabled: Whether baseline capture is enabled
+        capture_before_first_step: Capture metrics before the first preprocessing step
+        metrics_to_capture: List of metric families to capture at baseline
+            Options: "geometry", "intensity", "snr_cnr"
+    """
+    enabled: bool = True
+    capture_before_first_step: bool = True
+    metrics_to_capture: List[str] = field(
+        default_factory=lambda: ["geometry", "intensity", "snr_cnr"]
+    )
+
+
+@dataclass
+class QCComparisonConfig:
+    """Configuration for pre-vs-post comparison metrics.
+
+    Compares baseline metrics to post-processing metrics to quantify
+    improvements or detect potential quality degradation.
+
+    Attributes:
+        enabled: Whether pre-post comparison is enabled
+        compute_deltas: Compute absolute differences (post - baseline)
+        compute_ratios: Compute ratios (post / baseline)
+        flag_degradation_threshold_pct: Flag if metric degrades by more than this percentage
+    """
+    enabled: bool = True
+    compute_deltas: bool = True
+    compute_ratios: bool = True
+    flag_degradation_threshold_pct: float = 10.0
+
+
+@dataclass
 class QCOutlierDetectionConfig:
     """Configuration for outlier detection.
 
@@ -1529,6 +1642,9 @@ class QCMetricsConfig:
         registration_similarity: Registration similarity metrics configuration
         mask_plausibility: Mask plausibility metrics configuration
         intensity_stability: Intensity stability metrics configuration
+        snr_cnr: SNR/CNR quality metrics configuration
+        baseline: Baseline metrics capture configuration
+        comparison: Pre-vs-post comparison configuration
     """
     geometry: QCGeometryMetricsConfig = field(default_factory=QCGeometryMetricsConfig)
     registration_similarity: QCRegistrationSimilarityConfig = field(
@@ -1540,6 +1656,9 @@ class QCMetricsConfig:
     intensity_stability: QCIntensityStabilityConfig = field(
         default_factory=QCIntensityStabilityConfig
     )
+    snr_cnr: QCSNRCNRConfig = field(default_factory=QCSNRCNRConfig)
+    baseline: QCBaselineConfig = field(default_factory=QCBaselineConfig)
+    comparison: QCComparisonConfig = field(default_factory=QCComparisonConfig)
 
     def __post_init__(self) -> None:
         """Convert dict to dataclass instances if needed."""
@@ -1553,6 +1672,12 @@ class QCMetricsConfig:
             self.mask_plausibility = QCMaskPlausibilityConfig(**self.mask_plausibility)
         if isinstance(self.intensity_stability, dict):
             self.intensity_stability = QCIntensityStabilityConfig(**self.intensity_stability)
+        if isinstance(self.snr_cnr, dict):
+            self.snr_cnr = QCSNRCNRConfig(**self.snr_cnr)
+        if isinstance(self.baseline, dict):
+            self.baseline = QCBaselineConfig(**self.baseline)
+        if isinstance(self.comparison, dict):
+            self.comparison = QCComparisonConfig(**self.comparison)
 
 
 @dataclass
@@ -1659,10 +1784,13 @@ class PipelineExecutionConfig:
     # Dynamic pipeline configuration
     steps: List[str] = field(default_factory=list)
     step_configs: Dict[str, Any] = field(default_factory=dict)
-    quality_analysis: Optional[Dict[str, Any]] = None 
+    quality_analysis: Optional[Dict[str, Any]] = None
 
     # QC metrics configuration
     qc_metrics: QCConfig = field(default_factory=QCConfig)
+
+    # Checkpoint configuration
+    checkpoints: Optional[Dict[str, Any]] = None
 
     def __post_init__(self) -> None:
         """Validate configuration and convert step configs to typed dataclasses."""

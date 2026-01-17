@@ -183,9 +183,38 @@ class N4BiasFieldCorrector(BaseBiasFieldCorrector):
                 f"final_convergence={final_conv:.6f}"
             )
 
+            # Compute bias field statistics for QC
+            bias_field_arr = sitk.GetArrayFromImage(bias_field)
+            image_arr = sitk.GetArrayFromImage(image_sitk)
+
+            # Compute statistics only in non-zero (brain) region
+            nonzero_mask = image_arr > 0
+            if np.any(nonzero_mask):
+                bias_in_brain = bias_field_arr[nonzero_mask]
+                # Mean deviation from 1.0 (ideal bias field value)
+                bias_field_magnitude_mean = float(np.mean(np.abs(bias_in_brain - 1.0)))
+                bias_field_range = float(np.max(bias_in_brain) - np.min(bias_in_brain))
+            else:
+                bias_field_magnitude_mean = 0.0
+                bias_field_range = 0.0
+
+            # Count total iterations across all levels
+            n_iterations_total = sum(
+                len(level_data) for level_data in monitor.level_data.values()
+            )
+
+            # Check if convergence was achieved (final convergence < threshold)
+            convergence_achieved = final_conv < self.convergence_threshold
+
             return {
                 "bias_field_path": bias_field_output_path,
-                "convergence_data": monitor.level_data
+                "convergence_data": monitor.level_data,
+                # QC-relevant intermediate metrics
+                "bias_field_magnitude_mean": bias_field_magnitude_mean,
+                "bias_field_range": bias_field_range,
+                "n_iterations_total": n_iterations_total,
+                "convergence_achieved": convergence_achieved,
+                "final_convergence_value": float(final_conv),
             }
 
         except Exception as e:

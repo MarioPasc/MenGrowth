@@ -4,6 +4,9 @@ This module implements a QCManager that:
 1. Accumulates QC metrics after specified preprocessing steps
 2. Performs two-pass Wasserstein distance computation
 3. Outputs tidy/wide CSVs and summary with outlier detection
+4. Captures baseline metrics before preprocessing
+5. Computes pre-vs-post comparisons for quality tracking
+6. Computes SNR/CNR metrics for image quality assessment
 """
 
 from pathlib import Path
@@ -18,6 +21,7 @@ from datetime import datetime
 from dataclasses import asdict
 
 from mengrowth.preprocessing.src.config import QCConfig
+from mengrowth.preprocessing.quality_analysis.snr_cnr_metrics import SNRCNRCalculator
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +66,25 @@ class QCManager:
         self.site_map = site_map or {}
         self.pipeline_run_id = str(uuid.uuid4())
         self._logger = logging.getLogger(__name__)
+
+        # Baseline metrics storage: key = "patient_id/study_id/modality"
+        self._baseline_metrics: Dict[str, Dict[str, Any]] = {}
+
+        # Warped mask storage for longitudinal comparison: key = patient_id
+        self._warped_masks_info: Dict[str, Dict[str, Dict[str, Any]]] = {}
+
+        # SNR/CNR calculator
+        self._snr_cnr_calculator: Optional[SNRCNRCalculator] = None
+        if config.metrics.snr_cnr.enabled:
+            snr_config = {
+                "background_percentile": config.metrics.snr_cnr.background_percentile,
+                "foreground_percentile": config.metrics.snr_cnr.foreground_percentile,
+                "edge_erosion_iters": config.metrics.snr_cnr.edge_erosion_iters,
+                "intensity_low_pct": config.metrics.snr_cnr.intensity_low_pct,
+                "intensity_mid_pct": config.metrics.snr_cnr.intensity_mid_pct,
+                "intensity_high_pct": config.metrics.snr_cnr.intensity_high_pct,
+            }
+            self._snr_cnr_calculator = SNRCNRCalculator(config=snr_config)
 
         # Create output directories
         Path(config.output_dir).mkdir(parents=True, exist_ok=True)
@@ -114,6 +137,230 @@ class QCManager:
             }
             self.metrics_accumulator.append(error_metrics)
 
+    def capture_baseline(
+        self,
+        case_metadata: Dict[str, Any],
+        image_path: Path
+    ) -> Dict[str, Any]:
+        """Capture baseline metrics before preprocessing begins.
+
+        This method should be called before the first preprocessing step
+        to establish a baseline for pre-vs-post comparison.
+
+        Args:
+            case_metadata: Dict with patient_id, study_id, modality, etc.
+            image_path: Path to the input image before any preprocessing
+
+        Returns:
+            Dict with captured baseline metrics
+        """
+        if not self.config.enabled or not self.config.metrics.baseline.enabled:
+            return {}
+
+        if not self.config.metrics.baseline.capture_before_first_step:
+            return {}
+
+        patient_id = case_metadata.get("patient_id", "unknown")
+        study_id = case_metadata.get("study_id", "unknown")
+        modality = case_metadata.get("modality", "unknown")
+
+        baseline_key = f"{patient_id}/{study_id}/{modality}"
+
+        if baseline_key in self._baseline_metrics:
+            self._logger.debug(f"Baseline already captured for {baseline_key}")
+            return self._baseline_metrics[baseline_key]
+
+        self._logger.info(f"Capturing baseline metrics for {baseline_key}")
+
+        try:
+            baseline = self._compute_baseline_metrics(image_path, case_metadata)
+            baseline["capture_timestamp"] = datetime.now().isoformat()
+            baseline["image_path"] = str(image_path)
+
+            self._baseline_metrics[baseline_key] = baseline
+
+            # Save baseline to artifacts directory
+            artifacts_dir = Path(self.config.artifacts_dir) / patient_id / study_id
+            artifacts_dir.mkdir(parents=True, exist_ok=True)
+            baseline_file = artifacts_dir / f"baseline_metrics_{modality}.json"
+            with open(baseline_file, 'w') as f:
+                json.dump(baseline, f, indent=2, default=str)
+
+            self._logger.debug(f"Baseline saved to {baseline_file}")
+            return baseline
+
+        except Exception as e:
+            self._logger.warning(f"Baseline capture failed for {baseline_key}: {e}")
+            return {}
+
+    def _compute_baseline_metrics(
+        self,
+        image_path: Path,
+        case_metadata: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Compute baseline metrics for an image.
+
+        Args:
+            image_path: Path to input image
+            case_metadata: Case metadata dict
+
+        Returns:
+            Dict with baseline metrics
+        """
+        from mengrowth.preprocessing.quality_analysis.qc_metrics import (
+            compute_geometry_metrics,
+            compute_intensity_stats_for_wasserstein,
+            downsample_image_for_qc
+        )
+
+        metrics: Dict[str, Any] = {
+            "patient_id": case_metadata.get("patient_id"),
+            "study_id": case_metadata.get("study_id"),
+            "modality": case_metadata.get("modality"),
+        }
+
+        if not image_path.exists():
+            metrics["status"] = "missing_input"
+            return metrics
+
+        image = sitk.ReadImage(str(image_path))
+        image_downsampled, downsample_factor = downsample_image_for_qc(
+            image,
+            target_mm=self.config.downsample_to_mm,
+            max_voxels=self.config.max_voxels,
+            seed=self.config.random_seed
+        )
+
+        metrics_to_capture = self.config.metrics.baseline.metrics_to_capture
+
+        # Geometry metrics
+        if "geometry" in metrics_to_capture and self.config.metrics.geometry.enabled:
+            geom = compute_geometry_metrics(image_downsampled, self.config.metrics.geometry)
+            for k, v in geom.items():
+                metrics[f"baseline_{k}"] = v
+
+        # Intensity metrics
+        if "intensity" in metrics_to_capture and self.config.metrics.intensity_stability.enabled:
+            intensity_metrics, _, _ = compute_intensity_stats_for_wasserstein(
+                image_downsampled,
+                mask=None,
+                config=self.config.metrics.intensity_stability
+            )
+            for k, v in intensity_metrics.items():
+                metrics[f"baseline_{k}"] = v
+
+        # SNR/CNR metrics
+        if "snr_cnr" in metrics_to_capture and self._snr_cnr_calculator is not None:
+            snr_cnr_metrics = self._snr_cnr_calculator.compute_all_metrics(image_downsampled)
+            for k, v in snr_cnr_metrics.items():
+                if not k.startswith("region_"):  # Skip verbose region stats
+                    metrics[f"baseline_{k}"] = v
+
+        metrics["status"] = "success"
+        return metrics
+
+    def compute_pre_post_comparison(
+        self,
+        step_name: str,
+        case_metadata: Dict[str, Any],
+        post_metrics: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Compare post-processing metrics to baseline.
+
+        Args:
+            step_name: Name of the completed step
+            case_metadata: Case metadata dict
+            post_metrics: Metrics computed after the step
+
+        Returns:
+            Dict with comparison metrics (deltas, ratios, flags)
+        """
+        if not self.config.enabled or not self.config.metrics.comparison.enabled:
+            return {}
+
+        patient_id = case_metadata.get("patient_id", "unknown")
+        study_id = case_metadata.get("study_id", "unknown")
+        modality = case_metadata.get("modality", "unknown")
+
+        baseline_key = f"{patient_id}/{study_id}/{modality}"
+        baseline = self._baseline_metrics.get(baseline_key)
+
+        if not baseline:
+            self._logger.debug(f"No baseline found for {baseline_key}, skipping comparison")
+            return {}
+
+        comparison: Dict[str, Any] = {
+            "step_name": step_name,
+            "comparison_type": "pre_post",
+        }
+
+        comparison_config = self.config.metrics.comparison
+
+        # Find matching metric pairs (baseline_X vs X)
+        for post_key, post_value in post_metrics.items():
+            if not isinstance(post_value, (int, float)) or post_value is None:
+                continue
+
+            # Skip internal/metadata keys
+            if post_key.startswith("_") or post_key in [
+                "pipeline_run_id", "step_name", "step_base", "timestamp",
+                "patient_id", "study_id", "modality", "status", "downsample_factor"
+            ]:
+                continue
+
+            baseline_key_name = f"baseline_{post_key}"
+            baseline_value = baseline.get(baseline_key_name)
+
+            if baseline_value is None or not isinstance(baseline_value, (int, float)):
+                continue
+
+            # Compute delta
+            if comparison_config.compute_deltas:
+                delta = post_value - baseline_value
+                comparison[f"{post_key}_delta"] = float(delta)
+
+            # Compute ratio
+            if comparison_config.compute_ratios and baseline_value != 0:
+                ratio = post_value / baseline_value
+                comparison[f"{post_key}_ratio"] = float(ratio)
+
+                # Flag significant degradation
+                # For SNR/CNR: lower is worse, so check if ratio < threshold
+                # For some metrics, interpretation depends on context
+                threshold_pct = comparison_config.flag_degradation_threshold_pct
+                if post_key in ["snr_background", "snr_foreground", "cnr_high_low"]:
+                    # Lower is worse for SNR/CNR
+                    if ratio < (1.0 - threshold_pct / 100.0):
+                        comparison[f"{post_key}_degraded"] = True
+                else:
+                    # Generic: flag large changes in either direction
+                    if abs(ratio - 1.0) > (threshold_pct / 100.0):
+                        comparison[f"{post_key}_changed"] = True
+
+        return comparison
+
+    def store_warped_masks_info(
+        self,
+        patient_id: str,
+        warped_masks: Dict[str, Dict[str, Any]]
+    ) -> None:
+        """Store warped mask information from longitudinal registration for later comparison.
+
+        Args:
+            patient_id: Patient identifier
+            warped_masks: Dict mapping "timestamp_modality" to {ref_mask, warped_mask} paths
+        """
+        if not self.config.enabled:
+            return
+
+        if not self.config.metrics.mask_plausibility.longitudinal_dice:
+            return
+
+        self._warped_masks_info[patient_id] = warped_masks
+        self._logger.debug(
+            f"Stored {len(warped_masks)} warped mask entries for {patient_id}"
+        )
+
     def finalize(self) -> Dict[str, Path]:
         """Finalize QC: compute references, Wasserstein distances, detect outliers, write outputs.
 
@@ -132,14 +379,161 @@ class QCManager:
         # Step 2: Compute Wasserstein distances
         self._compute_wasserstein_distances()
 
-        # Step 3: Detect outliers
+        # Step 3: Compute mask comparisons (longitudinal)
+        mask_comparison_results = self._compute_mask_comparisons()
+
+        # Step 4: Detect outliers
         self._detect_outliers()
 
-        # Step 4: Write outputs
+        # Step 5: Write outputs
         output_paths = self._write_outputs()
+
+        # Step 6: Write mask comparison results
+        if mask_comparison_results:
+            mask_output = self._write_mask_comparison_results(mask_comparison_results)
+            output_paths.update(mask_output)
+
+        # Step 7: Generate HTML report
+        html_report_path = self._generate_html_report(mask_comparison_results)
+        if html_report_path:
+            output_paths["html_report"] = html_report_path
 
         self._logger.info(f"QC finalization complete: {len(output_paths)} files written")
         return output_paths
+
+    def _compute_mask_comparisons(self) -> Dict[str, Dict[str, Any]]:
+        """Compute mask comparisons for all stored warped mask info.
+
+        Returns:
+            Dict mapping patient_id to comparison results
+        """
+        if not self._warped_masks_info:
+            return {}
+
+        if not self.config.metrics.mask_plausibility.longitudinal_dice:
+            return {}
+
+        from mengrowth.preprocessing.quality_analysis.mask_comparison import (
+            compute_all_mask_comparisons,
+            summarize_mask_comparisons
+        )
+
+        all_results: Dict[str, Dict[str, Any]] = {}
+
+        for patient_id, warped_masks in self._warped_masks_info.items():
+            self._logger.info(f"Computing mask comparisons for {patient_id}")
+
+            # Determine artifacts directory for this patient
+            artifacts_dir = Path(self.config.artifacts_dir).parent / patient_id
+
+            try:
+                comparisons = compute_all_mask_comparisons(
+                    warped_masks_info=warped_masks,
+                    artifacts_dir=artifacts_dir,
+                    output_dir=Path(self.config.artifacts_dir) / patient_id
+                )
+
+                summary = summarize_mask_comparisons(comparisons)
+
+                all_results[patient_id] = {
+                    "comparisons": comparisons,
+                    "summary": summary
+                }
+
+                self._logger.info(
+                    f"  {patient_id}: {summary.get('n_comparisons', 0)} comparisons, "
+                    f"mean Dice={summary.get('dice_mean', 'N/A'):.3f}"
+                    if summary.get('dice_mean') else f"  {patient_id}: no valid comparisons"
+                )
+
+            except Exception as e:
+                self._logger.warning(f"Mask comparison failed for {patient_id}: {e}")
+
+        return all_results
+
+    def _write_mask_comparison_results(
+        self,
+        results: Dict[str, Dict[str, Any]]
+    ) -> Dict[str, Path]:
+        """Write mask comparison results to files.
+
+        Args:
+            results: Dict from _compute_mask_comparisons
+
+        Returns:
+            Dict mapping output type to file path
+        """
+        output_paths = {}
+
+        # Aggregate all summaries into a single CSV
+        summary_rows = []
+        for patient_id, patient_results in results.items():
+            summary = patient_results.get("summary", {})
+            summary["patient_id"] = patient_id
+            summary_rows.append(summary)
+
+        if summary_rows:
+            import pandas as pd
+            df = pd.DataFrame(summary_rows)
+            summary_csv = Path(self.config.output_dir) / "mask_comparison_summary.csv"
+            df.to_csv(summary_csv, index=False)
+            output_paths["mask_comparison_summary"] = summary_csv
+            self._logger.info(f"Wrote mask comparison summary: {summary_csv}")
+
+        # Write detailed comparisons JSON
+        detailed_json = Path(self.config.output_dir) / "mask_comparisons_detailed.json"
+        with open(detailed_json, 'w') as f:
+            json.dump(results, f, indent=2, default=str)
+        output_paths["mask_comparisons_detailed"] = detailed_json
+        self._logger.info(f"Wrote detailed mask comparisons: {detailed_json}")
+
+        return output_paths
+
+    def _generate_html_report(
+        self,
+        mask_comparison_results: Optional[Dict[str, Any]] = None
+    ) -> Optional[Path]:
+        """Generate HTML QC report.
+
+        Args:
+            mask_comparison_results: Optional mask comparison results
+
+        Returns:
+            Path to HTML report if generated, None otherwise
+        """
+        try:
+            from mengrowth.preprocessing.quality_analysis.html_report import generate_qc_report
+
+            # Convert metrics to DataFrame
+            df = pd.DataFrame(self.metrics_accumulator)
+
+            # Remove internal columns
+            internal_cols = [c for c in df.columns if c.startswith("_")]
+            df = df.drop(columns=internal_cols, errors='ignore')
+
+            # Build summary
+            summary = {
+                "pipeline_run_id": self.pipeline_run_id,
+                "timestamp": datetime.now().isoformat(),
+                "n_records": len(self.metrics_accumulator),
+                "reference_groups": list(self.reference_histograms.keys()),
+            }
+
+            # Generate report
+            report_path = generate_qc_report(
+                metrics_df=df,
+                summary=summary,
+                mask_comparisons=mask_comparison_results,
+                output_dir=Path(self.config.output_dir),
+                title="MenGrowth Preprocessing QC Report"
+            )
+
+            self._logger.info(f"Generated HTML report: {report_path}")
+            return report_path
+
+        except Exception as e:
+            self._logger.warning(f"HTML report generation failed: {e}")
+            return None
 
     # =====================================================================
     # PRIVATE METHODS: Metric Computation
@@ -275,6 +669,32 @@ class QCManager:
                     metrics["_bin_edges"] = bin_edges  # Internal, not exported to CSV
             except Exception as e:
                 self._logger.warning(f"Intensity stability computation failed: {e}")
+
+        # 5. SNR/CNR metrics
+        if self._snr_cnr_calculator is not None:
+            try:
+                snr_cnr_metrics = self._snr_cnr_calculator.compute_all_metrics(
+                    image_downsampled,
+                    mask_downsampled
+                )
+                # Exclude verbose region stats from main metrics
+                for k, v in snr_cnr_metrics.items():
+                    if not k.startswith("region_"):
+                        metrics[k] = v
+            except Exception as e:
+                self._logger.warning(f"SNR/CNR computation failed: {e}")
+
+        # 6. Pre vs Post comparison
+        if self.config.metrics.comparison.enabled:
+            try:
+                comparison = self.compute_pre_post_comparison(
+                    step_name=step_name,
+                    case_metadata=case_metadata,
+                    post_metrics=metrics
+                )
+                metrics.update(comparison)
+            except Exception as e:
+                self._logger.warning(f"Pre-post comparison failed: {e}")
 
         metrics["status"] = "success"
         return metrics
