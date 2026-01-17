@@ -13,7 +13,7 @@ preprocessing:
     enabled: true
 
     # Selection
-    patient_selector: "single"        # "single" | "all"
+    patient_selector: "all"        # "single" | "all"
     patient_id: "MenGrowth-0006"      # used only if patient_selector == "single"
 
     # I/O mode
@@ -188,7 +188,7 @@ preprocessing:
           method: "ants"                                # "ants" | null (null to skip atlas registration)
           engine: "antspyx"                           # Optional: "nipype" (default) | "antspyx" - Registration engine to use
           save_detailed_registration_info: true       # Optional: Per-substep override for detailed diagnostics
-          atlas_path: "/media/hddb/mario/data/meningiomas/templates/T1.nii"       # Path to atlas template (must be set if method != null)
+          atlas_path: "/media/hddb/mario/data/meningiomas/mengrowth/templates/T1.nii"       # Path to atlas template (must be set if method != null)
 
           # Transform parameters (can specify multiple transforms)
           transforms: ["Rigid", "Affine"]               # List of transforms to apply sequentially
@@ -491,3 +491,54 @@ preprocessing:
           #   - Quality control and validation
           #   - Optimizing registration parameters
           save_detailed_registration_info: false
+
+  quality_analysis:
+    # Input directory: Point this to your PREPROCESSED data output
+    # If mode="test", use output_root. If mode="pipeline", use dataset_root.
+    input_dir: "/media/hddb/mario/results/mengrowth/preprocessed/MenGrowth-2025"
+    
+    # Output directory for QA reports and plots
+    output_dir: "/media/hddb/mario/results/mengrowth/preprocessed/qa_reports"
+
+    # File format to look for ("nifti" for preprocessed .nii.gz, "nrrd" for raw)
+    file_format: "nifti"
+
+    # Expected sequences to check for missing data
+    expected_sequences: ["t1c", "t1n", "t2w", "t2f"]
+
+    # Metrics to compute
+    metrics:
+      patient_statistics: true
+      missing_sequences: true
+      voxel_spacing: true
+      intensity_statistics: true
+      image_dimensions: true
+      acquisition_consistency: true
+      snr_estimation: true
+
+    # Outlier detection settings
+    outlier_detection:
+      enabled: true
+      method: "iqr"  # "iqr" or "zscore"
+      iqr_multiplier: 1.5
+      zscore_threshold: 3.0
+
+    # Visualization settings
+    visualization:
+      enabled: true
+      plots:
+        studies_per_patient_histogram: true
+        missing_sequences_heatmap: true
+        spacing_violin_plots: true
+        intensity_boxplots: true
+        dimension_consistency_scatter: true
+        snr_distribution: true
+      html_report:
+        enabled: true
+        title: "MenGrowth Preprocessing Quality Report"
+
+    # Output settings
+    output:
+      save_per_study_csv: true
+      save_per_patient_csv: true
+      save_summary_json: true

@@ -369,7 +369,7 @@ class OutputConfig:
 
     save_per_study_csv: bool = True
     save_per_patient_csv: bool = True
-    save_intensity_distributions_npz: bool = True
+    save_intensity_distributions_npz: bool = False
     save_summary_json: bool = True
     save_metadata: bool = True
 
@@ -441,12 +441,16 @@ def load_quality_analysis_config(config_path: Path) -> QualityAnalysisConfig:
         raise ValueError(f"Empty configuration file: {config_path}")
 
     # Extract quality_analysis section
-    if "quality_analysis" not in yaml_data:
+    if "quality_analysis" in yaml_data:
+        qa_dict = yaml_data["quality_analysis"]
+    elif "preprocessing" in yaml_data and "quality_analysis" in yaml_data["preprocessing"]:
+        qa_dict = yaml_data["preprocessing"]["quality_analysis"]
+    else:
         raise KeyError(
             "Missing required 'quality_analysis' section in configuration"
         )
 
-    qa_dict = yaml_data["quality_analysis"]
+
 
     # Validate required top-level fields
     required_fields = ["input_dir", "output_dir"]
@@ -530,7 +534,7 @@ def load_quality_analysis_config(config_path: Path) -> QualityAnalysisConfig:
         save_per_study_csv=output_dict.get("save_per_study_csv", True),
         save_per_patient_csv=output_dict.get("save_per_patient_csv", True),
         save_intensity_distributions_npz=output_dict.get(
-            "save_intensity_distributions_npz", True
+            "save_intensity_distributions_npz", False
         ),
         save_summary_json=output_dict.get("save_summary_json", True),
         save_metadata=output_dict.get("save_metadata", True),

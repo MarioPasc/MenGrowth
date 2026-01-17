@@ -1659,6 +1659,7 @@ class PipelineExecutionConfig:
     # Dynamic pipeline configuration
     steps: List[str] = field(default_factory=list)
     step_configs: Dict[str, Any] = field(default_factory=dict)
+    quality_analysis: Optional[Dict[str, Any]] = None 
 
     # QC metrics configuration
     qc_metrics: QCConfig = field(default_factory=QCConfig)
@@ -1821,6 +1822,7 @@ class PreprocessingPipelineConfig:
     skull_stripping: Optional[Dict[str, Any]] = None
     intensity_normalization: Optional[Dict[str, Any]] = None
     longitudinal_registration: Optional[Dict[str, Any]] = None
+    quality_analysis: Optional[Dict[str, Any]] = None
 
     def __post_init__(self) -> None:
         """Validate and convert configuration."""
@@ -1839,6 +1841,7 @@ class PreprocessingPipelineConfig:
         # Add steps and step_configs to general_configuration for orchestrator access
         self.general_configuration.steps = self.steps
         self.general_configuration.step_configs = self.step_configs
+        self.general_configuration.quality_analysis = self.quality_analysis  
 
         # Now validate the dynamic config
         if self.steps and self.step_configs:
