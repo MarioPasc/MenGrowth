@@ -1309,6 +1309,10 @@ class LongitudinalRegistrationConfig:
         write_composite_transform: Write composite transform file
         interpolation: Interpolation method
         save_detailed_registration_info: Save detailed diagnostics
+
+        # Mask propagation for QC
+        propagate_reference_mask: Warp reference brain mask to other timestamps
+        compute_mask_comparison: Compute Dice between independent and propagated masks
     """
     method: Optional[Literal["ants"]] = "ants"
     engine: Optional[Literal["nipype", "antspyx"]] = None
@@ -1338,6 +1342,10 @@ class LongitudinalRegistrationConfig:
     interpolation: str = "BSpline"
     save_detailed_registration_info: bool = False
     save_visualization: bool = True
+
+    # Mask propagation parameters (for QC)
+    propagate_reference_mask: bool = False
+    compute_mask_comparison: bool = False
 
     def __post_init__(self) -> None:
         """Validate configuration values."""
@@ -1941,6 +1949,9 @@ class PreprocessingPipelineConfig:
         skull_stripping: Optional skull stripping configuration (top-level)
         intensity_normalization: Optional intensity normalization configuration (top-level)
         longitudinal_registration: Optional longitudinal registration configuration (top-level)
+        quality_analysis: Optional quality analysis configuration
+        qc_metrics: Optional per-step QC metrics configuration
+        checkpoints: Optional checkpoint system configuration
     """
     steps: List[str] = field(default_factory=list)
     general_configuration: PipelineExecutionConfig = field(
@@ -1951,6 +1962,8 @@ class PreprocessingPipelineConfig:
     intensity_normalization: Optional[Dict[str, Any]] = None
     longitudinal_registration: Optional[Dict[str, Any]] = None
     quality_analysis: Optional[Dict[str, Any]] = None
+    qc_metrics: Optional[Dict[str, Any]] = None
+    checkpoints: Optional[Dict[str, Any]] = None
 
     def __post_init__(self) -> None:
         """Validate and convert configuration."""
@@ -1969,7 +1982,18 @@ class PreprocessingPipelineConfig:
         # Add steps and step_configs to general_configuration for orchestrator access
         self.general_configuration.steps = self.steps
         self.general_configuration.step_configs = self.step_configs
-        self.general_configuration.quality_analysis = self.quality_analysis  
+        self.general_configuration.quality_analysis = self.quality_analysis
+
+        # Convert qc_metrics dict to QCConfig if provided at this level
+        if self.qc_metrics:
+            if isinstance(self.qc_metrics, dict):
+                self.general_configuration.qc_metrics = QCConfig(**self.qc_metrics)
+            else:
+                self.general_configuration.qc_metrics = self.qc_metrics
+
+        # Pass checkpoints config (kept as dict for flexibility)
+        if self.checkpoints:
+            self.general_configuration.checkpoints = self.checkpoints
 
         # Now validate the dynamic config
         if self.steps and self.step_configs:
