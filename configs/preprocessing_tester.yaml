@@ -3,6 +3,7 @@ preprocessing:
   steps: ["data_harmonization",
           "bias_field_correction",
           "resampling",
+          "cubic_padding",
           "skull_stripping",
           "registration_static",
           "intensity_normalization",
@@ -157,6 +158,42 @@ preprocessing:
         max_mm_interpolator: 1.5
         max_mm_dl_method: 5.0
         resample_mm_to_interpolator_if_max_mm_dl_method: 3.5
+
+    # ============================================================================
+    # Cubic Padding: Zero-pad volumes to cubic shape for registration stability
+    # ============================================================================
+    # This step normalizes the field-of-view (FOV) across all modalities by:
+    # 1. Finding the maximum dimension across all modalities in the study
+    # 2. Padding each modality to a cube of that size
+    # 3. Using symmetric padding (brain centered)
+    # 4. Fill value = minimum intensity of each image
+    #
+    # Scientific rationale:
+    # - Reduces boundary artifacts during registration transforms
+    # - Prevents edge clipping during affine rotations/translations
+    # - Normalizes FOV across T1, T2, FLAIR (which often have different FOV)
+    cubic_padding:
+      save_visualization: true  # Save before/after comparison PNGs
+
+      cubic_padding:
+        # Padding method
+        # - "symmetric": Center the brain with equal padding on both sides
+        # - null: Skip cubic padding
+        method: "symmetric"
+
+        # How to determine the fill value for padded regions
+        # - "min": Use minimum intensity of each image (recommended)
+        #          This matches the background/air signal level
+        # - "zero": Always use 0 (may create intensity discontinuities)
+        fill_value_mode: "min"
+
+        # How to determine the target cubic size
+        # - "max_across_modalities": Use the maximum dimension found across
+        #                            all modalities in the study (recommended)
+        #                            Ensures consistent FOV for registration
+        # - "max_per_modality": Pad each image to its own maximum dimension
+        #                       (results in different FOV per modality)
+        target_shape_mode: "max_across_modalities"
 
     registration_static:
         save_visualization: true  # One PNG per modality
@@ -561,6 +598,7 @@ preprocessing:
       - "data_harmonization"
       - "bias_field_correction"
       - "resampling"
+      - "cubic_padding"
       - "skull_stripping"
       - "registration_static"
       - "intensity_normalization"

@@ -52,6 +52,10 @@ STEP_METADATA: Dict[str, StepMetadata] = {
         level="modality",
         description="Isotropic resampling (bspline, eclare, composite)"
     ),
+    "cubic_padding": StepMetadata(
+        level="study",
+        description="Zero-pad volumes to cubic shape for registration stability"
+    ),
     "longitudinal_registration": StepMetadata(
         level="patient",
         description="Longitudinal registration across patient timestamps"
@@ -705,6 +709,63 @@ class ResamplingStepConfig:
 
 # Backwards compatibility alias
 Step2ResamplingConfig = ResamplingStepConfig
+
+
+@dataclass
+class CubicPaddingConfig:
+    """Configuration for cubic padding to normalize field-of-view.
+
+    This step pads volumes to a cubic shape before registration to:
+    - Normalize FOV across different sequences (T1, T2, FLAIR)
+    - Reduce boundary artifacts during registration transforms
+    - Prevent edge clipping during affine rotations/translations
+
+    Attributes:
+        method: Padding method ("symmetric" or None to skip)
+            - "symmetric": Center the brain with equal padding on both sides
+        fill_value_mode: How to determine the fill value for padding
+            - "min": Use the minimum intensity value of each image (recommended)
+            - "zero": Always use 0
+        target_shape_mode: How to determine the target cubic size
+            - "max_across_modalities": Use max dimension across all modalities in study
+            - "max_per_modality": Use max dimension of each individual image
+    """
+    method: Optional[Literal["symmetric"]] = "symmetric"
+    fill_value_mode: Literal["min", "zero"] = "min"
+    target_shape_mode: Literal["max_across_modalities", "max_per_modality"] = "max_across_modalities"
+
+    def __post_init__(self) -> None:
+        """Validate configuration values."""
+        if self.method is not None and self.method not in ["symmetric"]:
+            raise ConfigurationError(
+                f"method must be None or 'symmetric', got {self.method}"
+            )
+        if self.fill_value_mode not in ["min", "zero"]:
+            raise ConfigurationError(
+                f"fill_value_mode must be 'min' or 'zero', got {self.fill_value_mode}"
+            )
+        if self.target_shape_mode not in ["max_across_modalities", "max_per_modality"]:
+            raise ConfigurationError(
+                f"target_shape_mode must be 'max_across_modalities' or 'max_per_modality', "
+                f"got {self.target_shape_mode}"
+            )
+
+
+@dataclass
+class CubicPaddingStepConfig:
+    """Configuration for cubic padding step.
+
+    Attributes:
+        save_visualization: Whether to save visualization outputs
+        cubic_padding: Configuration for padding method
+    """
+    save_visualization: bool = True
+    cubic_padding: CubicPaddingConfig = field(default_factory=CubicPaddingConfig)
+
+    def __post_init__(self) -> None:
+        """Ensure cubic_padding is a CubicPaddingConfig instance."""
+        if isinstance(self.cubic_padding, dict):
+            self.cubic_padding = CubicPaddingConfig(**self.cubic_padding)
 
 
 @dataclass
@@ -1925,6 +1986,7 @@ class PipelineExecutionConfig:
             "data_harmonization": DataHarmonizationStepConfig,
             "bias_field_correction": BiasFieldCorrectionStepConfig,
             "resampling": ResamplingStepConfig,
+            "cubic_padding": CubicPaddingStepConfig,
             "longitudinal_registration": LongitudinalRegistrationStepConfig,
             "registration": RegistrationStepConfig,
             "skull_stripping": SkullStrippingStepConfig,
