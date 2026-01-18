@@ -110,6 +110,7 @@ class PreprocessingOrchestrator:
             bias_field_correction,
             intensity_normalization,
             resampling,
+            cubic_padding,
             registration,
             skull_stripping,
             longitudinal_registration
@@ -119,6 +120,7 @@ class PreprocessingOrchestrator:
         self.step_registry.register("bias_field_correction", bias_field_correction.execute)
         self.step_registry.register("intensity_normalization", intensity_normalization.execute)
         self.step_registry.register("resampling", resampling.execute)
+        self.step_registry.register("cubic_padding", cubic_padding.execute)
         self.step_registry.register("longitudinal_registration", longitudinal_registration.execute)
         self.step_registry.register("registration", registration.execute)
         self.step_registry.register("skull_stripping", skull_stripping.execute)
