@@ -1945,6 +1945,7 @@ class PipelineExecutionConfig:
         registry.register("bias_field_correction", lambda: None)
         registry.register("intensity_normalization", lambda: None)
         registry.register("resampling", lambda: None)
+        registry.register("cubic_padding", lambda: None)
         registry.register("longitudinal_registration", lambda: None)
         registry.register("registration", lambda: None)
         registry.register("skull_stripping", lambda: None)

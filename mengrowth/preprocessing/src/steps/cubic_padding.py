@@ -222,6 +222,8 @@ def _visualize_padding(
     - Row 2: Sagittal view (original vs padded)
     - Row 3: Coronal view (original vs padded)
 
+    Shows voxel dimensions prominently on each panel.
+
     Args:
         original_path: Path to original image
         padded_path: Path to padded image
@@ -247,19 +249,19 @@ def _visualize_padding(
             padded_data = padded_data[..., 0]
 
         # Create figure
-        fig, axes = plt.subplots(3, 2, figsize=(12, 14))
+        fig, axes = plt.subplots(3, 2, figsize=(14, 16))
 
         # Compute display range (excluding fill value for better contrast)
         vmin = np.percentile(orig_data[orig_data > fill_value + 1], 1) if np.any(orig_data > fill_value + 1) else np.min(orig_data)
         vmax = np.percentile(orig_data[orig_data > fill_value + 1], 99) if np.any(orig_data > fill_value + 1) else np.max(orig_data)
 
         views = [
-            ("Axial", 2),     # Slice along z-axis
-            ("Sagittal", 0),  # Slice along x-axis
-            ("Coronal", 1),   # Slice along y-axis
+            ("Axial (Z)", 2, (0, 1)),     # Slice along z-axis, shows X×Y
+            ("Sagittal (X)", 0, (1, 2)),  # Slice along x-axis, shows Y×Z
+            ("Coronal (Y)", 1, (0, 2)),   # Slice along y-axis, shows X×Z
         ]
 
-        for row, (view_name, axis) in enumerate(views):
+        for row, (view_name, axis, dims) in enumerate(views):
             # Get middle slices
             orig_slice_idx = orig_data.shape[axis] // 2
             padded_slice_idx = padded_data.shape[axis] // 2
@@ -268,39 +270,81 @@ def _visualize_padding(
             if axis == 0:
                 orig_slice = orig_data[orig_slice_idx, :, :]
                 padded_slice = padded_data[padded_slice_idx, :, :]
+                orig_dims = (original_shape[1], original_shape[2])
+                pad_dims = (padded_shape[1], padded_shape[2])
+                dim_labels = ("Y", "Z")
             elif axis == 1:
                 orig_slice = orig_data[:, orig_slice_idx, :]
                 padded_slice = padded_data[:, padded_slice_idx, :]
+                orig_dims = (original_shape[0], original_shape[2])
+                pad_dims = (padded_shape[0], padded_shape[2])
+                dim_labels = ("X", "Z")
             else:
                 orig_slice = orig_data[:, :, orig_slice_idx]
                 padded_slice = padded_data[:, :, padded_slice_idx]
+                orig_dims = (original_shape[0], original_shape[1])
+                pad_dims = (padded_shape[0], padded_shape[1])
+                dim_labels = ("X", "Y")
 
             # Plot original
             axes[row, 0].imshow(orig_slice.T, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
-            axes[row, 0].set_title(f'{view_name}: Original\n{orig_data.shape}', fontsize=10)
-            axes[row, 0].axis('off')
+            axes[row, 0].set_title(
+                f'{view_name}: Original\n'
+                f'{dim_labels[0]}={orig_dims[0]} × {dim_labels[1]}={orig_dims[1]} voxels',
+                fontsize=11, fontweight='bold'
+            )
+            axes[row, 0].set_xlabel(f'{dim_labels[0]} ({orig_dims[0]} vox)', fontsize=9)
+            axes[row, 0].set_ylabel(f'{dim_labels[1]} ({orig_dims[1]} vox)', fontsize=9)
+            axes[row, 0].tick_params(labelbottom=False, labelleft=False)
 
-            # Plot padded
+            # Plot padded with boundary rectangle
             axes[row, 1].imshow(padded_slice.T, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
-            axes[row, 1].set_title(f'{view_name}: Padded\n{padded_data.shape}', fontsize=10)
-            axes[row, 1].axis('off')
+            axes[row, 1].set_title(
+                f'{view_name}: Padded\n'
+                f'{dim_labels[0]}={pad_dims[0]} × {dim_labels[1]}={pad_dims[1]} voxels',
+                fontsize=11, fontweight='bold'
+            )
+            axes[row, 1].set_xlabel(f'{dim_labels[0]} ({pad_dims[0]} vox)', fontsize=9)
+            axes[row, 1].set_ylabel(f'{dim_labels[1]} ({pad_dims[1]} vox)', fontsize=9)
+            axes[row, 1].tick_params(labelbottom=False, labelleft=False)
 
-            # Draw padding boundary on padded image
-            # The padding creates a border that we can highlight
-            pad_before = [padding[0][0], padding[1][0], padding[2][0]]
-            pad_after = [padded_data.shape[0] - padding[0][1],
-                        padded_data.shape[1] - padding[1][1],
-                        padded_data.shape[2] - padding[2][1]]
+            # Draw rectangle showing original content boundary within padded image
+            if axis == 0:
+                pad_x, pad_y = padding[1][0], padding[2][0]
+                width, height = original_shape[1], original_shape[2]
+            elif axis == 1:
+                pad_x, pad_y = padding[0][0], padding[2][0]
+                width, height = original_shape[0], original_shape[2]
+            else:
+                pad_x, pad_y = padding[0][0], padding[1][0]
+                width, height = original_shape[0], original_shape[1]
 
-        # Add title and info
+            from matplotlib.patches import Rectangle
+            rect = Rectangle(
+                (pad_x - 0.5, pad_y - 0.5), width, height,
+                linewidth=2, edgecolor='cyan', facecolor='none',
+                linestyle='--', label='Original extent'
+            )
+            axes[row, 1].add_patch(rect)
+
+        # Add main title with comprehensive info
+        total_pad_voxels = sum(p[0] + p[1] for p in padding)
         fig.suptitle(
-            f'Cubic Padding: {modality}\n'
-            f'{original_shape} → {padded_shape}\n'
-            f'Padding: X={padding[0]}, Y={padding[1]}, Z={padding[2]}, Fill={fill_value:.2f}',
+            f'Cubic Padding: {modality.upper()}\n'
+            f'Original: {original_shape[0]}×{original_shape[1]}×{original_shape[2]} voxels  →  '
+            f'Padded: {padded_shape[0]}×{padded_shape[1]}×{padded_shape[2]} voxels\n'
+            f'Padding per axis: X=({padding[0][0]},{padding[0][1]}), '
+            f'Y=({padding[1][0]},{padding[1][1]}), Z=({padding[2][0]},{padding[2][1]})  |  '
+            f'Fill value: {fill_value:.2f}',
             fontsize=12, y=0.98
         )
 
-        plt.tight_layout(rect=[0, 0, 1, 0.94])
+        # Add legend
+        from matplotlib.lines import Line2D
+        legend_elements = [Line2D([0], [0], color='cyan', linestyle='--', linewidth=2, label='Original extent')]
+        fig.legend(handles=legend_elements, loc='lower center', ncol=1, fontsize=10)
+
+        plt.tight_layout(rect=[0, 0.02, 1, 0.93])
 
         # Save
         output_path.parent.mkdir(parents=True, exist_ok=True)
