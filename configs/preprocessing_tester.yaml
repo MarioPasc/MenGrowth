@@ -3,11 +3,11 @@ preprocessing:
   steps: ["data_harmonization",
           "bias_field_correction",
           "resampling",
-          "registration_static",
           "skull_stripping",
-          "intensity_normalization"
+          "registration_static",
+          "intensity_normalization",
+          "longitudinal_registration"
           ]
-
   general_configuration:
     enabled: true
 
@@ -36,7 +36,7 @@ preprocessing:
 
       # Background zeroing (conservative)
       background_zeroing:
-        method: null # "border_connected_percentile" | "self_head_mask" | null
+        method: null # "border_connected_percentile" | "self_head_mask" | "otsu_foreground" | null
 
         # if method == "border_connected_percentile"
         percentile_low: 2              # [0.1-2.0], conservative default
@@ -61,6 +61,15 @@ preprocessing:
         air_border_margin: 0           # Voxels to erode the air mask (MORE conservative - shrinks air region)
         expand_air_mask: 3             # Voxels to dilate the air mask (LESS conservative - expands air region)
         # Note: Use EITHER air_border_margin OR expand_air_mask, not both > 0
+
+        # if method == "otsu_foreground" - Otsu-based foreground extraction
+        # This method performs robust percentile scaling, Gaussian smoothing,
+        # Otsu thresholding, and connected component analysis to extract foreground
+        gaussian_sigma_px: 1.0         # Gaussian smoothing sigma in pixels
+        n_components_to_keep: 1        # Number of largest components to keep (usually 1 for brain)
+        relaxed_threshold_factor: 0.1  # Factor for including smaller components (0.0-1.0)
+        p_low: 1.0                     # Lower percentile for intensity scaling
+        p_high: 99.0                   # Upper percentile for intensity scaling
 
     bias_field_correction:
       save_visualization: true # Save visualization for bias field correction
@@ -187,7 +196,7 @@ preprocessing:
           method: "ants"                                # "ants" | null (null to skip atlas registration)
           engine: "antspyx"                           # Optional: "nipype" (default) | "antspyx" - Registration engine to use
           save_detailed_registration_info: true       # Optional: Per-substep override for detailed diagnostics
-          atlas_path: "/media/mpascual/PortableSSD/Meningiomas/ATLAS/sri24_spm8/templates/T1.nii"       # Path to atlas template (must be set if method != null)
+          atlas_path: "/media/mpascual/PortableSSD/Meningiomas/ATLAS/sri24_spm8/templates/T1_brain.nii"  # Path to skull-stripped atlas template
 
           # Transform parameters (can specify multiple transforms)
           transforms: ["Rigid", "Affine"]               # List of transforms to apply sequentially
@@ -213,7 +222,7 @@ preprocessing:
           # Output parameters
           interpolation: "BSpline"                       # "Linear" | "BSpline" | "NearestNeighbor"
 
-  skull_stripping:
+    skull_stripping:
       save_visualization: true      # Save visualization PNGs
       save_mask: true              # Save brain mask NIfTI to artifacts directory
 
@@ -229,8 +238,8 @@ preprocessing:
           # SynthStrip specific parameters (used if method == "synthstrip")
           synthstrip_border: 1     # Border parameter in mm
           synthstrip_device: 0     # GPU id (int) or "cpu" (str)
-          
-  intensity_normalization:
+
+    intensity_normalization:
       save_visualization: true # Save visualization for intensity normalization step
       intensity_normalization:
           method: fcm  # null | "zscore" | "kde" | "percentile_minmax" | "whitestripe" | "fcm" | "lsq"
@@ -253,3 +262,440 @@ preprocessing:
           max_iter: 50
           error_threshold: 0.005
           fuzziness: 2.0
+
+    longitudinal_registration:
+      # Enable/disable visualization generation for longitudinal registration
+      # Generates PNG images showing registration quality across timestamps
+      save_visualization: true
+
+      longitudinal_registration:
+          # Registration method
+          # - "ants": Use ANTs (Advanced Normalization Tools) for registration
+          # - null: Skip longitudinal registration entirely
+          method: "ants"
+
+          # Registration engine backend
+          # - "antspyx": Use ANTsPy Python library (faster, recommended)
+          # - "nipype": Use Nipype wrapper around ANTs command-line tools
+          # - null: Use default engine (antspyx)
+          engine: "antspyx"
+
+          # Reference modality selection strategy
+          # This parameter determines HOW to perform longitudinal registration:
+          #
+          # Option 1: Priority string (e.g., "t1n > t1c > t2f > t2w")
+          #   - Single-reference mode
+          #   - Selects ONE reference modality from reference timestamp using priority
+          #   - Registers ALL modalities from other timestamps to that single reference
+          #   - Example: If ref_timestamp=000, ref_modality=t1n (highest priority available)
+          #     Then: 001-t1n → 000-t1n, 001-t1c → 000-t1n, 001-t2w → 000-t1n
+          #   - Use when: You want to align all sequences to one "master" reference
+          #
+          # Option 2: "per_modality"
+          #   - Per-modality mode
+          #   - Registers each modality type independently across timestamps
+          #   - Example: If ref_timestamp=000
+          #     Then: 001-t1n → 000-t1n, 001-t1c → 000-t1c, 001-t2w → 000-t2w
+          #   - Use when: You want to track changes in each sequence type separately
+          #   - Recommended for longitudinal analysis where each modality evolves independently
+          reference_modality_priority: "t1n > t1c > t2f > t2w"
+
+          # Path to YAML file mapping patient IDs to reference timestamps
+          # File format (configs/longitudinal_registration_matches.yaml):
+          #   MenGrowth-0006: 001   # Use timestamp 001 as reference for this patient
+          #   MenGrowth-0007: 002   # Use timestamp 002 as reference for this patient
+          #   MenGrowth-0008: 001
+          #   MenGrowth-0009: 000
+          #
+          # Behavior:
+          #   - If patient IS in file: Use specified timestamp as reference
+          #   - If patient NOT in file: Use default "000" as reference
+          #   - If file path is null: Use default "000" for all patients
+          #   - If reference timestamp doesn't exist for patient: Error raised
+          #
+          # The reference timestamp is the "fixed" image - all other timestamps
+          # will be registered (warped) to align with this reference.
+          reference_timestamp_per_study: "configs/longitudinal_registration_matches.yaml"
+
+          # ============================================================================
+          # Automatic Reference Selection (used when patient NOT in YAML override)
+          # ============================================================================
+          # When a patient is not found in reference_timestamp_per_study YAML,
+          # the system automatically selects the optimal reference using these settings.
+
+          # Selection method:
+          #   - "quality_based": Select based on image quality metrics (recommended)
+          #   - "first": Use first (earliest) timestamp
+          #   - "last": Use last (latest) timestamp
+          #   - "midpoint": Use middle timestamp chronologically
+          reference_selection_method: "quality_based"
+
+          # Quality metrics to evaluate (for quality_based method)
+          # Higher scores are better for all metrics
+          #   - snr_foreground: Signal-to-noise ratio (Kaufman method)
+          #   - cnr_high_low: Contrast-to-noise ratio between tissue regions
+          #   - boundary_gradient_score: Edge sharpness (lower blur = higher quality)
+          reference_selection_metrics:
+            - "snr_foreground"
+            - "cnr_high_low"
+            - "boundary_gradient_score"
+
+          # Tiebreaker: prefer earlier timestamps when quality scores are equal
+          # Rationale: Earlier scans may have less disease progression
+          reference_selection_prefer_earlier: true
+
+          # Jacobian determinant validation
+          # Validates that registration produces physically plausible deformations
+          reference_selection_validate_jacobian: true
+
+          # Maximum allowed mean |log(det(J))| for valid registration
+          # Lower threshold = stricter validation
+          # 0.5 is conservative; allows ~60% volume change on average
+          reference_selection_jacobian_threshold: 0.5
+
+          # Transform type(s) to apply during registration
+          # Can be a single transform or a list of transforms applied sequentially
+          #
+          # Single transform examples:
+          #   transform_type: "Rigid"     # Only rotation + translation
+          #   transform_type: "Affine"    # Rotation + translation + scaling + shearing
+          #   transform_type: "SyN"       # Symmetric diffeomorphic deformable registration
+          #
+          # Multiple transforms (applied in sequence):
+          #   transform_type: ["Rigid", "Affine"]  # First rigid, then refine with affine
+          #   transform_type: ["Rigid", "Affine", "SyN"]  # Linear then non-linear
+          #
+          # Recommendations:
+          #   - For longitudinal MRI (same patient): ["Rigid", "Affine"] (account for positioning + growth)
+          #   - For minimal change expected: ["Rigid"] (faster, prevents overfitting)
+          #   - For tumor growth tracking: ["Rigid", "Affine", "SyN"] (capture deformation)
+          transform_type: ["Rigid", "Affine"]
+
+          # Similarity metric for registration optimization
+          # Determines how well two images are aligned
+          #
+          # Options:
+          #   - "Mattes": Mattes mutual information (default, robust, good for multi-modal)
+          #   - "MI": Mutual information (classic, similar to Mattes)
+          #   - "CC": Cross-correlation (good for same-modality, same contrast)
+          #   - "MeanSquares": Mean squared difference (simple, for same-modality only)
+          #   - "Demons": Demons algorithm metric (for deformable registration)
+          #
+          # Recommendations:
+          #   - Same modality (t1n → t1n): "CC" or "Mattes"
+          #   - Multi-modal (t1c → t1n): "Mattes" or "MI"
+          #   - Longitudinal same sequence: "CC" (faster) or "Mattes" (more robust)
+          metric: "Mattes"
+
+          # Number of histogram bins for mutual information metrics
+          # Only used when metric is "Mattes" or "MI"
+          #
+          # Range: 8-128 (powers of 2 recommended: 32, 64, 128)
+          # - Lower (32): Faster, less precise, better for low SNR images
+          # - Higher (128): Slower, more precise, better for high quality images
+          # - Default (64): Good balance for most MRI data
+          metric_bins: 64
+
+          # Sampling strategy for metric evaluation
+          # Determines which voxels are used to compute the similarity metric
+          #
+          # Options:
+          #   - "Random": Randomly sample voxels (fast, good default)
+          #   - "Regular": Sample on a regular grid (deterministic, slower)
+          #   - "None": Use all voxels (slowest, most accurate, memory intensive)
+          #
+          # Recommendations:
+          #   - Fast registration: "Random" with low sampling_percentage (0.2-0.3)
+          #   - Accurate registration: "Random" with high sampling_percentage (0.5-1.0)
+          #   - Reproducible results: "Regular" (same voxels every time)
+          sampling_strategy: "Random"
+
+          # Percentage of voxels to sample for metric computation
+          # Only used when sampling_strategy is "Random" or "Regular"
+          #
+          # Range: 0.0-1.0
+          # - 0.1 (10%): Very fast, less accurate
+          # - 0.2-0.3: Good balance for quick iterations
+          # - 0.5 (50%): Default, good accuracy/speed tradeoff
+          # - 1.0 (100%): Use all voxels (equivalent to sampling_strategy="None")
+          #
+          # Higher values increase computation time but improve accuracy
+          sampling_percentage: 0.5
+
+          # Multi-resolution pyramid schedule: Iterations per level
+          # List of lists, one sublist per transform type
+          #
+          # Format: [[iters_transform1_level1, level2, level3, ...], [iters_transform2_level1, ...]]
+          # - Each level represents a coarser-to-finer resolution
+          # - Level 1 = coarsest (downsampled), Last level = finest (full resolution)
+          # - 0 iterations = skip this level
+          #
+          # For transform_type: ["Rigid", "Affine"], need 2 sublists:
+          #   number_of_iterations:   [[1000, 500, 250, 0],      [1000, 500, 250, 0]]
+          #                          └── Rigid iterations ──┘  └── Affine iterations ──┘
+          #
+          # Tuning:
+          #   - More iterations = more accurate but slower
+          #   - Coarse levels (early): Can use fewer iterations (fast rough alignment)
+          #   - Fine levels (later): Need more iterations (precise alignment)
+          #   - Typical: Start high (1000) at coarse, decrease at fine levels
+          number_of_iterations: [[1000, 500, 250, 0], [1000, 500, 250, 0]]
+
+          # Multi-resolution pyramid schedule: Shrink factors per level
+          # Downsampling factors for each resolution level
+          #
+          # Format: Same structure as number_of_iterations
+          # - Factor of 8 = downsample by 8x (very coarse)
+          # - Factor of 4 = downsample by 4x (coarse)
+          # - Factor of 2 = downsample by 2x (medium)
+          # - Factor of 1 = full resolution (fine)
+          #
+          # Example: [[8, 4, 2, 1], [8, 4, 2, 1]]
+          #   - Level 1: 8x downsampled (fast, rough alignment)
+          #   - Level 2: 4x downsampled
+          #   - Level 3: 2x downsampled
+          #   - Level 4: Full resolution (precise alignment)
+          #
+          # Must match length of number_of_iterations sublists
+          shrink_factors: [[8, 4, 2, 1], [8, 4, 2, 1]]
+
+          # Multi-resolution pyramid schedule: Smoothing sigmas per level
+          # Gaussian smoothing applied at each resolution level (in voxels)
+          #
+          # Format: Same structure as number_of_iterations
+          # - Higher sigma = more smoothing (removes noise, finds global alignment)
+          # - Lower sigma = less smoothing (preserves detail, local refinement)
+          # - Sigma of 0 = no smoothing
+          #
+          # Example: [[3, 2, 1, 0], [3, 2, 1, 0]]
+          #   - Coarse levels: More smoothing (3, 2) - focus on large-scale alignment
+          #   - Fine levels: Less smoothing (1, 0) - preserve anatomical detail
+          #
+          # Rule of thumb: smoothing_sigmas[i] ≈ shrink_factors[i] / 2
+          # Must match length of number_of_iterations sublists
+          smoothing_sigmas: [[3, 2, 1, 0], [3, 2, 1, 0]]
+
+          # Convergence threshold for optimization
+          # Stops iterations early if improvement falls below this value
+          #
+          # Range: 1e-10 to 1e-3
+          # - 1e-6: Default, good balance (recommended)
+          # - 1e-8: Stricter convergence (more iterations, better alignment)
+          # - 1e-4: Looser convergence (fewer iterations, faster)
+          #
+          # Lower values = more precise but slower
+          convergence_threshold: 1.0e-6
+
+          # Convergence window size
+          # Number of recent iterations to evaluate for convergence
+          #
+          # Range: 5-20
+          # - Smaller (5): Faster convergence detection, may stop prematurely
+          # - Larger (15-20): More stable convergence, slower to detect
+          # - Default (10): Good balance
+          #
+          # Algorithm stops if metric improvement over last N iterations < threshold
+          convergence_window_size: 10
+
+          # Write composite transform file
+          # Save combined transform as single .h5 file (instead of separate files per transform type)
+          #
+          # Options:
+          #   - true: Single .h5 file with all transforms (easier to apply, recommended)
+          #   - false: Separate transform files for each type (Rigid.mat, Affine.mat)
+          #
+          # Composite transforms are easier to apply and manage
+          write_composite_transform: true
+
+          # Interpolation method for resampling registered images
+          # Determines how intensity values are computed at non-grid positions
+          #
+          # Options:
+          #   - "Linear": Fast, smooth, good for most cases
+          #   - "BSpline": Slower, smoother, better quality (recommended for final output)
+          #   - "NearestNeighbor": Fastest, preserves discrete values (for label maps only)
+          #   - "Gaussian": Smooth, good for anti-aliasing
+          #   - "MultiLabel": For multi-label segmentation masks
+          #
+          # Recommendations:
+          #   - Intensity images: "BSpline" (best quality)
+          #   - Quick preview: "Linear" (faster)
+          #   - Segmentation masks: "NearestNeighbor" or "MultiLabel"
+          interpolation: "BSpline"
+
+          # Save detailed registration diagnostics
+          # Generates JSON file with convergence history, timing, and quality metrics
+          #
+          # Options:
+          #   - true: Save detailed info to artifacts/longitudinal_registration/*.json
+          #   - false: Only save transforms and registered images
+          #
+          # Useful for:
+          #   - Debugging registration failures
+          #   - Quality control and validation
+          #   - Optimizing registration parameters
+          save_detailed_registration_info: false
+
+          # Mask propagation settings (NEW)
+          # When enabled, warps the reference timestamp's brain mask to other timestamps
+          # This allows comparing independently computed masks vs propagated masks
+          # for QC purposes (Dice coefficient, volume consistency)
+          propagate_reference_mask: true
+
+          # Compute comparison metrics between independent and propagated masks
+          # Produces Dice coefficient, volume difference, and overlap metrics
+          # Results are included in QC report
+          compute_mask_comparison: true
+
+  # Per-step QC Metrics Configuration
+  # This is lightweight QC that runs DURING preprocessing (after specified steps)
+  # Different from quality_analysis which runs AFTER preprocessing on final outputs
+  qc_metrics:
+    enabled: true
+    output_dir: "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/preprocessed/qc"
+    artifacts_dir: "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/preprocessed/qc/artifacts"
+    overwrite: true
+
+    # Steps after which to compute QC metrics
+    compute_after_steps:
+      - "data_harmonization"
+      - "bias_field_correction"
+      - "resampling"
+      - "skull_stripping"
+      - "registration_static"
+      - "intensity_normalization"
+      - "longitudinal_registration"
+
+    # Downsampling for cheap QC computation
+    downsample_to_mm: 2.0    # Target resolution in mm for QC (reduces computation)
+    max_voxels: 250000       # Maximum voxels after downsampling
+    random_seed: 1234        # For reproducible downsampling
+
+    # Mask source for QC metrics
+    # Options: "skullstrip_else_otsu" | "skullstrip_only" | "otsu_only" | "none"
+    mask_source: "skullstrip_else_otsu"
+
+    # Outlier detection configuration
+    outlier_detection:
+      enabled: true
+      method: "mad"          # "mad" (Median Absolute Deviation) | "iqr"
+      mad_threshold: 3.5     # Threshold for MAD-based outlier detection
+      iqr_multiplier: 3.0    # Multiplier for IQR-based outlier detection
+
+    # Metric families
+    metrics:
+      # Geometry/header consistency checks
+      geometry:
+        enabled: true
+        check_orientation: true
+        check_spacing: true
+        check_affine_det: true
+
+      # Registration similarity (for registration steps)
+      registration_similarity:
+        enabled: true
+        nmi_multimodal: true        # NMI for multi-modal registration
+        ncc_longitudinal: true      # NCC for longitudinal registration
+        use_mask: true
+
+      # Mask plausibility checks
+      mask_plausibility:
+        enabled: true
+        check_volume: true
+        boundary_gradient_score: true
+        longitudinal_dice: true     # Compare masks across timestamps
+
+      # Intensity stability metrics
+      intensity_stability:
+        enabled: true
+        median_iqr: true
+        wasserstein_distance: true
+        reference_mode: "site_modality"  # "site_modality" | "global"
+        histogram_bins: 256
+        histogram_range_percentiles: [0.5, 99.5]
+
+      # SNR/CNR metrics (NEW)
+      snr_cnr:
+        enabled: true
+        background_percentile: 5.0   # Percentile for background detection
+        foreground_percentile: 75.0  # Percentile for foreground/signal detection
+        edge_erosion_iters: 3        # Erosion for Kaufman method
+        intensity_low_pct: 25.0      # Lower percentile for CNR region
+        intensity_mid_pct: 50.0      # Mid percentile for CNR
+        intensity_high_pct: 75.0     # Upper percentile for CNR region
+
+      # Baseline capture (NEW) - captures metrics before preprocessing
+      baseline:
+        enabled: true
+        capture_before_first_step: true
+        metrics_to_capture: ["geometry", "intensity", "snr_cnr"]
+
+      # Pre-vs-post comparison (NEW)
+      comparison:
+        enabled: true
+        compute_deltas: true         # Compute (post - baseline)
+        compute_ratios: true         # Compute (post / baseline)
+        flag_degradation_threshold_pct: 10.0  # Flag if quality degrades by >10%
+
+    # Output formats
+    outputs:
+      save_long_csv: true       # Tidy format (one metric per row)
+      save_wide_csv: true       # One row per image
+      save_summary_csv: true    # Aggregated stats with outlier flags
+      save_metadata_json: true  # Config snapshot and run metadata
+
+  # Checkpoint system configuration
+  checkpoints:
+    enabled: true
+    checkpoint_dir: "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/preprocessed/checkpoints"
+
+  quality_analysis:
+    # Input directory: Point this to your PREPROCESSED data output
+    # If mode="test", use output_root. If mode="pipeline", use dataset_root.
+    input_dir: "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/preprocessed/MenGrowth-2025"
+    
+    # Output directory for QA reports and plots
+    output_dir: "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/preprocessed/qa_reports"
+
+    # File format to look for ("nifti" for preprocessed .nii.gz, "nrrd" for raw)
+    file_format: "nifti"
+
+    # Expected sequences to check for missing data
+    expected_sequences: ["t1c", "t1n", "t2w", "t2f"]
+
+    # Metrics to compute
+    metrics:
+      patient_statistics: true
+      missing_sequences: true
+      voxel_spacing: true
+      intensity_statistics: true
+      image_dimensions: true
+      acquisition_consistency: true
+      snr_estimation: true
+
+    # Outlier detection settings
+    outlier_detection:
+      enabled: true
+      method: "iqr"  # "iqr" or "zscore"
+      iqr_multiplier: 1.5
+      zscore_threshold: 3.0
+
+    # Visualization settings
+    visualization:
+      enabled: true
+      plots:
+        studies_per_patient_histogram: true
+        missing_sequences_heatmap: true
+        spacing_violin_plots: true
+        intensity_boxplots: true
+        dimension_consistency_scatter: true
+        snr_distribution: true
+      html_report:
+        enabled: true
+        title: "MenGrowth Preprocessing Quality Report"
+
+    # Output settings
+    output:
+      save_per_study_csv: true
+      save_per_patient_csv: true
+      save_summary_json: true

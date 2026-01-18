@@ -200,7 +200,7 @@ preprocessing:
           method: "ants"                                # "ants" | null (null to skip atlas registration)
           engine: "antspyx"                           # Optional: "nipype" (default) | "antspyx" - Registration engine to use
           save_detailed_registration_info: true       # Optional: Per-substep override for detailed diagnostics
-          atlas_path: "/media/hddb/mario/data/meningiomas/mengrowth/templates/T1.nii"       # Path to atlas template (must be set if method != null)
+          atlas_path: "/media/mpascual/PortableSSD/Meningiomas/ATLAS/sri24_spm8/templates/T1_brain.nii"  # Path to skull-stripped atlas template
 
           # Transform parameters (can specify multiple transforms)
           transforms: ["Rigid", "Affine"]               # List of transforms to apply sequentially
@@ -320,6 +320,42 @@ preprocessing:
           # The reference timestamp is the "fixed" image - all other timestamps
           # will be registered (warped) to align with this reference.
           reference_timestamp_per_study: "configs/longitudinal_registration_matches.yaml"
+
+          # ============================================================================
+          # Automatic Reference Selection (used when patient NOT in YAML override)
+          # ============================================================================
+          # When a patient is not found in reference_timestamp_per_study YAML,
+          # the system automatically selects the optimal reference using these settings.
+
+          # Selection method:
+          #   - "quality_based": Select based on image quality metrics (recommended)
+          #   - "first": Use first (earliest) timestamp
+          #   - "last": Use last (latest) timestamp
+          #   - "midpoint": Use middle timestamp chronologically
+          reference_selection_method: "quality_based"
+
+          # Quality metrics to evaluate (for quality_based method)
+          # Higher scores are better for all metrics
+          #   - snr_foreground: Signal-to-noise ratio (Kaufman method)
+          #   - cnr_high_low: Contrast-to-noise ratio between tissue regions
+          #   - boundary_gradient_score: Edge sharpness (lower blur = higher quality)
+          reference_selection_metrics:
+            - "snr_foreground"
+            - "cnr_high_low"
+            - "boundary_gradient_score"
+
+          # Tiebreaker: prefer earlier timestamps when quality scores are equal
+          # Rationale: Earlier scans may have less disease progression
+          reference_selection_prefer_earlier: true
+
+          # Jacobian determinant validation
+          # Validates that registration produces physically plausible deformations
+          reference_selection_validate_jacobian: true
+
+          # Maximum allowed mean |log(det(J))| for valid registration
+          # Lower threshold = stricter validation
+          # 0.5 is conservative; allows ~60% volume change on average
+          reference_selection_jacobian_threshold: 0.5
 
           # Transform type(s) to apply during registration
           # Can be a single transform or a list of transforms applied sequentially
@@ -515,6 +551,8 @@ preprocessing:
           # Results are included in QC report
           compute_mask_comparison: true
 
+
+
   # Per-step QC Metrics Configuration
   # This is lightweight QC that runs DURING preprocessing (after specified steps)
   # Different from quality_analysis which runs AFTER preprocessing on final outputs
@@ -615,15 +653,15 @@ preprocessing:
   # Checkpoint system configuration
   checkpoints:
     enabled: true
-    checkpoint_dir: "/media/hddb/mario/results/mengrowth/preprocessed/checkpoints"
+    checkpoint_dir: "/media/hddb/mario/results/mengrowth/preprocessed/preprocessed/checkpoints"
 
   quality_analysis:
     # Input directory: Point this to your PREPROCESSED data output
     # If mode="test", use output_root. If mode="pipeline", use dataset_root.
-    input_dir: "/media/hddb/mario/results/mengrowth/preprocessed/MenGrowth-2025"
+    input_dir: "/media/hddb/mario/results/mengrowth/preprocessed/preprocessed/MenGrowth-2025"
     
     # Output directory for QA reports and plots
-    output_dir: "/media/hddb/mario/results/mengrowth/preprocessed/qa_reports"
+    output_dir: "/media/hddb/mario/results/mengrowth/preprocessed/preprocessed/qa_reports"
 
     # File format to look for ("nifti" for preprocessed .nii.gz, "nrrd" for raw)
     file_format: "nifti"

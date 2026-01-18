@@ -184,7 +184,7 @@ preprocessing:
         intra_study_to_atlas:
           method: "ants"                                # "ants" | null (null to skip atlas registration)
           engine: "antspyx"                           # Optional: "nipype" (default) | "antspyx" - Registration engine to use
-          atlas_path: "/media/mpascual/PortableSSD/Meningiomas/ATLAS/sri24_spm8/templates/T1.nii"       # Path to atlas template (must be set if method != null)
+          atlas_path: "/media/mpascual/PortableSSD/Meningiomas/ATLAS/sri24_spm8/templates/T1_brain.nii"  # Path to skull-stripped atlas template
 
           # Transform parameters (can specify multiple transforms)
           transforms: ["Rigid", "Affine"]               # List of transforms to apply sequentially

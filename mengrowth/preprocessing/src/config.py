@@ -1313,11 +1313,31 @@ class LongitudinalRegistrationConfig:
         # Mask propagation for QC
         propagate_reference_mask: Warp reference brain mask to other timestamps
         compute_mask_comparison: Compute Dice between independent and propagated masks
+
+        # Reference selection (automatic)
+        reference_selection_method: Method for automatic reference selection when not in YAML
+            - "quality_based": Select based on image quality metrics (recommended)
+            - "first": Use first (earliest) timestamp
+            - "last": Use last (latest) timestamp
+            - "midpoint": Use middle timestamp
+        reference_selection_metrics: Metrics to use for quality-based selection
+        reference_selection_prefer_earlier: Use earlier timestamp as tiebreaker
+        reference_selection_validate_jacobian: Validate registration with Jacobian statistics
+        reference_selection_jacobian_threshold: Max allowed |log(det(J))| mean
     """
     method: Optional[Literal["ants"]] = "ants"
     engine: Optional[Literal["nipype", "antspyx"]] = None
     reference_modality_priority: str = "t1n > t1c > t2f > t2w"
     reference_timestamp_per_study: Optional[str] = None
+
+    # Reference selection configuration (automatic, used when patient not in YAML)
+    reference_selection_method: str = "quality_based"
+    reference_selection_metrics: List[str] = field(default_factory=lambda: [
+        "snr_foreground", "cnr_high_low", "boundary_gradient_score"
+    ])
+    reference_selection_prefer_earlier: bool = True
+    reference_selection_validate_jacobian: bool = True
+    reference_selection_jacobian_threshold: float = 0.5
 
     # Transform parameters
     transform_type: Union[str, List[str]] = field(default_factory=lambda: ["Rigid", "Affine"])

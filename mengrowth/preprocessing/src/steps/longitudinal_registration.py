@@ -1,9 +1,16 @@
 """Longitudinal registration step: register studies across timestamps for same patient.
 
 This is a patient-level step that operates on all studies (timestamps) together:
-1. Load reference timestamp from YAML or use default "000"
+1. Load reference timestamp from YAML override OR select automatically based on quality
 2. Determine reference modality/modalities based on reference_modality_priority
 3. Register all other timestamps to the reference timestamp
+4. Optionally validate registration quality with Jacobian determinant statistics
+
+Reference Selection Priority:
+1. Manual override: Check reference_timestamp_per_study YAML for patient-specific setting
+2. Automatic selection: Use reference_selection_method to choose optimal reference
+   - quality_based: Select based on SNR, CNR, boundary sharpness (recommended)
+   - first/last/midpoint: Simple chronological selection
 """
 
 from typing import Dict, Any, Optional, List
@@ -14,6 +21,12 @@ import shutil
 import tempfile
 
 from mengrowth.preprocessing.src.config import StepExecutionContext
+from mengrowth.preprocessing.src.registration.reference_selection import (
+    ReferenceSelector,
+    ReferenceSelectionConfig,
+    compute_jacobian_statistics,
+    validate_registration_quality
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,15 +72,20 @@ def execute(
         logger.warning(f"  Only {len(all_study_dirs)} timestamp(s) found - skipping longitudinal registration")
         return results
 
-    # Step 1: Determine reference timestamp
-    reference_timestamp = _get_reference_timestamp(
+    # Step 1: Determine reference timestamp (YAML override or automatic selection)
+    artifacts_base = Path(orchestrator.config.preprocessing_artifacts_path) / patient_id
+    reference_timestamp, selection_info = _get_reference_timestamp(
         patient_id=patient_id,
         all_study_dirs=all_study_dirs,
-        yaml_path=config.reference_timestamp_per_study
+        yaml_path=config.reference_timestamp_per_study,
+        config=config,
+        orchestrator=orchestrator,
+        artifacts_base=artifacts_base
     )
     results["reference_timestamp"] = reference_timestamp
+    results["reference_selection_info"] = selection_info
 
-    logger.info(f"  Reference timestamp: {reference_timestamp}")
+    logger.info(f"  Reference timestamp: {reference_timestamp} (source: {selection_info.get('source', 'unknown')})")
 
     # Find reference study directory
     reference_study_dir = None
@@ -137,34 +155,114 @@ def execute(
 def _get_reference_timestamp(
     patient_id: str,
     all_study_dirs: List[Path],
-    yaml_path: Optional[str]
-) -> str:
-    """Get reference timestamp for this patient from YAML or use default.
+    yaml_path: Optional[str],
+    config: Any = None,
+    orchestrator: Any = None,
+    artifacts_base: Optional[Path] = None
+) -> tuple:
+    """Get reference timestamp for this patient from YAML override or automatic selection.
+
+    Priority:
+    1. Check YAML override file for patient-specific setting
+    2. If not found, use automatic selection based on config.reference_selection_method
 
     Args:
         patient_id: Patient ID (e.g., "MenGrowth-0006")
         all_study_dirs: List of all study directories
-        yaml_path: Path to YAML file with patient->timestamp mapping
+        yaml_path: Path to YAML file with patient->timestamp mapping (override)
+        config: LongitudinalRegistrationConfig (for automatic selection settings)
+        orchestrator: PreprocessingOrchestrator (for accessing output directories)
+        artifacts_base: Artifacts directory for saving selection info
 
     Returns:
-        Reference timestamp string (e.g., "000", "001")
+        Tuple of (reference_timestamp, selection_info_dict)
     """
-    # Try to load from YAML if provided
+    selection_info: Dict[str, Any] = {"patient_id": patient_id}
+
+    # Step 1: Try to load from YAML override if provided
     if yaml_path and Path(yaml_path).exists():
         try:
             with open(yaml_path, 'r') as f:
                 timestamp_map = yaml.safe_load(f)
 
-            if patient_id in timestamp_map:
+            if timestamp_map and patient_id in timestamp_map:
                 ref_timestamp = str(timestamp_map[patient_id]).zfill(3)
-                logger.info(f"  Reference timestamp from YAML: {ref_timestamp}")
-                return ref_timestamp
+                logger.info(f"  Reference timestamp from YAML override: {ref_timestamp}")
+                selection_info["source"] = "yaml_override"
+                selection_info["yaml_path"] = str(yaml_path)
+                selection_info["timestamp"] = ref_timestamp
+                return ref_timestamp, selection_info
         except Exception as e:
             logger.warning(f"  Failed to load reference timestamp from YAML: {e}")
 
-    # Default to "000"
-    logger.info("  Using default reference timestamp: 000")
-    return "000"
+    # Step 2: Automatic selection based on config
+    if config is None:
+        # Fallback to default if no config
+        logger.info("  Using default reference timestamp: 000 (no config provided)")
+        selection_info["source"] = "default"
+        selection_info["timestamp"] = "000"
+        return "000", selection_info
+
+    selection_method = getattr(config, 'reference_selection_method', 'quality_based')
+    logger.info(f"  Automatic reference selection using method: {selection_method}")
+
+    # Build ReferenceSelectionConfig from longitudinal registration config
+    ref_selection_config = ReferenceSelectionConfig(
+        method=selection_method,
+        quality_metrics=getattr(config, 'reference_selection_metrics', [
+            "snr_foreground", "cnr_high_low", "boundary_gradient_score"
+        ]),
+        prefer_earlier=getattr(config, 'reference_selection_prefer_earlier', True),
+        validate_jacobian=getattr(config, 'reference_selection_validate_jacobian', True),
+        jacobian_log_threshold=getattr(config, 'reference_selection_jacobian_threshold', 0.5)
+    )
+
+    # Create selector
+    selector = ReferenceSelector(config=ref_selection_config, verbose=True)
+
+    # Get output directories for each study (depends on mode: test vs pipeline)
+    study_output_dirs = []
+    for study_dir in all_study_dirs:
+        if orchestrator:
+            output_dir = _get_study_output_dir(orchestrator, patient_id, study_dir)
+        else:
+            output_dir = study_dir
+        study_output_dirs.append(output_dir)
+
+    # Get modalities from orchestrator
+    modalities = orchestrator.config.modalities if orchestrator else ["t1n", "t1c", "t2w", "t2f"]
+
+    # Check for QC metrics file
+    qc_metrics_path = None
+    if orchestrator and hasattr(orchestrator, 'qc_manager') and orchestrator.qc_manager:
+        qc_output_dir = Path(orchestrator.qc_manager.config.output_dir)
+        potential_qc_path = qc_output_dir / "qc_metrics_wide.csv"
+        if potential_qc_path.exists():
+            qc_metrics_path = potential_qc_path
+
+    try:
+        ref_timestamp, auto_selection_info = selector.select_reference(
+            study_dirs=study_output_dirs,
+            patient_id=patient_id,
+            modalities=modalities,
+            qc_metrics_path=qc_metrics_path,
+            artifacts_base=artifacts_base
+        )
+
+        selection_info["source"] = "automatic"
+        selection_info["method"] = selection_method
+        selection_info.update(auto_selection_info)
+
+        logger.info(f"  Selected reference timestamp: {ref_timestamp}")
+        return ref_timestamp, selection_info
+
+    except Exception as e:
+        logger.warning(f"  Automatic reference selection failed: {e}")
+        logger.info("  Falling back to default reference timestamp: 000")
+        selection_info["source"] = "default_fallback"
+        selection_info["fallback_reason"] = str(e)
+        selection_info["timestamp"] = "000"
+        return "000", selection_info
 
 
 def _determine_registration_mode(
@@ -298,6 +396,36 @@ def _execute_single_reference_registration(
 
                 results["transforms"][f"{timestamp}_{modality}"] = str(transform_path)
                 logger.info(f"      ✓ {modality} registered")
+
+                # Validate registration quality with Jacobian determinant statistics
+                if config.reference_selection_validate_jacobian:
+                    try:
+                        jacobian_stats = compute_jacobian_statistics(
+                            transform_path=transform_path,
+                            reference_image_path=reference_path
+                        )
+
+                        # Store Jacobian stats
+                        if "jacobian_stats" not in results:
+                            results["jacobian_stats"] = {}
+                        results["jacobian_stats"][f"{timestamp}_{modality}"] = jacobian_stats
+
+                        # Validate
+                        ref_config = ReferenceSelectionConfig(
+                            validate_jacobian=True,
+                            jacobian_log_threshold=config.reference_selection_jacobian_threshold
+                        )
+                        is_valid, validation_msg = validate_registration_quality(
+                            jacobian_stats, ref_config
+                        )
+
+                        if is_valid:
+                            logger.debug(f"      ✓ Jacobian validation passed: {validation_msg}")
+                        else:
+                            logger.warning(f"      ! Jacobian validation warning: {validation_msg}")
+
+                    except Exception as jac_err:
+                        logger.warning(f"      ! Jacobian computation failed: {jac_err}")
 
                 # Warp skull-strip mask if QC enabled and longitudinal Dice requested
                 if (orchestrator.qc_manager and
@@ -442,6 +570,36 @@ def _execute_per_modality_registration(
 
                 # Mark this study as having at least one successful registration
                 registered_studies_set.add(study_dir.name)
+
+                # Validate registration quality with Jacobian determinant statistics
+                if config.reference_selection_validate_jacobian:
+                    try:
+                        jacobian_stats = compute_jacobian_statistics(
+                            transform_path=transform_path,
+                            reference_image_path=reference_path
+                        )
+
+                        # Store Jacobian stats
+                        if "jacobian_stats" not in results:
+                            results["jacobian_stats"] = {}
+                        results["jacobian_stats"][f"{timestamp}_{modality}"] = jacobian_stats
+
+                        # Validate
+                        ref_config = ReferenceSelectionConfig(
+                            validate_jacobian=True,
+                            jacobian_log_threshold=config.reference_selection_jacobian_threshold
+                        )
+                        is_valid, validation_msg = validate_registration_quality(
+                            jacobian_stats, ref_config
+                        )
+
+                        if is_valid:
+                            logger.debug(f"      ✓ Jacobian validation passed: {validation_msg}")
+                        else:
+                            logger.warning(f"      ! Jacobian validation warning: {validation_msg}")
+
+                    except Exception as jac_err:
+                        logger.warning(f"      ! Jacobian computation failed: {jac_err}")
 
                 # Warp skull-strip mask if QC enabled and longitudinal Dice requested
                 if (orchestrator.qc_manager and

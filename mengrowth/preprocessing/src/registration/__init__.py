@@ -19,6 +19,12 @@ from mengrowth.preprocessing.src.registration.constants import (
     DEFAULT_REGISTRATION_ENGINE,
     VALID_ENGINES
 )
+from mengrowth.preprocessing.src.registration.reference_selection import (
+    ReferenceSelector,
+    ReferenceSelectionConfig,
+    compute_jacobian_statistics,
+    validate_registration_quality
+)
 
 __all__ = [
     "BaseRegistrator",
@@ -30,4 +36,8 @@ __all__ = [
     "create_intra_study_to_atlas",
     "DEFAULT_REGISTRATION_ENGINE",
     "VALID_ENGINES",
+    "ReferenceSelector",
+    "ReferenceSelectionConfig",
+    "compute_jacobian_statistics",
+    "validate_registration_quality",
 ]
