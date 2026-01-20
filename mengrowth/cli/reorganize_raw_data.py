@@ -13,8 +13,10 @@ import argparse
 import logging
 import sys
 from pathlib import Path
+from typing import Optional
 
 from mengrowth.preprocessing.config import load_preprocessing_config
+from mengrowth.preprocessing.utils.metadata import MetadataManager
 from mengrowth.preprocessing.utils.reorganize_raw_data import reorganize_raw_data
 
 
@@ -100,6 +102,19 @@ Input sources expected:
         help="Enable verbose (DEBUG level) logging output.",
     )
 
+    parser.add_argument(
+        "--metadata-xlsx",
+        type=Path,
+        default=None,
+        help="Path to clinical metadata xlsx file (overrides config setting).",
+    )
+
+    parser.add_argument(
+        "--no-metadata",
+        action="store_true",
+        help="Disable metadata processing even if configured.",
+    )
+
     return parser.parse_args()
 
 
@@ -140,6 +155,25 @@ def main() -> int:
         logger.info(f"Output root: {args.output_root}")
         logger.info(f"Dry run mode: {args.dry_run}")
 
+        # Initialize metadata manager if configured and not disabled
+        metadata_manager: Optional[MetadataManager] = None
+        if not args.no_metadata and preprocessing_config.metadata and preprocessing_config.metadata.enabled:
+            xlsx_path = args.metadata_xlsx or (
+                Path(preprocessing_config.metadata.xlsx_path)
+                if preprocessing_config.metadata.xlsx_path
+                else None
+            )
+
+            if xlsx_path and xlsx_path.exists():
+                logger.info(f"Loading clinical metadata from: {xlsx_path}")
+                metadata_manager = MetadataManager()
+                metadata_manager.load_from_xlsx(xlsx_path)
+                logger.info(f"Loaded metadata for {len(metadata_manager.get_patient_ids())} patients")
+            elif xlsx_path:
+                logger.warning(f"Metadata xlsx file not found: {xlsx_path}")
+            else:
+                logger.warning("Metadata enabled but no xlsx_path configured")
+
         # Execute reorganization
         stats = reorganize_raw_data(
             input_root=args.input_root,
@@ -147,6 +181,15 @@ def main() -> int:
             config=preprocessing_config.raw_data,
             dry_run=args.dry_run,
         )
+
+        # Export metadata if loaded
+        if metadata_manager and not args.dry_run:
+            output_csv = args.output_root / preprocessing_config.metadata.output_csv_name
+            output_json = args.output_root / preprocessing_config.metadata.output_json_name
+            metadata_manager.export_enriched_csv(output_csv)
+            metadata_manager.export_json(output_json)
+            logger.info(f"Exported enriched metadata to: {output_csv}")
+            logger.info(f"Exported metadata JSON to: {output_json}")
 
         # Report results
         logger.info("=" * 60)
@@ -158,6 +201,11 @@ def main() -> int:
         logger.info("")
         logger.info(f"Rejected files report: {args.output_root}/rejected_files.csv")
         logger.info("This CSV contains all files that were excluded and the reasons for rejection.")
+
+        if metadata_manager:
+            summary = metadata_manager.get_clinical_summary()
+            logger.info("")
+            logger.info(f"Clinical metadata: {summary['total_patients']} patients loaded")
 
         if args.dry_run:
             logger.info("\nThis was a DRY RUN - no files were actually copied.")

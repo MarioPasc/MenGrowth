@@ -120,16 +120,213 @@ class FilteringConfig:
 
 
 @dataclass
+class MetadataConfig:
+    """Configuration for clinical metadata processing.
+
+    Attributes:
+        xlsx_path: Path to the clinical metadata xlsx file.
+        enabled: Enable metadata processing during curation.
+        output_csv_name: Filename for enriched metadata CSV output.
+        output_json_name: Filename for clean metadata JSON output.
+        warn_missing_metadata: Log warnings for patients without metadata.
+    """
+
+    xlsx_path: Optional[str] = None
+    enabled: bool = False
+    output_csv_name: str = "metadata_enriched.csv"
+    output_json_name: str = "metadata_clean.json"
+    warn_missing_metadata: bool = True
+
+
+@dataclass
+class NRRDValidationConfig:
+    """Configuration for NRRD header validation."""
+
+    enabled: bool = True
+    require_3d: bool = True
+    require_space_field: bool = True
+
+
+@dataclass
+class ScoutDetectionConfig:
+    """Configuration for scout/localizer detection."""
+
+    enabled: bool = True
+    min_dimension_voxels: int = 64
+    max_slice_thickness_mm: float = 5.0
+
+
+@dataclass
+class VoxelSpacingConfig:
+    """Configuration for voxel spacing validation."""
+
+    enabled: bool = True
+    min_spacing_mm: float = 0.3
+    max_spacing_mm: float = 3.0
+    max_anisotropy_ratio: float = 3.0
+    action: str = "warn"  # "warn" or "block"
+
+
+@dataclass
+class SNRFilteringConfig:
+    """Configuration for SNR-based filtering."""
+
+    enabled: bool = True
+    min_snr: float = 8.0
+    action: str = "block"
+
+
+@dataclass
+class ContrastDetectionConfig:
+    """Configuration for contrast/uniformity detection."""
+
+    enabled: bool = True
+    min_std_ratio: float = 0.10  # std/mean minimum
+    max_uniform_fraction: float = 0.95
+    action: str = "block"
+
+
+@dataclass
+class IntensityOutliersConfig:
+    """Configuration for intensity outlier detection."""
+
+    enabled: bool = True
+    reject_nan_inf: bool = True
+    max_outlier_ratio: float = 10.0  # max vs 99th percentile
+    action: str = "warn"
+
+
+@dataclass
+class AffineValidationConfig:
+    """Configuration for affine matrix validation."""
+
+    enabled: bool = True
+    min_det: float = 0.1
+    max_det: float = 100.0
+    action: str = "block"
+
+
+@dataclass
+class FOVConsistencyConfig:
+    """Configuration for field-of-view consistency checking."""
+
+    enabled: bool = True
+    warn_ratio: float = 3.0
+    block_ratio: float = 5.0
+
+
+@dataclass
+class OrientationConsistencyConfig:
+    """Configuration for orientation consistency within study."""
+
+    enabled: bool = True
+    action: str = "warn"
+
+
+@dataclass
+class TemporalOrderingConfig:
+    """Configuration for temporal ordering validation."""
+
+    enabled: bool = True
+    action: str = "warn"  # Always warn-only
+
+
+@dataclass
+class AnatomicalConsistencyConfig:
+    """Configuration for anatomical consistency across timepoints."""
+
+    enabled: bool = True
+    max_volume_change_percent: float = 15.0
+    min_brain_volume_cc: float = 900.0
+    max_brain_volume_cc: float = 1750.0
+    action: str = "warn"
+
+
+@dataclass
+class ModalityConsistencyConfig:
+    """Configuration for modality consistency across timepoints."""
+
+    enabled: bool = False
+    action: str = "warn"
+
+
+@dataclass
+class RegistrationReferenceConfig:
+    """Configuration for registration reference availability check."""
+
+    enabled: bool = True
+    priority: str = "t1n > t1c > t2f > t2w"
+    action: str = "block"
+
+
+@dataclass
+class QualityFilteringConfig:
+    """Configuration for quality-based filtering during data curation.
+
+    Attributes:
+        enabled: Master switch to enable/disable all quality filtering.
+        nrrd_validation: NRRD header validation settings.
+        scout_detection: Scout/localizer detection settings.
+        voxel_spacing: Voxel spacing validation settings.
+        snr_filtering: SNR-based filtering settings.
+        contrast_detection: Contrast/uniformity detection settings.
+        intensity_outliers: Intensity outlier detection settings.
+        affine_validation: Affine matrix validation settings.
+        fov_consistency: Field-of-view consistency settings.
+        orientation_consistency: Orientation consistency settings.
+        temporal_ordering: Temporal ordering validation settings.
+        anatomical_consistency: Anatomical consistency settings.
+        modality_consistency: Modality consistency settings.
+        registration_reference: Registration reference availability settings.
+    """
+
+    enabled: bool = True
+    nrrd_validation: NRRDValidationConfig = field(default_factory=NRRDValidationConfig)
+    scout_detection: ScoutDetectionConfig = field(default_factory=ScoutDetectionConfig)
+    voxel_spacing: VoxelSpacingConfig = field(default_factory=VoxelSpacingConfig)
+    snr_filtering: SNRFilteringConfig = field(default_factory=SNRFilteringConfig)
+    contrast_detection: ContrastDetectionConfig = field(
+        default_factory=ContrastDetectionConfig
+    )
+    intensity_outliers: IntensityOutliersConfig = field(
+        default_factory=IntensityOutliersConfig
+    )
+    affine_validation: AffineValidationConfig = field(
+        default_factory=AffineValidationConfig
+    )
+    fov_consistency: FOVConsistencyConfig = field(default_factory=FOVConsistencyConfig)
+    orientation_consistency: OrientationConsistencyConfig = field(
+        default_factory=OrientationConsistencyConfig
+    )
+    temporal_ordering: TemporalOrderingConfig = field(
+        default_factory=TemporalOrderingConfig
+    )
+    anatomical_consistency: AnatomicalConsistencyConfig = field(
+        default_factory=AnatomicalConsistencyConfig
+    )
+    modality_consistency: ModalityConsistencyConfig = field(
+        default_factory=ModalityConsistencyConfig
+    )
+    registration_reference: RegistrationReferenceConfig = field(
+        default_factory=RegistrationReferenceConfig
+    )
+
+
+@dataclass
 class PreprocessingConfig:
     """Top-level configuration for preprocessing pipeline.
 
     Attributes:
         raw_data: Configuration for raw data reorganization tasks.
         filtering: Configuration for study filtering tasks (optional).
+        metadata: Configuration for clinical metadata processing (optional).
+        quality_filtering: Configuration for quality-based filtering (optional).
     """
 
     raw_data: RawDataConfig
     filtering: Optional[FilteringConfig] = None
+    metadata: Optional[MetadataConfig] = None
+    quality_filtering: Optional[QualityFilteringConfig] = None
 
 
 def load_preprocessing_config(config_path: Path) -> PreprocessingConfig:
@@ -225,7 +422,153 @@ def load_preprocessing_config(config_path: Path) -> PreprocessingConfig:
             reid_patients=filtering_dict.get("reid_patients", False),
         )
 
-    return PreprocessingConfig(raw_data=raw_data_config, filtering=filtering_config)
+    # Parse optional metadata configuration
+    metadata_config = None
+    if "metadata" in raw_data_dict:
+        metadata_dict = raw_data_dict["metadata"]
+        metadata_config = MetadataConfig(
+            xlsx_path=metadata_dict.get("xlsx_path"),
+            enabled=metadata_dict.get("enabled", False),
+            output_csv_name=metadata_dict.get("output_csv_name", "metadata_enriched.csv"),
+            output_json_name=metadata_dict.get("output_json_name", "metadata_clean.json"),
+            warn_missing_metadata=metadata_dict.get("warn_missing_metadata", True),
+        )
+
+    # Parse optional quality_filtering configuration
+    quality_filtering_config = None
+    if "quality_filtering" in raw_data_dict:
+        qf_dict = raw_data_dict["quality_filtering"]
+        quality_filtering_config = _parse_quality_filtering_config(qf_dict)
+
+    return PreprocessingConfig(
+        raw_data=raw_data_config,
+        filtering=filtering_config,
+        metadata=metadata_config,
+        quality_filtering=quality_filtering_config,
+    )
+
+
+def _parse_quality_filtering_config(qf_dict: dict) -> QualityFilteringConfig:
+    """Parse quality filtering configuration from dictionary.
+
+    Args:
+        qf_dict: Dictionary containing quality_filtering section from YAML.
+
+    Returns:
+        Validated QualityFilteringConfig object.
+    """
+    # Parse nested configs with defaults
+    nrrd_dict = qf_dict.get("nrrd_validation", {})
+    nrrd_config = NRRDValidationConfig(
+        enabled=nrrd_dict.get("enabled", True),
+        require_3d=nrrd_dict.get("require_3d", True),
+        require_space_field=nrrd_dict.get("require_space_field", True),
+    )
+
+    scout_dict = qf_dict.get("scout_detection", {})
+    scout_config = ScoutDetectionConfig(
+        enabled=scout_dict.get("enabled", True),
+        min_dimension_voxels=scout_dict.get("min_dimension_voxels", 64),
+        max_slice_thickness_mm=scout_dict.get("max_slice_thickness_mm", 5.0),
+    )
+
+    spacing_dict = qf_dict.get("voxel_spacing", {})
+    spacing_config = VoxelSpacingConfig(
+        enabled=spacing_dict.get("enabled", True),
+        min_spacing_mm=spacing_dict.get("min_spacing_mm", 0.3),
+        max_spacing_mm=spacing_dict.get("max_spacing_mm", 3.0),
+        max_anisotropy_ratio=spacing_dict.get("max_anisotropy_ratio", 3.0),
+        action=spacing_dict.get("action", "warn"),
+    )
+
+    snr_dict = qf_dict.get("snr_filtering", {})
+    snr_config = SNRFilteringConfig(
+        enabled=snr_dict.get("enabled", True),
+        min_snr=snr_dict.get("min_snr", 8.0),
+        action=snr_dict.get("action", "block"),
+    )
+
+    contrast_dict = qf_dict.get("contrast_detection", {})
+    contrast_config = ContrastDetectionConfig(
+        enabled=contrast_dict.get("enabled", True),
+        min_std_ratio=contrast_dict.get("min_std_ratio", 0.10),
+        max_uniform_fraction=contrast_dict.get("max_uniform_fraction", 0.95),
+        action=contrast_dict.get("action", "block"),
+    )
+
+    intensity_dict = qf_dict.get("intensity_outliers", {})
+    intensity_config = IntensityOutliersConfig(
+        enabled=intensity_dict.get("enabled", True),
+        reject_nan_inf=intensity_dict.get("reject_nan_inf", True),
+        max_outlier_ratio=intensity_dict.get("max_outlier_ratio", 10.0),
+        action=intensity_dict.get("action", "warn"),
+    )
+
+    affine_dict = qf_dict.get("affine_validation", {})
+    affine_config = AffineValidationConfig(
+        enabled=affine_dict.get("enabled", True),
+        min_det=affine_dict.get("min_det", 0.1),
+        max_det=affine_dict.get("max_det", 100.0),
+        action=affine_dict.get("action", "block"),
+    )
+
+    fov_dict = qf_dict.get("fov_consistency", {})
+    fov_config = FOVConsistencyConfig(
+        enabled=fov_dict.get("enabled", True),
+        warn_ratio=fov_dict.get("warn_ratio", 3.0),
+        block_ratio=fov_dict.get("block_ratio", 5.0),
+    )
+
+    orient_dict = qf_dict.get("orientation_consistency", {})
+    orient_config = OrientationConsistencyConfig(
+        enabled=orient_dict.get("enabled", True),
+        action=orient_dict.get("action", "warn"),
+    )
+
+    temporal_dict = qf_dict.get("temporal_ordering", {})
+    temporal_config = TemporalOrderingConfig(
+        enabled=temporal_dict.get("enabled", True),
+        action=temporal_dict.get("action", "warn"),
+    )
+
+    anatomical_dict = qf_dict.get("anatomical_consistency", {})
+    anatomical_config = AnatomicalConsistencyConfig(
+        enabled=anatomical_dict.get("enabled", True),
+        max_volume_change_percent=anatomical_dict.get("max_volume_change_percent", 15.0),
+        min_brain_volume_cc=anatomical_dict.get("min_brain_volume_cc", 900.0),
+        max_brain_volume_cc=anatomical_dict.get("max_brain_volume_cc", 1750.0),
+        action=anatomical_dict.get("action", "warn"),
+    )
+
+    modality_dict = qf_dict.get("modality_consistency", {})
+    modality_config = ModalityConsistencyConfig(
+        enabled=modality_dict.get("enabled", False),
+        action=modality_dict.get("action", "warn"),
+    )
+
+    reg_ref_dict = qf_dict.get("registration_reference", {})
+    reg_ref_config = RegistrationReferenceConfig(
+        enabled=reg_ref_dict.get("enabled", True),
+        priority=reg_ref_dict.get("priority", "t1n > t1c > t2f > t2w"),
+        action=reg_ref_dict.get("action", "block"),
+    )
+
+    return QualityFilteringConfig(
+        enabled=qf_dict.get("enabled", True),
+        nrrd_validation=nrrd_config,
+        scout_detection=scout_config,
+        voxel_spacing=spacing_config,
+        snr_filtering=snr_config,
+        contrast_detection=contrast_config,
+        intensity_outliers=intensity_config,
+        affine_validation=affine_config,
+        fov_consistency=fov_config,
+        orientation_consistency=orient_config,
+        temporal_ordering=temporal_config,
+        anatomical_consistency=anatomical_config,
+        modality_consistency=modality_config,
+        registration_reference=reg_ref_config,
+    )
 
 
 @dataclass

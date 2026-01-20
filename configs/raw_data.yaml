@@ -205,3 +205,125 @@ raw_data:
 
     # Whether to re-identify patients with new anonymized IDs, we will also save a JSON mapping file from old to new IDs
     reid_patients: true
+
+  # Clinical metadata configuration
+  # Processes clinical metadata from xlsx and tracks patient inclusion/exclusion
+  metadata:
+    # Path to the clinical metadata xlsx file (will NOT be modified)
+    xlsx_path: "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/raw/source/Meningioma_Adquisition/metadata.xlsx"
+
+    # Enable metadata processing during curation
+    enabled: true
+
+    # Output filename for enriched CSV (with included, exclusion_reason, MenGrowth_ID columns)
+    output_csv_name: "metadata_enriched.csv"
+
+    # Output filename for clean JSON metadata
+    output_json_name: "metadata_clean.json"
+
+    # Log warnings for patients in data but not in metadata
+    warn_missing_metadata: true
+
+  # Quality filtering configuration
+  # Applied after basic filtering to ensure data quality for preprocessing
+  quality_filtering:
+    # Master switch to enable/disable all quality filtering
+    enabled: true
+
+    # A1: NRRD Header Validation
+    # Validates NRRD file format and required headers
+    nrrd_validation:
+      enabled: true
+      require_3d: true           # Reject 4D timeseries or 2D slices
+      require_space_field: true  # Require orientation metadata
+
+    # A2: Scout/Localizer Detection
+    # Detects and rejects low-resolution scout/localizer images
+    # Note: 2D multi-slice acquisitions (T2W, FLAIR) typically have 15-50 slices
+    scout_detection:
+      enabled: true
+      min_dimension_voxels: 10   # Minimum voxels per axis (lowered for 2D multi-slice)
+      max_slice_thickness_mm: 8.0  # Maximum slice thickness (raised for thick-slice FLAIR)
+
+    # A3: Voxel Spacing Validation
+    # Validates voxel spacing is within reasonable bounds
+    # Note: 2D multi-slice acquisitions have high anisotropy (5-6.5mm slice, 0.4mm in-plane)
+    voxel_spacing:
+      enabled: true
+      min_spacing_mm: 0.2        # Minimum voxel size (mm)
+      max_spacing_mm: 7.0        # Maximum voxel size (mm) - raised for thick-slice 2D
+      max_anisotropy_ratio: 15.0 # Maximum anisotropy - raised for 2D multi-slice
+      action: "warn"             # "warn" or "block"
+
+    # B1: SNR-Based Filtering
+    # Filters images based on signal-to-noise ratio
+    snr_filtering:
+      enabled: true
+      min_snr: 8.0               # Minimum SNR threshold
+      action: "block"            # "warn" or "block"
+
+    # B2: Contrast Detection
+    # Detects all-black, all-white, or uniform images
+    contrast_detection:
+      enabled: true
+      min_std_ratio: 0.10        # Minimum std/mean ratio
+      max_uniform_fraction: 0.95 # Maximum fraction of voxels with same value
+      action: "block"            # "warn" or "block"
+
+    # B3: Intensity Outlier Detection
+    # Detects NaN, Inf, or extreme intensity values
+    intensity_outliers:
+      enabled: true
+      reject_nan_inf: true       # Immediately reject files with NaN/Inf
+      max_outlier_ratio: 10.0    # Maximum max_intensity / 99th percentile
+      action: "warn"             # "warn" or "block"
+
+    # C1: Affine Matrix Validation
+    # Validates affine transformation matrix
+    # Note: determinant ~ voxel volume in mm³ (high-res data has small determinants)
+    affine_validation:
+      enabled: true
+      min_det: 0.01              # Minimum determinant - lowered for high-res (0.24mm) data
+      max_det: 100.0             # Maximum determinant (reasonable scaling)
+      action: "block"            # "warn" or "block"
+
+    # C2: Field-of-View Consistency
+    # Checks for asymmetric FOV that would cause issues with cubic padding
+    fov_consistency:
+      enabled: true
+      warn_ratio: 3.0            # Warn if max_dim/min_dim > this
+      block_ratio: 5.0           # Block if max_dim/min_dim > this
+
+    # C3: Orientation Consistency Within Study
+    # Checks if all modalities in a study have consistent orientation
+    orientation_consistency:
+      enabled: true
+      action: "warn"             # "warn" or "block"
+
+    # D1: Temporal Ordering Validation
+    # Validates study IDs reflect proper temporal ordering
+    temporal_ordering:
+      enabled: true
+      action: "warn"             # Always warn-only (no blocking)
+
+    # D2: Anatomical Consistency Across Timepoints
+    # Checks for reasonable brain volume changes between timepoints
+    anatomical_consistency:
+      enabled: true
+      max_volume_change_percent: 15.0  # Maximum volume change between timepoints
+      min_brain_volume_cc: 900.0       # Minimum expected brain volume
+      max_brain_volume_cc: 1750.0      # Maximum expected brain volume
+      action: "warn"                   # "warn" or "block"
+
+    # D3: Modality Consistency Across Timepoints
+    # Checks if all timepoints have same modalities
+    modality_consistency:
+      enabled: false             # Disabled by default (stricter requirement)
+      action: "warn"             # "warn" or "block"
+
+    # E1: Registration Reference Availability
+    # Ensures at least one reference modality exists for registration
+    registration_reference:
+      enabled: true
+      priority: "t1n > t1c > t2f > t2w"  # Reference modality priority
+      action: "block"            # "warn" or "block"

@@ -18,10 +18,13 @@ import json
 import logging
 import shutil
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, Dict, List, Optional, Set, Tuple
 
 from mengrowth.preprocessing.config import FilteringConfig, PreprocessingConfig
 from mengrowth.preprocessing.utils.reorganize_raw_data import RejectedFile
+
+if TYPE_CHECKING:
+    from mengrowth.preprocessing.utils.metadata import MetadataManager
 
 # Configure module logger
 logger = logging.getLogger(__name__)
@@ -561,7 +564,10 @@ def reid_patients_and_studies(
 
 
 def filter_raw_data(
-    data_root: Path, config: PreprocessingConfig, dry_run: bool = False
+    data_root: Path,
+    config: PreprocessingConfig,
+    metadata_manager: Optional["MetadataManager"] = None,
+    dry_run: bool = False,
 ) -> Dict[str, int]:
     """Filter reorganized raw data based on quality and completeness criteria.
 
@@ -572,6 +578,8 @@ def filter_raw_data(
         data_root: Root directory containing reorganized data
             (should contain MenGrowth-2025/ subdirectory).
         config: Preprocessing configuration with filtering parameters.
+        metadata_manager: Optional metadata manager to track patient exclusions
+            and apply ID mapping.
         dry_run: If True, simulate filtering without making changes.
 
     Returns:
@@ -663,8 +671,19 @@ def filter_raw_data(
 
         if keep_patient:
             stats["patients_kept"] += 1
+            # Mark as included in metadata
+            if metadata_manager:
+                metadata_manager.mark_included(patient_id)
         else:
             stats["patients_removed"] += 1
+            # Track exclusion in metadata
+            if metadata_manager:
+                # Determine the exclusion reason from rejections
+                if patient_rejections:
+                    reason = patient_rejections[0].rejection_reason
+                else:
+                    reason = "filtered_out"
+                metadata_manager.mark_excluded(patient_id, reason)
 
     # Append rejections to CSV
     rejected_csv_path = data_root / "rejected_files.csv"
@@ -686,6 +705,22 @@ def filter_raw_data(
         logger.info("=" * 80)
         id_mapping = reid_patients_and_studies(mengrowth_dir, dry_run)
         stats["patients_renamed"] = len(id_mapping)
+
+        # Apply ID mapping to metadata
+        if metadata_manager and id_mapping:
+            # Convert id_mapping format to what MetadataManager expects
+            # From: {"P1": {"new_id": "MenGrowth-0001", "studies": {...}}, ...}
+            # To: {"MenGrowth-0001": {"original_id": "P1", ...}, ...}
+            metadata_mapping = {}
+            for original_id, mapping_info in id_mapping.items():
+                new_id = mapping_info["new_id"]
+                metadata_mapping[new_id] = {
+                    "original_id": original_id,
+                    "studies": mapping_info.get("studies", {}),
+                }
+            metadata_manager.apply_id_mapping(metadata_mapping)
+            logger.info(f"Applied ID mapping to metadata for {len(metadata_mapping)} patients")
+
         logger.info("=" * 80)
     else:
         stats["patients_renamed"] = 0

@@ -1,13 +1,13 @@
 """Visualization module for quality analysis results.
 
 This module provides functions for generating plots and HTML reports from
-computed quality metrics.
+computed quality metrics, including clinical metadata visualizations.
 """
 
 import json
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -15,6 +15,9 @@ import pandas as pd
 import seaborn as sns
 
 from mengrowth.preprocessing.config import QualityAnalysisConfig
+
+if TYPE_CHECKING:
+    from mengrowth.preprocessing.utils.metadata import MetadataManager
 
 logger = logging.getLogger(__name__)
 
@@ -423,14 +426,338 @@ class QualityVisualizer:
         self.logger.info(f"Saved SNR distribution plot: {plot_path}")
         return plot_path
 
+    # =========================================================================
+    # CLINICAL METADATA PLOTS
+    # =========================================================================
+
+    def plot_age_distribution(
+        self, metadata_manager: "MetadataManager"
+    ) -> Optional[Path]:
+        """Plot histogram of patient ages.
+
+        Args:
+            metadata_manager: MetadataManager with loaded patient data.
+
+        Returns:
+            Path to saved plot file.
+        """
+        summary = metadata_manager.get_clinical_summary()
+        age_stats = summary.get("age_stats", {})
+
+        if not age_stats:
+            self.logger.warning("No age data available for plotting")
+            return None
+
+        # Get all ages from included patients
+        ages = []
+        for patient in metadata_manager.get_all_patients().values():
+            if patient.included and patient.age is not None:
+                ages.append(patient.age)
+
+        if not ages:
+            self.logger.warning("No valid age data to plot")
+            return None
+
+        fig, ax = plt.subplots(
+            figsize=(self.config.visualization.figure.width,
+                     self.config.visualization.figure.height)
+        )
+
+        # Histogram
+        ax.hist(ages, bins=15, alpha=0.7, edgecolor="black", color="#3498db")
+
+        # Add statistics overlay
+        mean_age = age_stats.get("mean", np.mean(ages))
+        median_age = age_stats.get("median", np.median(ages))
+        ax.axvline(mean_age, color="red", linestyle="--", linewidth=2, label=f"Mean: {mean_age:.1f}")
+        ax.axvline(median_age, color="orange", linestyle="--", linewidth=2, label=f"Median: {median_age:.1f}")
+
+        ax.set_xlabel("Age (years)", fontsize=12)
+        ax.set_ylabel("Number of Patients", fontsize=12)
+        ax.set_title("Patient Age Distribution", fontsize=14, fontweight="bold")
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+
+        plot_path = self.figure_dir / f"age_distribution.{self.config.visualization.figure.format}"
+        plt.tight_layout()
+        plt.savefig(plot_path, dpi=self.config.visualization.figure.dpi)
+        plt.close()
+
+        self.logger.info(f"Saved age distribution plot: {plot_path}")
+        return plot_path
+
+    def plot_sex_distribution(
+        self, metadata_manager: "MetadataManager"
+    ) -> Optional[Path]:
+        """Plot pie chart of sex distribution.
+
+        Args:
+            metadata_manager: MetadataManager with loaded patient data.
+
+        Returns:
+            Path to saved plot file.
+        """
+        summary = metadata_manager.get_clinical_summary()
+        sex_dist = summary.get("sex_distribution", {})
+
+        if not sex_dist or (sex_dist.get("male", 0) == 0 and sex_dist.get("female", 0) == 0):
+            self.logger.warning("No sex distribution data available")
+            return None
+
+        fig, ax = plt.subplots(
+            figsize=(self.config.visualization.figure.width,
+                     self.config.visualization.figure.height)
+        )
+
+        labels = []
+        sizes = []
+        colors = []
+        color_map = {"male": "#3498db", "female": "#e74c3c", "unknown": "#95a5a6"}
+
+        for sex, count in sex_dist.items():
+            if count > 0:
+                labels.append(f"{sex.capitalize()} (n={count})")
+                sizes.append(count)
+                colors.append(color_map.get(sex, "#95a5a6"))
+
+        ax.pie(sizes, labels=labels, colors=colors, autopct='%1.1f%%',
+               startangle=90, explode=[0.02] * len(sizes))
+        ax.set_title("Patient Sex Distribution", fontsize=14, fontweight="bold")
+
+        plot_path = self.figure_dir / f"sex_distribution.{self.config.visualization.figure.format}"
+        plt.tight_layout()
+        plt.savefig(plot_path, dpi=self.config.visualization.figure.dpi)
+        plt.close()
+
+        self.logger.info(f"Saved sex distribution plot: {plot_path}")
+        return plot_path
+
+    def plot_growth_category_distribution(
+        self, metadata_manager: "MetadataManager"
+    ) -> Optional[Path]:
+        """Plot bar chart of growth categories.
+
+        Args:
+            metadata_manager: MetadataManager with loaded patient data.
+
+        Returns:
+            Path to saved plot file.
+        """
+        summary = metadata_manager.get_clinical_summary()
+        growth_dist = summary.get("growth_distribution", {})
+
+        if not growth_dist:
+            self.logger.warning("No growth distribution data available")
+            return None
+
+        fig, ax = plt.subplots(
+            figsize=(self.config.visualization.figure.width,
+                     self.config.visualization.figure.height)
+        )
+
+        categories = []
+        counts = []
+        colors = []
+        color_map = {"growing": "#e74c3c", "stable": "#27ae60", "unknown": "#95a5a6"}
+
+        for category, count in growth_dist.items():
+            if count > 0:
+                categories.append(category.capitalize())
+                counts.append(count)
+                colors.append(color_map.get(category, "#95a5a6"))
+
+        bars = ax.bar(categories, counts, color=colors, alpha=0.8, edgecolor="black")
+
+        # Add value labels on bars
+        for bar, count in zip(bars, counts):
+            ax.text(bar.get_x() + bar.get_width()/2., bar.get_height(),
+                   f'{count}', ha='center', va='bottom', fontsize=11, fontweight="bold")
+
+        ax.set_xlabel("Growth Category", fontsize=12)
+        ax.set_ylabel("Number of Patients", fontsize=12)
+        ax.set_title("Tumor Growth Distribution", fontsize=14, fontweight="bold")
+        ax.grid(True, alpha=0.3, axis='y')
+
+        plot_path = self.figure_dir / f"growth_category.{self.config.visualization.figure.format}"
+        plt.tight_layout()
+        plt.savefig(plot_path, dpi=self.config.visualization.figure.dpi)
+        plt.close()
+
+        self.logger.info(f"Saved growth category plot: {plot_path}")
+        return plot_path
+
+    def plot_tumor_volume_progression(
+        self, metadata_manager: "MetadataManager"
+    ) -> Optional[Path]:
+        """Plot tumor volume progression over time.
+
+        Args:
+            metadata_manager: MetadataManager with loaded patient data.
+
+        Returns:
+            Path to saved plot file.
+        """
+        progressions = metadata_manager.get_volume_progression_data()
+
+        if not progressions:
+            self.logger.warning("No volume progression data available")
+            return None
+
+        fig, ax = plt.subplots(
+            figsize=(self.config.visualization.figure.width * 1.2,
+                     self.config.visualization.figure.height)
+        )
+
+        # Plot each patient's progression
+        for prog in progressions:
+            timepoints = [v["timepoint"] for v in prog["volumes"]]
+            volumes = [v["volume"] for v in prog["volumes"]]
+            growth_status = prog.get("growth_status")
+
+            color = "#e74c3c" if growth_status else "#27ae60" if growth_status is False else "#95a5a6"
+            alpha = 0.7 if growth_status else 0.5
+
+            ax.plot(timepoints, volumes, marker='o', color=color, alpha=alpha, linewidth=1.5)
+
+        # Add legend
+        from matplotlib.lines import Line2D
+        legend_elements = [
+            Line2D([0], [0], color="#e74c3c", marker='o', label="Growing"),
+            Line2D([0], [0], color="#27ae60", marker='o', label="Stable"),
+            Line2D([0], [0], color="#95a5a6", marker='o', label="Unknown"),
+        ]
+        ax.legend(handles=legend_elements, loc='upper left')
+
+        ax.set_xlabel("Timepoint (0=baseline, 1-5=controls)", fontsize=12)
+        ax.set_ylabel("Tumor Volume (mm³)", fontsize=12)
+        ax.set_title("Tumor Volume Progression Over Time", fontsize=14, fontweight="bold")
+        ax.grid(True, alpha=0.3)
+
+        plot_path = self.figure_dir / f"tumor_volume_progression.{self.config.visualization.figure.format}"
+        plt.tight_layout()
+        plt.savefig(plot_path, dpi=self.config.visualization.figure.dpi)
+        plt.close()
+
+        self.logger.info(f"Saved tumor volume progression plot: {plot_path}")
+        return plot_path
+
+    def plot_inclusion_summary(
+        self, metadata_manager: "MetadataManager"
+    ) -> Optional[Path]:
+        """Plot bar chart showing included vs excluded patients.
+
+        Args:
+            metadata_manager: MetadataManager with loaded patient data.
+
+        Returns:
+            Path to saved plot file.
+        """
+        summary = metadata_manager.get_clinical_summary()
+
+        included = summary.get("included_patients", 0)
+        excluded = summary.get("excluded_patients", 0)
+        exclusion_reasons = summary.get("exclusion_reasons", {})
+
+        if included == 0 and excluded == 0:
+            self.logger.warning("No inclusion data available")
+            return None
+
+        fig, axes = plt.subplots(1, 2, figsize=(self.config.visualization.figure.width * 1.3,
+                                                  self.config.visualization.figure.height))
+
+        # Left plot: Included vs Excluded
+        bars = axes[0].bar(["Included", "Excluded"], [included, excluded],
+                          color=["#27ae60", "#e74c3c"], alpha=0.8, edgecolor="black")
+
+        for bar, count in zip(bars, [included, excluded]):
+            axes[0].text(bar.get_x() + bar.get_width()/2., bar.get_height(),
+                        f'{count}', ha='center', va='bottom', fontsize=12, fontweight="bold")
+
+        axes[0].set_ylabel("Number of Patients", fontsize=12)
+        axes[0].set_title("Patient Inclusion Status", fontsize=12, fontweight="bold")
+        axes[0].grid(True, alpha=0.3, axis='y')
+
+        # Right plot: Exclusion reasons (if any)
+        if exclusion_reasons:
+            reasons = list(exclusion_reasons.keys())
+            counts = list(exclusion_reasons.values())
+
+            # Truncate long reason names
+            reasons_short = [r[:30] + "..." if len(r) > 30 else r for r in reasons]
+
+            y_pos = np.arange(len(reasons))
+            axes[1].barh(y_pos, counts, color="#e74c3c", alpha=0.7)
+            axes[1].set_yticks(y_pos)
+            axes[1].set_yticklabels(reasons_short, fontsize=9)
+            axes[1].set_xlabel("Count", fontsize=12)
+            axes[1].set_title("Exclusion Reasons", fontsize=12, fontweight="bold")
+            axes[1].grid(True, alpha=0.3, axis='x')
+        else:
+            axes[1].text(0.5, 0.5, "No exclusions", ha='center', va='center', fontsize=14)
+            axes[1].set_title("Exclusion Reasons", fontsize=12, fontweight="bold")
+
+        plot_path = self.figure_dir / f"inclusion_summary.{self.config.visualization.figure.format}"
+        plt.tight_layout()
+        plt.savefig(plot_path, dpi=self.config.visualization.figure.dpi)
+        plt.close()
+
+        self.logger.info(f"Saved inclusion summary plot: {plot_path}")
+        return plot_path
+
+    def generate_clinical_plots(
+        self, metadata_manager: "MetadataManager"
+    ) -> Dict[str, Path]:
+        """Generate all clinical metadata plots.
+
+        Args:
+            metadata_manager: MetadataManager with loaded patient data.
+
+        Returns:
+            Dictionary mapping plot type to saved file path.
+        """
+        self.logger.info("Generating clinical metadata visualizations...")
+        clinical_plots = {}
+
+        # Age distribution
+        plot_path = self.plot_age_distribution(metadata_manager)
+        if plot_path:
+            clinical_plots["age_distribution"] = plot_path
+
+        # Sex distribution
+        plot_path = self.plot_sex_distribution(metadata_manager)
+        if plot_path:
+            clinical_plots["sex_distribution"] = plot_path
+
+        # Growth category
+        plot_path = self.plot_growth_category_distribution(metadata_manager)
+        if plot_path:
+            clinical_plots["growth_category"] = plot_path
+
+        # Tumor volume progression
+        plot_path = self.plot_tumor_volume_progression(metadata_manager)
+        if plot_path:
+            clinical_plots["tumor_volume_progression"] = plot_path
+
+        # Inclusion summary
+        plot_path = self.plot_inclusion_summary(metadata_manager)
+        if plot_path:
+            clinical_plots["inclusion_summary"] = plot_path
+
+        self.logger.info(f"Generated {len(clinical_plots)} clinical plots")
+        return clinical_plots
+
     def generate_html_report(
-        self, results: Dict, plot_paths: Dict[str, Path]
+        self,
+        results: Dict,
+        plot_paths: Dict[str, Path],
+        metadata_manager: Optional["MetadataManager"] = None,
     ) -> Path:
         """Generate comprehensive HTML report with plots and tables.
 
         Args:
             results: Dictionary containing loaded analysis results.
             plot_paths: Dictionary mapping plot type to file path.
+            metadata_manager: Optional metadata manager for clinical summary.
 
         Returns:
             Path to saved HTML report.
@@ -554,6 +881,60 @@ class QualityVisualizer:
                             f.write(f'<tr><td>{seq}</td><td>{stats["present_count"]}</td><td>{stats["missing_count"]}</td><td>{stats["missing_fraction"]:.2%}</td></tr>\n')
                     f.write("</table>\n")
 
+            # Clinical metadata section
+            if metadata_manager:
+                clinical_summary = metadata_manager.get_clinical_summary()
+                f.write("<h2>Clinical Metadata</h2>\n")
+
+                # Demographics
+                f.write("<h3>Patient Demographics</h3>\n")
+                f.write('<div class="metrics">\n')
+                f.write(f'<div class="metric"><span class="metric-label">Total in Metadata:</span><br/><span class="metric-value">{clinical_summary["total_patients"]}</span></div>\n')
+                f.write(f'<div class="metric"><span class="metric-label">Included:</span><br/><span class="metric-value">{clinical_summary["included_patients"]}</span></div>\n')
+                f.write(f'<div class="metric"><span class="metric-label">Excluded:</span><br/><span class="metric-value">{clinical_summary["excluded_patients"]}</span></div>\n')
+                f.write('</div>\n')
+
+                # Age statistics
+                age_stats = clinical_summary.get("age_stats", {})
+                if age_stats:
+                    f.write("<h3>Age Distribution (Included Patients)</h3>\n")
+                    f.write('<div class="metrics">\n')
+                    f.write(f'<div class="metric"><span class="metric-label">Min Age:</span><br/><span class="metric-value">{age_stats.get("min", "N/A")}</span></div>\n')
+                    f.write(f'<div class="metric"><span class="metric-label">Max Age:</span><br/><span class="metric-value">{age_stats.get("max", "N/A")}</span></div>\n')
+                    f.write(f'<div class="metric"><span class="metric-label">Mean Age:</span><br/><span class="metric-value">{age_stats.get("mean", 0):.1f}</span></div>\n')
+                    f.write(f'<div class="metric"><span class="metric-label">Median Age:</span><br/><span class="metric-value">{age_stats.get("median", 0):.1f}</span></div>\n')
+                    f.write('</div>\n')
+
+                # Sex distribution
+                sex_dist = clinical_summary.get("sex_distribution", {})
+                if sex_dist:
+                    f.write("<h3>Sex Distribution</h3>\n")
+                    f.write("<table>\n")
+                    f.write("<tr><th>Sex</th><th>Count</th></tr>\n")
+                    for sex, count in sex_dist.items():
+                        f.write(f'<tr><td>{sex.capitalize()}</td><td>{count}</td></tr>\n')
+                    f.write("</table>\n")
+
+                # Growth distribution
+                growth_dist = clinical_summary.get("growth_distribution", {})
+                if growth_dist:
+                    f.write("<h3>Tumor Growth Status</h3>\n")
+                    f.write("<table>\n")
+                    f.write("<tr><th>Status</th><th>Count</th></tr>\n")
+                    for status, count in growth_dist.items():
+                        f.write(f'<tr><td>{status.capitalize()}</td><td>{count}</td></tr>\n')
+                    f.write("</table>\n")
+
+                # Exclusion reasons
+                exclusion_reasons = clinical_summary.get("exclusion_reasons", {})
+                if exclusion_reasons:
+                    f.write("<h3>Exclusion Reasons</h3>\n")
+                    f.write("<table>\n")
+                    f.write("<tr><th>Reason</th><th>Count</th></tr>\n")
+                    for reason, count in exclusion_reasons.items():
+                        f.write(f'<tr><td>{reason}</td><td>{count}</td></tr>\n')
+                    f.write("</table>\n")
+
             # Plots
             if html_config.include_all_plots and plot_paths:
                 f.write("<h2>Visualizations</h2>\n")
@@ -576,8 +957,13 @@ class QualityVisualizer:
         self.logger.info(f"Saved HTML report: {html_path}")
         return html_path
 
-    def run_visualization(self) -> Dict[str, Path]:
+    def run_visualization(
+        self, metadata_manager: Optional["MetadataManager"] = None
+    ) -> Dict[str, Path]:
         """Run complete visualization pipeline.
+
+        Args:
+            metadata_manager: Optional metadata manager for clinical plots.
 
         Returns:
             Dictionary of saved file paths.
@@ -591,14 +977,23 @@ class QualityVisualizer:
         # Load results
         results = self.load_results()
 
-        # Generate plots
+        # Generate QC plots
         plot_paths = self.generate_all_plots(results)
 
+        # Generate clinical plots if metadata is available
+        clinical_plots = {}
+        if metadata_manager:
+            clinical_plots = self.generate_clinical_plots(metadata_manager)
+            # Merge into plot_paths
+            plot_paths.update(clinical_plots)
+
         # Generate HTML report
-        output_paths = {"plots": plot_paths}
+        output_paths = {"plots": plot_paths, "clinical_plots": clinical_plots}
 
         if self.config.visualization.html_report.enabled:
-            html_path = self.generate_html_report(results, plot_paths)
+            html_path = self.generate_html_report(
+                results, plot_paths, metadata_manager=metadata_manager
+            )
             output_paths["html_report"] = html_path
 
         return output_paths

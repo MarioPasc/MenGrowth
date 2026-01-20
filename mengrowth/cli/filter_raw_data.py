@@ -14,9 +14,11 @@ import argparse
 import logging
 import sys
 from pathlib import Path
+from typing import Optional
 
 from mengrowth.preprocessing.config import load_preprocessing_config
 from mengrowth.preprocessing.utils.filter_raw_data import filter_raw_data
+from mengrowth.preprocessing.utils.metadata import MetadataManager
 
 
 def setup_logging(verbose: bool = False) -> None:
@@ -102,6 +104,19 @@ Run mengrowth-reorganize first before running this filtering step.
         help="Enable verbose (DEBUG level) logging output.",
     )
 
+    parser.add_argument(
+        "--metadata-csv",
+        type=Path,
+        default=None,
+        help="Path to enriched metadata CSV from reorganization step (to track exclusions).",
+    )
+
+    parser.add_argument(
+        "--no-metadata",
+        action="store_true",
+        help="Disable metadata processing even if metadata CSV exists.",
+    )
+
     return parser.parse_args()
 
 
@@ -176,12 +191,38 @@ def main() -> int:
             f"{preprocessing_config.filtering.reid_patients}"
         )
 
+        # Initialize metadata manager if available
+        metadata_manager: Optional[MetadataManager] = None
+        if not args.no_metadata:
+            # Try explicit path first, then auto-detect from config
+            metadata_csv_path = args.metadata_csv
+            if metadata_csv_path is None and preprocessing_config.metadata and preprocessing_config.metadata.enabled:
+                # Try to find enriched CSV from reorganization
+                auto_csv_path = args.data_root / preprocessing_config.metadata.output_csv_name
+                if auto_csv_path.exists():
+                    metadata_csv_path = auto_csv_path
+
+            if metadata_csv_path and metadata_csv_path.exists():
+                logger.info(f"Loading metadata from: {metadata_csv_path}")
+                metadata_manager = MetadataManager()
+                metadata_manager.load_from_enriched_csv(metadata_csv_path)
+                logger.info(f"Loaded metadata for {len(metadata_manager.get_patient_ids())} patients")
+
         # Execute filtering
         stats = filter_raw_data(
             data_root=args.data_root,
             config=preprocessing_config,
+            metadata_manager=metadata_manager,
             dry_run=args.dry_run,
         )
+
+        # Export updated metadata if loaded
+        if metadata_manager and not args.dry_run:
+            output_csv = args.data_root / preprocessing_config.metadata.output_csv_name
+            output_json = args.data_root / preprocessing_config.metadata.output_json_name
+            metadata_manager.export_enriched_csv(output_csv)
+            metadata_manager.export_json(output_json)
+            logger.info(f"Updated metadata saved to: {output_csv}")
 
         # Report results
         logger.info("=" * 60)
