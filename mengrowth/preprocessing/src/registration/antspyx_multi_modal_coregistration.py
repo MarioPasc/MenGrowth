@@ -52,6 +52,9 @@ class AntsPyXMultiModalCoregistration(BaseRegistrator):
         super().__init__(config=config, verbose=verbose)
         self.logger = logging.getLogger(__name__)
         self.save_detailed_info = config.get("save_detailed_registration_info", False)
+        self.use_center_of_mass_init = config.get("use_center_of_mass_init", True)
+        self.validate_registration_quality = config.get("validate_registration_quality", True)
+        self.quality_warning_threshold = config.get("quality_warning_threshold", -0.3)
 
         # Validate antspyx is available
         try:
@@ -272,6 +275,28 @@ class AntsPyXMultiModalCoregistration(BaseRegistrator):
                 self.logger.debug(f"  aff_smoothing_sigmas: {aff_smoothing_sigmas}")
                 self.logger.debug(f"  outprefix: {transform_prefix}")
 
+            # Compute center-of-mass alignment as initial transform if enabled
+            initial_tx = None
+            if self.use_center_of_mass_init:
+                self.logger.info(f"  Computing center-of-mass initialization...")
+                try:
+                    fixed_com = ants.get_center_of_mass(fixed_img)
+                    moving_com = ants.get_center_of_mass(moving_img)
+
+                    # Create translation to align centers
+                    translation = [f - m for f, m in zip(fixed_com, moving_com)]
+
+                    initial_tx = ants.create_ants_transform(
+                        transform_type='Euler3DTransform',
+                        center=moving_com,
+                        translation=translation
+                    )
+                    if self.verbose:
+                        self.logger.debug(f"[DEBUG] [AntsPyX] COM translation: {translation}")
+                except Exception as com_error:
+                    self.logger.warning(f"  COM initialization failed, proceeding without: {com_error}")
+                    initial_tx = None
+
             # Perform registration
             write_composite = self.config.get("write_composite_transform", True)
 
@@ -283,6 +308,7 @@ class AntsPyXMultiModalCoregistration(BaseRegistrator):
                         fixed=fixed_img,
                         moving=moving_img,
                         type_of_transform=type_of_transform,
+                        initial_transform=initial_tx,
                         outprefix=transform_prefix,
                         aff_metric=metric,
                         aff_sampling=metric_bins,
@@ -299,6 +325,7 @@ class AntsPyXMultiModalCoregistration(BaseRegistrator):
                     fixed=fixed_img,
                     moving=moving_img,
                     type_of_transform=type_of_transform,
+                    initial_transform=initial_tx,
                     outprefix=transform_prefix,
                     aff_metric=metric,
                     aff_sampling=metric_bins,
@@ -335,6 +362,24 @@ class AntsPyXMultiModalCoregistration(BaseRegistrator):
 
             if not actual_transform_path or not actual_transform_path.exists():
                 raise RuntimeError(f"Transform file not created: {actual_transform_path}")
+
+            # Compute and log registration quality if enabled
+            if self.validate_registration_quality:
+                quality_metrics = self._compute_registration_quality(fixed_img, warped_img)
+                corr_sim = quality_metrics.get('correlation_similarity')
+                corr_dissim = quality_metrics.get('correlation_dissimilarity')
+                self.logger.info(
+                    f"    Registration quality: Corr={corr_sim:.4f}" if corr_sim is not None else
+                    f"    Registration quality: Corr=N/A"
+                )
+
+                # Warn if quality is poor (correlation_dissimilarity > threshold means poor alignment)
+                if corr_dissim is not None and corr_dissim > self.quality_warning_threshold:
+                    self.logger.warning(
+                        f"    WARNING: Registration quality may be poor! "
+                        f"Correlation dissimilarity ({corr_dissim:.4f}) "
+                        f"> threshold ({self.quality_warning_threshold})"
+                    )
 
             # Save warped image to temp location
             temp_output = study_dir / f"_temp_{modality}_registered.nii.gz"
@@ -484,6 +529,44 @@ class AntsPyXMultiModalCoregistration(BaseRegistrator):
         except Exception as write_error:
             self.logger.error(f"Failed to write detailed registration info: {write_error}")
             # Don't raise - registration succeeded, just diagnostic save failed
+
+    def _compute_registration_quality(
+        self,
+        fixed_img: "ants.ANTsImage",
+        warped_img: "ants.ANTsImage"
+    ) -> Dict[str, float]:
+        """Compute quality metrics for registration result.
+
+        Args:
+            fixed_img: Fixed (reference) image
+            warped_img: Warped (registered) moving image
+
+        Returns:
+            Dictionary with quality metrics:
+            - mi_dissimilarity: Mattes Mutual Information dissimilarity (lower = more similar)
+            - correlation_dissimilarity: Correlation dissimilarity (returns -1 for perfect match)
+            - correlation_similarity: Correlation similarity (0-1 scale, higher = better)
+        """
+        import ants
+
+        # Compute Mattes Mutual Information (lower = more similar in ANTs)
+        mi_dissimilarity = ants.image_similarity(
+            fixed_img, warped_img,
+            metric_type='MattesMutualInformation'
+        )
+
+        # Compute correlation (returns -1 for perfect match)
+        corr_dissimilarity = ants.image_similarity(
+            fixed_img, warped_img,
+            metric_type='Correlation'
+        )
+
+        return {
+            "mi_dissimilarity": float(mi_dissimilarity),
+            "correlation_dissimilarity": float(corr_dissimilarity),
+            # Convert to similarity (0-1 scale, higher = better)
+            "correlation_similarity": float(-corr_dissimilarity) if corr_dissimilarity is not None else None
+        }
 
     def visualize(
         self,

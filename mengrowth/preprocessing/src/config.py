@@ -792,6 +792,9 @@ class IntraStudyToReferenceConfig:
         convergence_window_size: Window size for convergence detection
         write_composite_transform: Write composite transform file (.h5)
         interpolation: Interpolation method ("Linear", "BSpline", "NearestNeighbor")
+        use_center_of_mass_init: Enable center-of-mass initialization before registration
+        validate_registration_quality: Compute and log registration quality metrics
+        quality_warning_threshold: Warn if correlation dissimilarity > this threshold
     """
     method: Optional[Literal["ants"]] = "ants"
     engine: Optional[Literal["nipype", "antspyx"]] = None
@@ -802,13 +805,16 @@ class IntraStudyToReferenceConfig:
     sampling_strategy: str = "Random"
     sampling_percentage: float = 0.2
     number_of_iterations: List[List[int]] = field(default_factory=lambda: [[1000, 500, 250]])
-    shrink_factors: List[List[int]] = field(default_factory=lambda: [[4, 2, 1]])
-    smoothing_sigmas: List[List[int]] = field(default_factory=lambda: [[2, 1, 0]])
+    shrink_factors: List[List[int]] = field(default_factory=lambda: [[8, 4, 2, 1]])
+    smoothing_sigmas: List[List[int]] = field(default_factory=lambda: [[4, 2, 1, 0]])
     convergence_threshold: float = 1e-6
     convergence_window_size: int = 10
     write_composite_transform: bool = True
     interpolation: str = "Linear"
     save_detailed_registration_info: bool = False
+    use_center_of_mass_init: bool = True
+    validate_registration_quality: bool = True
+    quality_warning_threshold: float = -0.3
 
     def __post_init__(self) -> None:
         """Validate configuration values."""
@@ -976,6 +982,9 @@ class IntraStudyToAtlasConfig:
         convergence_threshold: Convergence threshold for optimization
         convergence_window_size: Window size for convergence detection
         interpolation: Interpolation method for intensities
+        use_center_of_mass_init: Enable center-of-mass initialization before registration
+        validate_registration_quality: Compute and log registration quality metrics
+        quality_warning_threshold: Warn if correlation dissimilarity > this threshold
     """
     method: Optional[Literal["ants"]] = "ants"
     engine: Optional[Literal["nipype", "antspyx"]] = None
@@ -986,13 +995,16 @@ class IntraStudyToAtlasConfig:
     metric_bins: int = 32
     sampling_strategy: str = "Random"
     sampling_percentage: float = 0.2
-    number_of_iterations: List[List[int]] = field(default_factory=lambda: [[1000, 500, 250], [500, 250, 100]])
-    shrink_factors: List[List[int]] = field(default_factory=lambda: [[4, 2, 1], [2, 1, 1]])
-    smoothing_sigmas: List[List[int]] = field(default_factory=lambda: [[2, 1, 0], [1, 0, 0]])
+    number_of_iterations: List[List[int]] = field(default_factory=lambda: [[2000, 1000, 500, 250], [1000, 500, 250, 100]])
+    shrink_factors: List[List[int]] = field(default_factory=lambda: [[8, 4, 2, 1], [4, 2, 1, 1]])
+    smoothing_sigmas: List[List[int]] = field(default_factory=lambda: [[4, 2, 1, 0], [2, 1, 0, 0]])
     convergence_threshold: float = 1e-6
     convergence_window_size: int = 10
     interpolation: str = "Linear"
     save_detailed_registration_info: bool = False
+    use_center_of_mass_init: bool = True
+    validate_registration_quality: bool = True
+    quality_warning_threshold: float = -0.3
 
     def __post_init__(self) -> None:
         """Validate configuration values."""

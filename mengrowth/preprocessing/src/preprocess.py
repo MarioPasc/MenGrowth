@@ -163,7 +163,7 @@ class PreprocessingOrchestrator:
         if not self.qc_manager:
             return
 
-        # Build case_metadata from context
+        # Build base case_metadata from context
         case_metadata = {
             "patient_id": context.patient_id,
         }
@@ -181,7 +181,24 @@ class PreprocessingOrchestrator:
             case_metadata["is_longitudinal"] = True
             case_metadata["reference_timestamp"] = result.get("reference_timestamp")
 
-        # Build image_paths
+        # Handle study-level steps specially (they have qc_paths in result)
+        if result and "qc_paths" in result:
+            qc_paths = result["qc_paths"]
+
+            # Determine step base for routing
+            step_base = self._extract_step_base(step_name)
+
+            # For registration: iterate over modalities and create QC records
+            if step_base == "registration":
+                self._trigger_registration_qc(step_name, case_metadata, qc_paths, result)
+                return
+
+            # For skull_stripping: iterate over modalities
+            if step_base == "skull_stripping":
+                self._trigger_skull_stripping_qc(step_name, case_metadata, qc_paths)
+                return
+
+        # Original logic for modality-level steps
         image_paths = {}
         if context.paths:
             # Try to find output path
@@ -207,6 +224,118 @@ class PreprocessingOrchestrator:
             )
         except Exception as e:
             self.logger.warning(f"QC trigger failed for {step_name}: {e}")
+
+    def _extract_step_base(self, step_name: str) -> str:
+        """Extract base step type from full step name.
+
+        Args:
+            step_name: Full step name (e.g., "registration_static", "skull_stripping_1")
+
+        Returns:
+            Base step type (e.g., "registration", "skull_stripping")
+        """
+        # Check against known patterns in order of specificity
+        for pattern in ["longitudinal_registration", "registration", "skull_stripping",
+                       "intensity_normalization", "bias_field_correction", "data_harmonization",
+                       "resampling", "cubic_padding"]:
+            if pattern in step_name:
+                return pattern
+        return step_name
+
+    def _trigger_registration_qc(
+        self,
+        step_name: str,
+        base_metadata: Dict[str, Any],
+        qc_paths: Dict[str, Any],
+        result: Dict[str, Any]
+    ) -> None:
+        """Trigger QC for registration step with proper paths.
+
+        Args:
+            step_name: Step name
+            base_metadata: Base case metadata (patient_id, study_id)
+            qc_paths: Paths dict from registration step
+            result: Full result dict from registration step
+        """
+        atlas_path_str = qc_paths.get("atlas_path")
+        atlas_path = Path(atlas_path_str) if atlas_path_str else None
+
+        for modality, output_path_str in qc_paths.get("modality_outputs", {}).items():
+            if not output_path_str:
+                continue
+            output_path = Path(output_path_str)
+            if not output_path.exists():
+                continue
+
+            case_metadata = {
+                **base_metadata,
+                "modality": modality
+            }
+
+            image_paths = {
+                "output": output_path
+            }
+            if atlas_path and atlas_path.exists():
+                image_paths["reference"] = atlas_path
+
+            artifact_paths = {}
+
+            try:
+                self.qc_manager.on_step_completed(
+                    step_name=step_name,
+                    case_metadata=case_metadata,
+                    image_paths=image_paths,
+                    artifact_paths=artifact_paths
+                )
+            except Exception as e:
+                self.logger.warning(f"QC trigger failed for {step_name}/{modality}: {e}")
+
+    def _trigger_skull_stripping_qc(
+        self,
+        step_name: str,
+        base_metadata: Dict[str, Any],
+        qc_paths: Dict[str, Any]
+    ) -> None:
+        """Trigger QC for skull stripping step with proper paths.
+
+        Args:
+            step_name: Step name
+            base_metadata: Base case metadata (patient_id, study_id)
+            qc_paths: Paths dict from skull stripping step
+        """
+        for modality in qc_paths.get("image_outputs", {}).keys():
+            output_path_str = qc_paths["image_outputs"].get(modality, "")
+            if not output_path_str:
+                continue
+            output_path = Path(output_path_str)
+
+            if not output_path.exists():
+                continue
+
+            case_metadata = {
+                **base_metadata,
+                "modality": modality
+            }
+
+            image_paths = {"output": output_path}
+            artifact_paths = {}
+
+            # Add mask path if available
+            mask_path_str = qc_paths.get("mask_outputs", {}).get(modality, "")
+            if mask_path_str:
+                mask_path = Path(mask_path_str)
+                if mask_path.exists():
+                    artifact_paths["mask"] = mask_path
+
+            try:
+                self.qc_manager.on_step_completed(
+                    step_name=step_name,
+                    case_metadata=case_metadata,
+                    image_paths=image_paths,
+                    artifact_paths=artifact_paths
+                )
+            except Exception as e:
+                self.logger.warning(f"QC trigger failed for {step_name}/{modality}: {e}")
 
     def _get_component(self, component_type: str, config: Any) -> Any:
         """Get or create a component instance (lazy initialization).
@@ -417,6 +546,9 @@ class PreprocessingOrchestrator:
             "interpolation": config.intra_study_to_reference.interpolation,
             "engine": config.intra_study_to_reference.engine or DEFAULT_REGISTRATION_ENGINE,
             "save_detailed_registration_info": config.intra_study_to_reference.save_detailed_registration_info,
+            "use_center_of_mass_init": config.intra_study_to_reference.use_center_of_mass_init,
+            "validate_registration_quality": config.intra_study_to_reference.validate_registration_quality,
+            "quality_warning_threshold": config.intra_study_to_reference.quality_warning_threshold,
         }
         return create_multi_modal_coregistration(config=intra_study_config, verbose=self.verbose)
 
@@ -441,6 +573,9 @@ class PreprocessingOrchestrator:
             "interpolation": config.intra_study_to_atlas.interpolation,
             "engine": config.intra_study_to_atlas.engine or DEFAULT_REGISTRATION_ENGINE,
             "save_detailed_registration_info": config.intra_study_to_atlas.save_detailed_registration_info,
+            "use_center_of_mass_init": config.intra_study_to_atlas.use_center_of_mass_init,
+            "validate_registration_quality": config.intra_study_to_atlas.validate_registration_quality,
+            "quality_warning_threshold": config.intra_study_to_atlas.quality_warning_threshold,
         }
         return create_intra_study_to_atlas(
             config=atlas_config,

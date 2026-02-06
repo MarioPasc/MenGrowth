@@ -113,7 +113,9 @@ class QualityFilteringStats:
 
 
 def validate_nrrd_header(
-    file_path: Path, config: QualityFilteringConfig
+    file_path: Path,
+    config: QualityFilteringConfig,
+    header: Optional[Dict[str, Any]] = None,
 ) -> ValidationResult:
     """A1: Validate NRRD file header.
 
@@ -125,6 +127,7 @@ def validate_nrrd_header(
     Args:
         file_path: Path to NRRD file.
         config: Quality filtering configuration.
+        header: Optional pre-read header to avoid redundant I/O.
 
     Returns:
         ValidationResult with pass/fail status and details.
@@ -137,16 +140,17 @@ def validate_nrrd_header(
             passed=True, check_name=check_name, message="Check disabled"
         )
 
-    try:
-        header = nrrd.read_header(str(file_path))
-    except Exception as e:
-        return ValidationResult(
-            passed=False,
-            check_name=check_name,
-            message=f"Failed to read NRRD header: {e}",
-            action="block",
-            details={"error": str(e)},
-        )
+    if header is None:
+        try:
+            header = nrrd.read_header(str(file_path))
+        except Exception as e:
+            return ValidationResult(
+                passed=False,
+                check_name=check_name,
+                message=f"Failed to read NRRD header: {e}",
+                action="block",
+                details={"error": str(e)},
+            )
 
     # Check dimension
     if cfg.require_3d:
@@ -182,7 +186,9 @@ def validate_nrrd_header(
 
 
 def detect_scout_localizer(
-    file_path: Path, config: QualityFilteringConfig
+    file_path: Path,
+    config: QualityFilteringConfig,
+    header: Optional[Dict[str, Any]] = None,
 ) -> ValidationResult:
     """A2: Detect scout/localizer images.
 
@@ -193,6 +199,7 @@ def detect_scout_localizer(
     Args:
         file_path: Path to NRRD file.
         config: Quality filtering configuration.
+        header: Optional pre-read header to avoid redundant I/O.
 
     Returns:
         ValidationResult with pass/fail status and details.
@@ -205,15 +212,16 @@ def detect_scout_localizer(
             passed=True, check_name=check_name, message="Check disabled"
         )
 
-    try:
-        header = nrrd.read_header(str(file_path))
-    except Exception as e:
-        return ValidationResult(
-            passed=False,
-            check_name=check_name,
-            message=f"Failed to read header: {e}",
-            action="block",
-        )
+    if header is None:
+        try:
+            header = nrrd.read_header(str(file_path))
+        except Exception as e:
+            return ValidationResult(
+                passed=False,
+                check_name=check_name,
+                message=f"Failed to read header: {e}",
+                action="block",
+            )
 
     # Get dimensions
     sizes = header.get("sizes", [])
@@ -264,7 +272,9 @@ def detect_scout_localizer(
 
 
 def check_voxel_spacing(
-    file_path: Path, config: QualityFilteringConfig
+    file_path: Path,
+    config: QualityFilteringConfig,
+    header: Optional[Dict[str, Any]] = None,
 ) -> ValidationResult:
     """A3: Validate voxel spacing.
 
@@ -275,6 +285,7 @@ def check_voxel_spacing(
     Args:
         file_path: Path to NRRD file.
         config: Quality filtering configuration.
+        header: Optional pre-read header to avoid redundant I/O.
 
     Returns:
         ValidationResult with pass/fail status and details.
@@ -287,15 +298,16 @@ def check_voxel_spacing(
             passed=True, check_name=check_name, message="Check disabled"
         )
 
-    try:
-        header = nrrd.read_header(str(file_path))
-    except Exception as e:
-        return ValidationResult(
-            passed=False,
-            check_name=check_name,
-            message=f"Failed to read header: {e}",
-            action=cfg.action,
-        )
+    if header is None:
+        try:
+            header = nrrd.read_header(str(file_path))
+        except Exception as e:
+            return ValidationResult(
+                passed=False,
+                check_name=check_name,
+                message=f"Failed to read header: {e}",
+                action=cfg.action,
+            )
 
     space_directions = header.get("space directions", None)
     if space_directions is None:
@@ -393,12 +405,17 @@ def compute_snr_background(data: np.ndarray) -> float:
     return signal_mean / noise_std
 
 
-def check_snr(file_path: Path, config: QualityFilteringConfig) -> ValidationResult:
+def check_snr(
+    file_path: Path,
+    config: QualityFilteringConfig,
+    data: Optional[np.ndarray] = None,
+) -> ValidationResult:
     """B1: Check signal-to-noise ratio.
 
     Args:
         file_path: Path to NRRD file.
         config: Quality filtering configuration.
+        data: Optional pre-loaded image data to avoid redundant I/O.
 
     Returns:
         ValidationResult with pass/fail status and details.
@@ -411,15 +428,16 @@ def check_snr(file_path: Path, config: QualityFilteringConfig) -> ValidationResu
             passed=True, check_name=check_name, message="Check disabled"
         )
 
-    try:
-        data, _ = nrrd.read(str(file_path))
-    except Exception as e:
-        return ValidationResult(
-            passed=False,
-            check_name=check_name,
-            message=f"Failed to read file: {e}",
-            action=cfg.action,
-        )
+    if data is None:
+        try:
+            data, _ = nrrd.read(str(file_path))
+        except Exception as e:
+            return ValidationResult(
+                passed=False,
+                check_name=check_name,
+                message=f"Failed to read file: {e}",
+                action=cfg.action,
+            )
 
     snr = compute_snr_background(data)
 
@@ -440,12 +458,17 @@ def check_snr(file_path: Path, config: QualityFilteringConfig) -> ValidationResu
     )
 
 
-def check_contrast(file_path: Path, config: QualityFilteringConfig) -> ValidationResult:
+def check_contrast(
+    file_path: Path,
+    config: QualityFilteringConfig,
+    data: Optional[np.ndarray] = None,
+) -> ValidationResult:
     """B2: Check image contrast (detect uniform images).
 
     Args:
         file_path: Path to NRRD file.
         config: Quality filtering configuration.
+        data: Optional pre-loaded image data to avoid redundant I/O.
 
     Returns:
         ValidationResult with pass/fail status and details.
@@ -458,15 +481,16 @@ def check_contrast(file_path: Path, config: QualityFilteringConfig) -> Validatio
             passed=True, check_name=check_name, message="Check disabled"
         )
 
-    try:
-        data, _ = nrrd.read(str(file_path))
-    except Exception as e:
-        return ValidationResult(
-            passed=False,
-            check_name=check_name,
-            message=f"Failed to read file: {e}",
-            action=cfg.action,
-        )
+    if data is None:
+        try:
+            data, _ = nrrd.read(str(file_path))
+        except Exception as e:
+            return ValidationResult(
+                passed=False,
+                check_name=check_name,
+                message=f"Failed to read file: {e}",
+                action=cfg.action,
+            )
 
     data_flat = data.flatten()
 
@@ -515,13 +539,16 @@ def check_contrast(file_path: Path, config: QualityFilteringConfig) -> Validatio
 
 
 def check_intensity_outliers(
-    file_path: Path, config: QualityFilteringConfig
+    file_path: Path,
+    config: QualityFilteringConfig,
+    data: Optional[np.ndarray] = None,
 ) -> ValidationResult:
     """B3: Check for intensity outliers (NaN, Inf, extreme values).
 
     Args:
         file_path: Path to NRRD file.
         config: Quality filtering configuration.
+        data: Optional pre-loaded image data to avoid redundant I/O.
 
     Returns:
         ValidationResult with pass/fail status and details.
@@ -534,15 +561,16 @@ def check_intensity_outliers(
             passed=True, check_name=check_name, message="Check disabled"
         )
 
-    try:
-        data, _ = nrrd.read(str(file_path))
-    except Exception as e:
-        return ValidationResult(
-            passed=False,
-            check_name=check_name,
-            message=f"Failed to read file: {e}",
-            action=cfg.action,
-        )
+    if data is None:
+        try:
+            data, _ = nrrd.read(str(file_path))
+        except Exception as e:
+            return ValidationResult(
+                passed=False,
+                check_name=check_name,
+                message=f"Failed to read file: {e}",
+                action=cfg.action,
+            )
 
     # Check for NaN/Inf
     if cfg.reject_nan_inf:
@@ -593,12 +621,17 @@ def check_intensity_outliers(
 # =============================================================================
 
 
-def validate_affine(file_path: Path, config: QualityFilteringConfig) -> ValidationResult:
+def validate_affine(
+    file_path: Path,
+    config: QualityFilteringConfig,
+    header: Optional[Dict[str, Any]] = None,
+) -> ValidationResult:
     """C1: Validate affine transformation matrix.
 
     Args:
         file_path: Path to NRRD file.
         config: Quality filtering configuration.
+        header: Optional pre-read header to avoid redundant I/O.
 
     Returns:
         ValidationResult with pass/fail status and details.
@@ -611,15 +644,16 @@ def validate_affine(file_path: Path, config: QualityFilteringConfig) -> Validati
             passed=True, check_name=check_name, message="Check disabled"
         )
 
-    try:
-        header = nrrd.read_header(str(file_path))
-    except Exception as e:
-        return ValidationResult(
-            passed=False,
-            check_name=check_name,
-            message=f"Failed to read header: {e}",
-            action=cfg.action,
-        )
+    if header is None:
+        try:
+            header = nrrd.read_header(str(file_path))
+        except Exception as e:
+            return ValidationResult(
+                passed=False,
+                check_name=check_name,
+                message=f"Failed to read header: {e}",
+                action=cfg.action,
+            )
 
     space_directions = header.get("space directions", None)
     if space_directions is None:
@@ -687,13 +721,16 @@ def validate_affine(file_path: Path, config: QualityFilteringConfig) -> Validati
 
 
 def check_fov_consistency(
-    file_path: Path, config: QualityFilteringConfig
+    file_path: Path,
+    config: QualityFilteringConfig,
+    header: Optional[Dict[str, Any]] = None,
 ) -> ValidationResult:
     """C2: Check field-of-view consistency (asymmetry).
 
     Args:
         file_path: Path to NRRD file.
         config: Quality filtering configuration.
+        header: Optional pre-read header to avoid redundant I/O.
 
     Returns:
         ValidationResult with pass/fail status and details.
@@ -706,12 +743,13 @@ def check_fov_consistency(
             passed=True, check_name=check_name, message="Check disabled"
         )
 
-    try:
-        header = nrrd.read_header(str(file_path))
-    except Exception as e:
-        return ValidationResult(
-            passed=False,
-            check_name=check_name,
+    if header is None:
+        try:
+            header = nrrd.read_header(str(file_path))
+        except Exception as e:
+            return ValidationResult(
+                passed=False,
+                check_name=check_name,
             message=f"Failed to read header: {e}",
             action="block",
         )
@@ -1077,22 +1115,156 @@ def validate_file(
         modality=modality,
     )
 
-    # A: Data Validation
-    report.results.append(validate_nrrd_header(file_path, config))
-    report.results.append(detect_scout_localizer(file_path, config))
-    report.results.append(check_voxel_spacing(file_path, config))
+    # Read header once and share across all header-based checks (5 checks use it)
+    cached_header = None
+    try:
+        cached_header = nrrd.read_header(str(file_path))
+    except Exception as e:
+        report.results.append(
+            ValidationResult(
+                passed=False,
+                check_name="header_read",
+                message=f"Failed to read NRRD header: {e}",
+                action="block",
+                details={"error": str(e)},
+            )
+        )
+
+    # A: Data Validation (header-only checks)
+    report.results.append(validate_nrrd_header(file_path, config, header=cached_header))
+    report.results.append(detect_scout_localizer(file_path, config, header=cached_header))
+    report.results.append(check_voxel_spacing(file_path, config, header=cached_header))
 
     # B: Image Quality (requires loading data)
+    # Load data once and share across all quality checks for efficiency
     if load_data:
-        report.results.append(check_snr(file_path, config))
-        report.results.append(check_contrast(file_path, config))
-        report.results.append(check_intensity_outliers(file_path, config))
+        image_data = None
+        # Only load if at least one quality check is enabled
+        needs_data = (
+            config.snr_filtering.enabled
+            or config.contrast_detection.enabled
+            or config.intensity_outliers.enabled
+        )
+        if needs_data:
+            try:
+                image_data, _ = nrrd.read(str(file_path))
+            except Exception as e:
+                report.results.append(
+                    ValidationResult(
+                        passed=False,
+                        check_name="data_read",
+                        message=f"Failed to read image data: {e}",
+                        action="block",
+                    )
+                )
+                image_data = None
 
-    # C: Geometric
-    report.results.append(validate_affine(file_path, config))
-    report.results.append(check_fov_consistency(file_path, config))
+        # Run quality checks with shared data (avoids 3x file reads)
+        report.results.append(check_snr(file_path, config, data=image_data))
+        report.results.append(check_contrast(file_path, config, data=image_data))
+        report.results.append(check_intensity_outliers(file_path, config, data=image_data))
+
+    # C: Geometric (header-only checks, reuse cached header)
+    report.results.append(validate_affine(file_path, config, header=cached_header))
+    report.results.append(check_fov_consistency(file_path, config, header=cached_header))
 
     return report
+
+
+def _validate_patient(
+    patient_dir: Path,
+    config: QualityFilteringConfig,
+    metadata_manager: Optional[Any] = None,
+) -> Tuple[PatientValidationReport, Dict[str, int]]:
+    """Validate a single patient directory.
+
+    Args:
+        patient_dir: Path to patient directory.
+        config: Quality filtering configuration.
+        metadata_manager: Optional metadata manager.
+
+    Returns:
+        Tuple of (patient_report, stats_dict).
+    """
+    patient_id = patient_dir.name
+    patient_report = PatientValidationReport(patient_id=patient_id)
+
+    # Local stats for this patient
+    local_stats = {
+        "total_files": 0,
+        "files_passed": 0,
+        "files_warned": 0,
+        "files_blocked": 0,
+        "studies_passed": 0,
+        "studies_blocked": 0,
+        "issues_by_type": {},
+    }
+
+    # Find all study directories
+    study_dirs = sorted([d for d in patient_dir.iterdir() if d.is_dir()])
+    patient_modalities: Dict[str, List[str]] = {}
+
+    for study_dir in study_dirs:
+        study_id = study_dir.name
+        study_report = StudyValidationReport(
+            patient_id=patient_id, study_id=study_id
+        )
+
+        # Find all NRRD files
+        nrrd_files = list(study_dir.glob("*.nrrd"))
+        study_files = {f.stem: f for f in nrrd_files}
+        patient_modalities[study_id] = list(study_files.keys())
+
+        for file_path in nrrd_files:
+            local_stats["total_files"] += 1
+            file_report = validate_file(file_path, config)
+            study_report.file_reports.append(file_report)
+
+            if file_report.has_blocking_issues:
+                local_stats["files_blocked"] += 1
+                for issue in file_report.blocking_issues:
+                    issue_type = issue.check_name
+                    local_stats["issues_by_type"][issue_type] = (
+                        local_stats["issues_by_type"].get(issue_type, 0) + 1
+                    )
+            elif file_report.has_warnings:
+                local_stats["files_warned"] += 1
+            else:
+                local_stats["files_passed"] += 1
+
+        # Study-level checks
+        if study_files:
+            # C3: Orientation consistency
+            orient_result = check_orientation_consistency(study_files, config)
+            study_report.study_level_results.append(orient_result)
+
+            # E1: Registration reference
+            ref_result = check_registration_reference(
+                list(study_files.keys()), config
+            )
+            study_report.study_level_results.append(ref_result)
+
+        if study_report.has_blocking_issues:
+            local_stats["studies_blocked"] += 1
+        else:
+            local_stats["studies_passed"] += 1
+
+        patient_report.study_reports.append(study_report)
+
+    # Patient-level checks
+    if len(study_dirs) >= 2:
+        # D1: Temporal ordering
+        study_ids = [d.name for d in study_dirs]
+        temporal_result = check_temporal_ordering(
+            patient_id, study_ids, metadata_manager, config
+        )
+        patient_report.patient_level_results.append(temporal_result)
+
+        # D3: Modality consistency
+        modality_result = check_modality_consistency(patient_modalities, config)
+        patient_report.patient_level_results.append(modality_result)
+
+    return patient_report, local_stats
 
 
 def run_quality_filtering(
@@ -1121,78 +1293,52 @@ def run_quality_filtering(
 
     # Find all patient directories
     patient_dirs = sorted([d for d in data_root.iterdir() if d.is_dir()])
-    logger.info(f"Found {len(patient_dirs)} patients to validate")
+    total_patients = len(patient_dirs)
+    logger.info(f"Found {total_patients} patients to validate")
 
-    for patient_dir in patient_dirs:
+    # Count total files for progress estimation
+    total_files_estimate = sum(
+        len(list(study.glob("*.nrrd")))
+        for patient in patient_dirs
+        for study in patient.iterdir()
+        if study.is_dir()
+    )
+    logger.info(f"Estimated {total_files_estimate} files to validate")
+
+    for idx, patient_dir in enumerate(patient_dirs, 1):
         patient_id = patient_dir.name
-        patient_report = PatientValidationReport(patient_id=patient_id)
+        num_studies = len([d for d in patient_dir.iterdir() if d.is_dir()])
+        num_files = sum(
+            len(list(study.glob("*.nrrd")))
+            for study in patient_dir.iterdir()
+            if study.is_dir()
+        )
 
-        # Find all study directories
-        study_dirs = sorted([d for d in patient_dir.iterdir() if d.is_dir()])
-        patient_modalities: Dict[str, List[str]] = {}
+        logger.info(
+            f"Validating patient {idx}/{total_patients}: {patient_id} "
+            f"({num_studies} studies, {num_files} files)"
+        )
 
-        for study_dir in study_dirs:
-            study_id = study_dir.name
-            study_report = StudyValidationReport(
-                patient_id=patient_id, study_id=study_id
+        patient_report, local_stats = _validate_patient(
+            patient_dir, config, metadata_manager
+        )
+
+        # Aggregate stats
+        stats.total_files += local_stats["total_files"]
+        stats.files_passed += local_stats["files_passed"]
+        stats.files_warned += local_stats["files_warned"]
+        stats.files_blocked += local_stats["files_blocked"]
+        stats.studies_passed += local_stats["studies_passed"]
+        stats.studies_blocked += local_stats["studies_blocked"]
+
+        for issue_type, count in local_stats["issues_by_type"].items():
+            stats.issues_by_type[issue_type] = (
+                stats.issues_by_type.get(issue_type, 0) + count
             )
-
-            # Find all NRRD files
-            nrrd_files = list(study_dir.glob("*.nrrd"))
-            study_files = {f.stem: f for f in nrrd_files}
-            patient_modalities[study_id] = list(study_files.keys())
-
-            for file_path in nrrd_files:
-                stats.total_files += 1
-                file_report = validate_file(file_path, config)
-                study_report.file_reports.append(file_report)
-
-                if file_report.has_blocking_issues:
-                    stats.files_blocked += 1
-                    for issue in file_report.blocking_issues:
-                        issue_type = issue.check_name
-                        stats.issues_by_type[issue_type] = (
-                            stats.issues_by_type.get(issue_type, 0) + 1
-                        )
-                elif file_report.has_warnings:
-                    stats.files_warned += 1
-                else:
-                    stats.files_passed += 1
-
-            # Study-level checks
-            if study_files:
-                # C3: Orientation consistency
-                orient_result = check_orientation_consistency(study_files, config)
-                study_report.study_level_results.append(orient_result)
-
-                # E1: Registration reference
-                ref_result = check_registration_reference(
-                    list(study_files.keys()), config
-                )
-                study_report.study_level_results.append(ref_result)
-
-            if study_report.has_blocking_issues:
-                stats.studies_blocked += 1
-            else:
-                stats.studies_passed += 1
-
-            patient_report.study_reports.append(study_report)
-
-        # Patient-level checks
-        if len(study_dirs) >= 2:
-            # D1: Temporal ordering
-            study_ids = [d.name for d in study_dirs]
-            temporal_result = check_temporal_ordering(
-                patient_id, study_ids, metadata_manager, config
-            )
-            patient_report.patient_level_results.append(temporal_result)
-
-            # D3: Modality consistency
-            modality_result = check_modality_consistency(patient_modalities, config)
-            patient_report.patient_level_results.append(modality_result)
 
         if patient_report.has_blocking_issues:
             stats.patients_blocked += 1
+            logger.debug(f"  Patient {patient_id} has blocking issues")
         else:
             stats.patients_passed += 1
 

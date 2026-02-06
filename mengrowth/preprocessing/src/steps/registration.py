@@ -173,6 +173,10 @@ def execute(
 
             logger.info(f"  Successfully registered {len(atlas_result['registered_modalities'])} modalities to atlas")
 
+            # Add quality metrics from atlas registration if available
+            if "quality_metrics" in atlas_result:
+                results["quality_metrics"] = atlas_result["quality_metrics"]
+
         except Exception as e:
             logger.error(f"  [Error] Intra-study to atlas registration failed: {e}")
             # Continue anyway - atlas registration is optional
@@ -180,5 +184,16 @@ def execute(
         logger.warning("  [Sub-step 3b] Atlas registration skipped - no reference modality from step 3a")
     else:
         logger.info("  [Sub-step 3b] Intra-study to atlas registration skipped (method=None)")
+
+    # Add qc_paths for QC system (study-level step output paths)
+    results["qc_paths"] = {
+        "study_output_dir": str(study_output_dir),
+        "reference_modality": results["reference_modality"],
+        "atlas_path": str(config.intra_study_to_atlas.atlas_path) if hasattr(config, 'intra_study_to_atlas') and config.intra_study_to_atlas.atlas_path else None,
+        "modality_outputs": {
+            mod: str(study_output_dir / f"{mod}.nii.gz")
+            for mod in results.get("registered_modalities", [])
+        }
+    }
 
     return results

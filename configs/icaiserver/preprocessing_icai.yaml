@@ -229,6 +229,11 @@ preprocessing:
           write_composite_transform: true               # Write composite transform file (.h5)
           interpolation: "BSpline"                       # "Linear" | "BSpline" | "NearestNeighbor"
 
+          # Registration initialization and quality validation
+          use_center_of_mass_init: true                 # Align centers-of-mass before registration (helps avoid local minima)
+          validate_registration_quality: true           # Compute and log registration quality metrics
+          quality_warning_threshold: -0.3               # Warn if correlation dissimilarity > this threshold
+
         # Step 3b: Register reference modality to atlas space and propagate transforms
         intra_study_to_atlas:
           method: "ants"                                # "ants" | null (null to skip atlas registration)
@@ -248,10 +253,10 @@ preprocessing:
           sampling_strategy: "Random"                   # "Random" | "Regular" | "None"
           sampling_percentage: 0.5                      # Percentage of voxels to sample (0.0-1.0]
 
-          # Multi-resolution schedule (one sublist per transform)
-          number_of_iterations: [[1000, 500, 250], [500, 250, 100]]  # First for Rigid, second for Affine
-          shrink_factors: [[4, 2, 1], [2, 1, 1]]        # First for Rigid, second for Affine
-          smoothing_sigmas: [[2, 1, 0], [1, 0, 0]]      # First for Rigid, second for Affine
+          # Multi-resolution schedule (one sublist per transform) - more aggressive schedule for atlas registration
+          number_of_iterations: [[2000, 1000, 500, 250], [1000, 500, 250, 100]]  # First for Rigid, second for Affine
+          shrink_factors: [[8, 4, 2, 1], [4, 2, 1, 1]]        # First for Rigid, second for Affine - start coarser
+          smoothing_sigmas: [[4, 2, 1, 0], [2, 1, 0, 0]]      # First for Rigid, second for Affine
 
           # Convergence parameters
           convergence_threshold: 1.0e-6                 # Convergence threshold for optimization
@@ -259,6 +264,11 @@ preprocessing:
 
           # Output parameters
           interpolation: "BSpline"                       # "Linear" | "BSpline" | "NearestNeighbor"
+
+          # Registration initialization and quality validation
+          use_center_of_mass_init: true                 # Align centers-of-mass before registration (helps avoid local minima)
+          validate_registration_quality: true           # Compute and log registration quality metrics
+          quality_warning_threshold: -0.3               # Warn if correlation dissimilarity > this threshold
 
     skull_stripping:
       save_visualization: true      # Save visualization PNGs
@@ -353,7 +363,7 @@ preprocessing:
           #
           # The reference timestamp is the "fixed" image - all other timestamps
           # will be registered (warped) to align with this reference.
-          reference_timestamp_per_study: "configs/longitudinal_registration_matches.yaml"
+          reference_timestamp_per_study: "configs/icaiserver/longitudinal_registration_matches.yaml"
 
           # ============================================================================
           # Automatic Reference Selection (used when patient NOT in YAML override)

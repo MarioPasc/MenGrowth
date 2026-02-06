@@ -551,7 +551,9 @@ class MetadataManager:
             self._reverse_id_map[mengrowth_id] = normalized
             logger.debug(f"Set MenGrowth ID for {normalized}: {mengrowth_id}")
         else:
-            logger.warning(f"Cannot set MenGrowth ID for unknown patient {original_id}")
+            # Patient exists in dataset but not in clinical metadata xlsx - this is expected
+            # for patients without clinical annotations
+            logger.debug(f"Patient {original_id} not in clinical metadata (no xlsx entry)")
 
     def apply_id_mapping(self, id_mapping: Dict[str, Dict[str, Any]]) -> None:
         """Apply ID mapping from filter's id_mapping.json.

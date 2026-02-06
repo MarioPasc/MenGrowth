@@ -436,23 +436,23 @@ def remove_non_required_sequences(
     deleted_count = 0
     required_set = set(required_sequences)
 
-    logger.info("Removing non-required sequences...")
+    patient_dirs = sorted([d for d in mengrowth_dir.iterdir() if d.is_dir()])
+    total_patients = len(patient_dirs)
+    logger.info(
+        f"Removing non-required sequences from {total_patients} patients "
+        f"(keeping: {required_sequences})..."
+    )
 
-    # Iterate through all patient directories
-    for patient_dir in mengrowth_dir.iterdir():
-        if not patient_dir.is_dir():
-            continue
+    for idx, patient_dir in enumerate(patient_dirs, 1):
+        patient_deleted = 0
 
-        # Iterate through all study directories
         for study_dir in patient_dir.iterdir():
             if not study_dir.is_dir():
                 continue
 
-            # Check all .nrrd files in the study
             for nrrd_file in study_dir.glob("*.nrrd"):
                 sequence_name = nrrd_file.stem
 
-                # If this sequence is not in the required list, delete it
                 if sequence_name not in required_set:
                     logger.debug(
                         f"Deleting non-required sequence: "
@@ -463,6 +463,18 @@ def remove_non_required_sequences(
                         nrrd_file.unlink()
 
                     deleted_count += 1
+                    patient_deleted += 1
+
+        if patient_deleted > 0:
+            logger.debug(
+                f"Patient {patient_dir.name}: removed {patient_deleted} non-required files"
+            )
+
+        if idx % 25 == 0 or idx == total_patients:
+            logger.info(
+                f"  Sequence cleanup progress: {idx}/{total_patients} patients "
+                f"({deleted_count} files removed so far)"
+            )
 
     logger.info(f"Removed {deleted_count} non-required sequence files")
     return deleted_count
@@ -506,12 +518,16 @@ def reid_patients_and_studies(
 
     id_mapping = {}
     new_patient_counter = 1
+    total_patients = len(patient_dirs)
 
     for patient_dir in patient_dirs:
         old_patient_id = patient_dir.name  # e.g., 'P1', 'P42'
         new_patient_id = f"MenGrowth-{new_patient_counter:04d}"  # e.g., 'MenGrowth-0001'
 
-        logger.debug(f"Renaming patient: {old_patient_id} -> {new_patient_id}")
+        logger.info(
+            f"Re-identifying {new_patient_counter}/{total_patients}: "
+            f"{old_patient_id} -> {new_patient_id}"
+        )
 
         # Get all study directories and sort them numerically
         study_dirs = sorted(
@@ -652,15 +668,21 @@ def filter_raw_data(
         ]
     )
 
-    logger.info(f"Found {len(patient_dirs)} patient directories to process")
+    total_patients = len(patient_dirs)
+    logger.info(f"Found {total_patients} patient directories to process")
 
     # Process each patient
-    for patient_dir in patient_dirs:
+    for idx, patient_dir in enumerate(patient_dirs, 1):
         patient_id = patient_dir.name
 
         # Count studies before filtering
         study_count = len([d for d in patient_dir.iterdir() if d.is_dir()])
         stats["studies_processed"] += study_count
+
+        logger.info(
+            f"Filtering patient {idx}/{total_patients}: {patient_id} "
+            f"({study_count} studies)"
+        )
 
         # Filter patient
         keep_patient, patient_rejections, valid_studies = filter_patient(

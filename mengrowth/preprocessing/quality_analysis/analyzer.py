@@ -7,6 +7,7 @@ scanning, metric computation, parallelization, and result aggregation.
 import csv
 import json
 import logging
+import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import asdict
 from datetime import datetime
@@ -164,7 +165,8 @@ class QualityAnalyzer:
             "studies": [],
         }
 
-        for study_id, sequences in studies.items():
+        total_studies = len(studies)
+        for study_idx, (study_id, sequences) in enumerate(studies.items(), 1):
             study_path = self.config.input_dir / patient_id / study_id
             study_result = {
                 "patient_id": patient_id,
@@ -172,6 +174,10 @@ class QualityAnalyzer:
                 "sequences": {},
                 "missing_sequences": [],
             }
+            self.logger.debug(
+                f"  Analyzing study {study_idx}/{total_studies}: {study_id} "
+                f"({len(sequences)} sequences)"
+            )
 
             # Detect missing sequences
             for expected_seq in self.config.expected_sequences:
@@ -312,11 +318,17 @@ class QualityAnalyzer:
 
         # Step 2: Analyze patients (with parallelization if enabled)
         all_patient_results = []
+        total_patients = len(dataset_structure)
+        total_studies = sum(len(s) for s in dataset_structure.values())
+        analysis_start = time.monotonic()
 
         if self.config.parallel.enabled and not self.config.dry_run:
             # Parallel processing
             n_workers = self.config.parallel.n_workers or None
-            self.logger.info(f"Analyzing patients in parallel (workers={n_workers})...")
+            self.logger.info(
+                f"Analyzing {total_patients} patients ({total_studies} studies) "
+                f"in parallel (workers={n_workers})..."
+            )
 
             with ProcessPoolExecutor(max_workers=n_workers) as executor:
                 # Submit all patient analysis tasks
@@ -331,8 +343,10 @@ class QualityAnalyzer:
                     try:
                         patient_result = future.result()
                         all_patient_results.append(patient_result)
+                        num_studies = patient_result["num_studies"]
                         self.logger.info(
-                            f"Analyzed patient {patient_id} ({idx}/{len(dataset_structure)})"
+                            f"Analyzed patient {idx}/{total_patients}: {patient_id} "
+                            f"({num_studies} studies)"
                         )
                     except Exception as e:
                         self.logger.error(
@@ -340,17 +354,27 @@ class QualityAnalyzer:
                         )
         else:
             # Sequential processing
-            self.logger.info("Analyzing patients sequentially...")
+            self.logger.info(
+                f"Analyzing {total_patients} patients ({total_studies} studies) "
+                f"sequentially..."
+            )
 
             for idx, (patient_id, studies) in enumerate(dataset_structure.items(), 1):
                 try:
                     patient_result = self.analyze_patient(patient_id, studies)
                     all_patient_results.append(patient_result)
                     self.logger.info(
-                        f"Analyzed patient {patient_id} ({idx}/{len(dataset_structure)})"
+                        f"Analyzed patient {idx}/{total_patients}: {patient_id} "
+                        f"({len(studies)} studies)"
                     )
                 except Exception as e:
                     self.logger.error(f"Failed to analyze patient {patient_id}: {e}")
+
+        analysis_elapsed = time.monotonic() - analysis_start
+        self.logger.info(
+            f"Patient analysis completed in {analysis_elapsed:.1f}s "
+            f"({len(all_patient_results)}/{total_patients} succeeded)"
+        )
 
         # Step 3: Aggregate results
         self.logger.info("Aggregating results...")

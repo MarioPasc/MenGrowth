@@ -56,6 +56,9 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
         self.reference_modality = reference_modality
         self.logger = logging.getLogger(__name__)
         self.save_detailed_info = config.get("save_detailed_registration_info", False)
+        self.use_center_of_mass_init = config.get("use_center_of_mass_init", True)
+        self.validate_registration_quality = config.get("validate_registration_quality", True)
+        self.quality_warning_threshold = config.get("quality_warning_threshold", -0.3)
 
         # Validate antspyx is available
         try:
@@ -118,7 +121,7 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
 
         try:
             self.logger.info(f"Registering {self.reference_modality} to atlas...")
-            ref_registered_path, ref_to_atlas_transform = self._register_reference_to_atlas(
+            ref_registered_path, ref_to_atlas_transform, quality_metrics = self._register_reference_to_atlas(
                 reference_path=reference_file,
                 atlas_path=atlas_path,
                 transform_path=ref_to_atlas_transform_path,
@@ -129,6 +132,8 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
         except Exception as e:
             self.logger.error(f"✗ Failed to register reference to atlas: {e}")
             raise RuntimeError(f"Atlas registration failed: {e}") from e
+
+        quality_metrics = quality_metrics or {}
 
         # 2. Apply transforms to all other modalities
         atlas_transforms = {}
@@ -186,7 +191,8 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
             "atlas_path": atlas_path,
             "ref_to_atlas_transform": ref_to_atlas_transform,
             "atlas_transforms": atlas_transforms,
-            "registered_modalities": registered_modalities
+            "registered_modalities": registered_modalities,
+            "quality_metrics": quality_metrics
         }
 
     def _register_reference_to_atlas(
@@ -195,7 +201,7 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
         atlas_path: Path,
         transform_path: Path,
         study_dir: Path
-    ) -> Tuple[Path, Path]:
+    ) -> Tuple[Path, Path, Optional[Dict[str, float]]]:
         """Register reference modality to atlas using AntsPyX.
 
         Handles multi-stage registration (e.g., Rigid + Affine).
@@ -207,7 +213,8 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
             study_dir: Study directory for output
 
         Returns:
-            Tuple of (registered_reference_path, actual_transform_path)
+            Tuple of (registered_reference_path, actual_transform_path, quality_metrics)
+            where quality_metrics is None if validation is disabled
 
         Raises:
             RuntimeError: If registration fails
@@ -285,6 +292,28 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
                 self.logger.debug(f"  aff_metric: {metric}")
                 self.logger.debug(f"  aff_iterations: {aff_iterations}")
 
+            # Compute center-of-mass alignment as initial transform if enabled
+            initial_tx = None
+            if self.use_center_of_mass_init:
+                self.logger.info("  Computing center-of-mass initialization...")
+                try:
+                    atlas_com = ants.get_center_of_mass(atlas_img)
+                    ref_com = ants.get_center_of_mass(reference_img)
+
+                    # Create translation to align centers
+                    translation = [a - r for a, r in zip(atlas_com, ref_com)]
+
+                    initial_tx = ants.create_ants_transform(
+                        transform_type='Euler3DTransform',
+                        center=ref_com,
+                        translation=translation
+                    )
+                    if self.verbose:
+                        self.logger.debug(f"[DEBUG] [AntsPyX] COM translation: {translation}")
+                except Exception as com_error:
+                    self.logger.warning(f"  COM initialization failed, proceeding without: {com_error}")
+                    initial_tx = None
+
             # Perform registration
             # Capture stdout if detailed info is enabled
             captured_stdout = None
@@ -294,6 +323,7 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
                         fixed=atlas_img,
                         moving=reference_img,
                         type_of_transform=type_of_transform,
+                        initial_transform=initial_tx,
                         outprefix=transform_prefix,
                         aff_metric=metric,
                         aff_sampling=metric_bins,
@@ -310,6 +340,7 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
                     fixed=atlas_img,
                     moving=reference_img,
                     type_of_transform=type_of_transform,
+                    initial_transform=initial_tx,
                     outprefix=transform_prefix,
                     aff_metric=metric,
                     aff_sampling=metric_bins,
@@ -338,6 +369,27 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
 
             if not actual_transform_path.exists():
                 raise RuntimeError(f"Transform not created: {actual_transform_path}")
+
+            # Compute and log registration quality if enabled
+            quality_metrics = None
+            if self.validate_registration_quality:
+                quality_metrics = self._compute_registration_quality(atlas_img, warped_img)
+                corr_sim = quality_metrics.get('correlation_similarity')
+                corr_dissim = quality_metrics.get('correlation_dissimilarity')
+                self.logger.info(
+                    f"  Registration quality: MI={quality_metrics['mi_dissimilarity']:.4f}, "
+                    f"Corr={corr_sim:.4f}" if corr_sim is not None else
+                    f"  Registration quality: MI={quality_metrics['mi_dissimilarity']:.4f}, "
+                    f"Corr=N/A"
+                )
+
+                # Warn if quality is poor (correlation_dissimilarity > threshold means poor alignment)
+                if corr_dissim is not None and corr_dissim > self.quality_warning_threshold:
+                    self.logger.warning(
+                        f"  WARNING: Registration quality may be poor! "
+                        f"Correlation dissimilarity ({corr_dissim:.4f}) "
+                        f"> threshold ({self.quality_warning_threshold})"
+                    )
 
             # Save warped reference to temp location
             temp_output = study_dir / f"_temp_{self.reference_modality}_atlas.nii.gz"
@@ -377,12 +429,50 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
                     registration_type="intra_study_to_atlas"
                 )
 
-            return final_output, actual_transform_path
+            return final_output, actual_transform_path, quality_metrics
 
         except Exception as e:
             error_msg = f"AntsPyX reference→atlas registration failed: {str(e)}"
             self.logger.error(error_msg)
             raise RuntimeError(error_msg) from e
+
+    def _compute_registration_quality(
+        self,
+        fixed_img: "ants.ANTsImage",
+        warped_img: "ants.ANTsImage"
+    ) -> Dict[str, float]:
+        """Compute quality metrics for registration result.
+
+        Args:
+            fixed_img: Fixed (atlas) image
+            warped_img: Warped (registered) moving image
+
+        Returns:
+            Dictionary with quality metrics:
+            - mi_dissimilarity: Mattes Mutual Information dissimilarity (lower = more similar)
+            - correlation_dissimilarity: Correlation dissimilarity (returns -1 for perfect match)
+            - correlation_similarity: Correlation similarity (0-1 scale, higher = better)
+        """
+        import ants
+
+        # Compute Mattes Mutual Information (lower = more similar in ANTs)
+        mi_dissimilarity = ants.image_similarity(
+            fixed_img, warped_img,
+            metric_type='MattesMutualInformation'
+        )
+
+        # Compute correlation (returns -1 for perfect match)
+        corr_dissimilarity = ants.image_similarity(
+            fixed_img, warped_img,
+            metric_type='Correlation'
+        )
+
+        return {
+            "mi_dissimilarity": float(mi_dissimilarity),
+            "correlation_dissimilarity": float(corr_dissimilarity),
+            # Convert to similarity (0-1 scale, higher = better)
+            "correlation_similarity": float(-corr_dissimilarity) if corr_dissimilarity is not None else None
+        }
 
     def _apply_transforms_to_modality(
         self,

@@ -129,4 +129,18 @@ def execute(
 
     logger.info(f"  Skull stripping completed successfully")
 
+    # Add qc_paths for QC system (study-level step output paths)
+    processed_modalities = list(results.keys())
+    results["qc_paths"] = {
+        "study_output_dir": str(study_output_dir),
+        "mask_outputs": {
+            mod: str(artifacts_base / f"{mod}_brain_mask.nii.gz")
+            for mod in processed_modalities
+        } if config.save_mask else {},
+        "image_outputs": {
+            mod: str(study_output_dir / f"{mod}.nii.gz")
+            for mod in processed_modalities
+        }
+    }
+
     return results

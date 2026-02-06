@@ -19,6 +19,7 @@ Usage:
 import argparse
 import logging
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -49,6 +50,19 @@ def setup_logging(verbose: bool = False) -> None:
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
+
+
+def _format_duration(seconds: float) -> str:
+    """Format elapsed seconds into human-readable duration string."""
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    minutes = int(seconds // 60)
+    secs = seconds % 60
+    if minutes < 60:
+        return f"{minutes}m {secs:.0f}s"
+    hours = minutes // 60
+    mins = minutes % 60
+    return f"{hours}h {mins}m {secs:.0f}s"
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -123,21 +137,21 @@ Metadata tracking:
     parser.add_argument(
         "--qa-config",
         type=Path,
-        default=None,
+        default=Path("configs/templates/quality_analysis.yaml"),
         help="Path to quality_analysis.yaml (default: configs/quality_analysis.yaml).",
     )
 
     parser.add_argument(
         "--input-root",
         type=Path,
-        default=None,
+        default=Path("/media/mpascual/PortableSSD/Meningiomas/MenGrowth/raw/processed"),
         help="Root directory containing raw data (required unless --skip-reorganize).",
     )
 
     parser.add_argument(
         "--output-root",
         type=Path,
-        required=True,
+        default=Path("/media/mpascual/PortableSSD/Meningiomas/MenGrowth/curated"),
         help="Root directory for all outputs (reorganized data, analysis, visualizations).",
     )
 
@@ -215,6 +229,9 @@ def main() -> int:
     setup_logging(verbose=args.verbose)
     logger = logging.getLogger(__name__)
 
+    pipeline_start = time.monotonic()
+    step_durations = {}
+
     try:
         # Validate arguments
         if not args.skip_reorganize and args.input_root is None:
@@ -225,11 +242,15 @@ def main() -> int:
         logger.info(f"Loading configuration from: {args.config}")
         preprocessing_config = load_preprocessing_config(args.config)
 
-        # Determine QA config path
+        # Determine QA config path and load once (reused by analyze + visualize)
         qa_config_path = args.qa_config
         if qa_config_path is None:
             repo_root = Path(__file__).parent.parent.parent
             qa_config_path = repo_root / "configs" / "quality_analysis.yaml"
+
+        qa_config = None
+        if qa_config_path.exists():
+            qa_config = load_quality_analysis_config(qa_config_path)
 
         # Initialize metadata manager
         metadata_manager: Optional[MetadataManager] = None
@@ -275,16 +296,19 @@ def main() -> int:
                 logger.error(f"Input root does not exist: {args.input_root}")
                 return 1
 
+            step_start = time.monotonic()
             reorg_stats = reorganize_raw_data(
                 input_root=args.input_root,
                 output_root=args.output_root,
                 config=preprocessing_config.raw_data,
                 dry_run=args.dry_run,
             )
+            step_durations["reorganize"] = time.monotonic() - step_start
 
             logger.info(f"Files copied: {reorg_stats['copied']}")
             logger.info(f"Files skipped: {reorg_stats['skipped']}")
             logger.info(f"Errors: {reorg_stats['errors']}")
+            logger.info(f"Step duration: {_format_duration(step_durations['reorganize'])}")
 
         # ====================================================================
         # STEP 2: FILTER
@@ -310,15 +334,18 @@ def main() -> int:
                 logger.info(f"Min studies per patient: {preprocessing_config.filtering.min_studies_per_patient}")
                 logger.info(f"Re-identify patients: {preprocessing_config.filtering.reid_patients}")
 
+                step_start = time.monotonic()
                 filter_stats = filter_raw_data(
                     data_root=args.output_root,
                     config=preprocessing_config,
                     metadata_manager=metadata_manager,
                     dry_run=args.dry_run,
                 )
+                step_durations["filter"] = time.monotonic() - step_start
 
                 logger.info(f"Patients kept: {filter_stats['patients_kept']}")
                 logger.info(f"Patients removed: {filter_stats['patients_removed']}")
+                logger.info(f"Step duration: {_format_duration(step_durations['filter'])}")
 
         # ====================================================================
         # STEP 2.5: QUALITY FILTERING
@@ -350,12 +377,14 @@ def main() -> int:
                     logger.info(f"Running quality validation checks...")
 
                     if not args.dry_run:
+                        step_start = time.monotonic()
                         qf_stats, qf_reports = run_quality_filtering(
                             data_root=mengrowth_dir,
                             config=qf_config,
                             metadata_manager=metadata_manager,
                             dry_run=args.dry_run,
                         )
+                        step_durations["quality_filter"] = time.monotonic() - step_start
 
                         # Export quality issues to CSV
                         quality_issues_path = args.output_root / "quality_issues.csv"
@@ -370,8 +399,11 @@ def main() -> int:
                         if qf_stats.issues_by_type:
                             logger.info(f"  Issues by type: {qf_stats.issues_by_type}")
 
+                        logger.info(f"Step duration: {_format_duration(step_durations['quality_filter'])}")
+
                         # Mark patients with blocking issues as excluded in metadata
                         if metadata_manager:
+                            excluded_count = 0
                             for report in qf_reports:
                                 if report.has_blocking_issues:
                                     # Get blocking reasons
@@ -382,6 +414,9 @@ def main() -> int:
                                                 reasons.append(f"{issue.check_name}")
                                     reason_str = "quality_filter:" + ",".join(set(reasons))
                                     metadata_manager.mark_excluded(report.patient_id, reason_str)
+                                    excluded_count += 1
+                            if excluded_count > 0:
+                                logger.info(f"Marked {excluded_count} patients as excluded due to quality issues")
                     else:
                         logger.info("Dry run - skipping actual quality filtering")
 
@@ -417,11 +452,9 @@ def main() -> int:
             logger.info("STEP 3: ANALYZE")
             logger.info("=" * 60)
 
-            if not qa_config_path.exists():
+            if qa_config is None:
                 logger.warning(f"QA config not found at {qa_config_path}, skipping analysis")
             else:
-                qa_config = load_quality_analysis_config(qa_config_path)
-
                 # Override input/output paths
                 mengrowth_dir = args.output_root / "MenGrowth-2025"
                 qa_output_dir = args.output_root / "qc_analysis"
@@ -433,13 +466,15 @@ def main() -> int:
                     logger.info(f"Output: {qa_output_dir}")
 
                     if not args.dry_run:
+                        step_start = time.monotonic()
                         # Override config paths for this run
                         qa_config.input_dir = mengrowth_dir
                         qa_config.output_dir = qa_output_dir
                         analyzer = QualityAnalyzer(config=qa_config)
                         analyzer.run_analysis()
                         analyzer.save_results()
-                        logger.info("Quality analysis complete")
+                        step_durations["analyze"] = time.monotonic() - step_start
+                        logger.info(f"Quality analysis complete ({_format_duration(step_durations['analyze'])})")
                     else:
                         logger.info("Dry run - skipping actual analysis")
 
@@ -456,10 +491,9 @@ def main() -> int:
 
             if not qa_output_dir.exists():
                 logger.warning(f"Analysis results not found: {qa_output_dir}, skipping visualization")
-            elif not qa_config_path.exists():
+            elif qa_config is None:
                 logger.warning(f"QA config not found at {qa_config_path}, skipping visualization")
             else:
-                qa_config = load_quality_analysis_config(qa_config_path)
                 # Override output_dir to match the analysis output location
                 qa_config.output_dir = qa_output_dir
 
@@ -467,23 +501,31 @@ def main() -> int:
                 logger.info(f"Output: {qa_output_dir}")
 
                 if not args.dry_run:
+                    step_start = time.monotonic()
                     visualizer = QualityVisualizer(
                         config=qa_config,
                         results_dir=qa_output_dir,
                     )
                     visualizer.run_visualization(metadata_manager=metadata_manager)
-                    logger.info("Visualization complete")
+                    step_durations["visualize"] = time.monotonic() - step_start
+                    logger.info(f"Visualization complete ({_format_duration(step_durations['visualize'])})")
                 else:
                     logger.info("Dry run - skipping actual visualization")
 
         # ====================================================================
         # SUMMARY
         # ====================================================================
+        pipeline_duration = time.monotonic() - pipeline_start
         logger.info("")
         logger.info("=" * 60)
         logger.info("CURATION COMPLETE")
         logger.info("=" * 60)
         logger.info(f"Output directory: {args.output_root}")
+        logger.info(f"Total pipeline duration: {_format_duration(pipeline_duration)}")
+        if step_durations:
+            logger.info("Step durations:")
+            for step_name, duration in step_durations.items():
+                logger.info(f"  {step_name}: {_format_duration(duration)}")
         logger.info("")
         logger.info("Generated files:")
         logger.info(f"  - {args.output_root}/MenGrowth-2025/  (reorganized data)")
