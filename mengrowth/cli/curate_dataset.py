@@ -374,51 +374,37 @@ def main() -> int:
                     )
                 else:
                     logger.info(f"Input: {mengrowth_dir}")
+                    logger.info(f"Remove blocked: {qf_config.remove_blocked}")
+                    logger.info(f"Min studies per patient: {qf_config.min_studies_per_patient}")
                     logger.info(f"Running quality validation checks...")
 
-                    if not args.dry_run:
-                        step_start = time.monotonic()
-                        qf_stats, qf_reports = run_quality_filtering(
-                            data_root=mengrowth_dir,
-                            config=qf_config,
-                            metadata_manager=metadata_manager,
-                            dry_run=args.dry_run,
-                        )
-                        step_durations["quality_filter"] = time.monotonic() - step_start
+                    step_start = time.monotonic()
+                    qf_stats, qf_reports = run_quality_filtering(
+                        data_root=mengrowth_dir,
+                        config=qf_config,
+                        metadata_manager=metadata_manager,
+                        dry_run=args.dry_run,
+                    )
+                    step_durations["quality_filter"] = time.monotonic() - step_start
 
-                        # Export quality issues to CSV
-                        quality_issues_path = args.output_root / "quality_issues.csv"
-                        export_quality_issues(qf_reports, quality_issues_path)
+                    # Export quality issues to CSV
+                    quality_issues_path = args.output_root / "quality_issues.csv"
+                    export_quality_issues(qf_reports, quality_issues_path)
 
-                        # Log summary
-                        logger.info(f"Quality filtering complete:")
-                        logger.info(f"  Files: {qf_stats.files_passed} passed, {qf_stats.files_warned} warned, {qf_stats.files_blocked} blocked")
-                        logger.info(f"  Studies: {qf_stats.studies_passed} passed, {qf_stats.studies_blocked} blocked")
-                        logger.info(f"  Patients: {qf_stats.patients_passed} passed, {qf_stats.patients_blocked} blocked")
+                    # Log summary
+                    logger.info(f"Quality filtering complete:")
+                    logger.info(f"  Files: {qf_stats.files_passed} passed, {qf_stats.files_warned} warned, {qf_stats.files_blocked} blocked")
+                    logger.info(f"  Studies: {qf_stats.studies_passed} passed, {qf_stats.studies_blocked} blocked")
+                    logger.info(f"  Patients: {qf_stats.patients_passed} passed, {qf_stats.patients_blocked} blocked")
 
-                        if qf_stats.issues_by_type:
-                            logger.info(f"  Issues by type: {qf_stats.issues_by_type}")
+                    if qf_stats.issues_by_type:
+                        logger.info(f"  Issues by type: {qf_stats.issues_by_type}")
 
-                        logger.info(f"Step duration: {_format_duration(step_durations['quality_filter'])}")
+                    if qf_stats.studies_removed or qf_stats.patients_removed:
+                        logger.info(f"  Studies removed: {qf_stats.studies_removed}")
+                        logger.info(f"  Patients removed: {qf_stats.patients_removed}")
 
-                        # Mark patients with blocking issues as excluded in metadata
-                        if metadata_manager:
-                            excluded_count = 0
-                            for report in qf_reports:
-                                if report.has_blocking_issues:
-                                    # Get blocking reasons
-                                    reasons = []
-                                    for study in report.study_reports:
-                                        for file_report in study.file_reports:
-                                            for issue in file_report.blocking_issues:
-                                                reasons.append(f"{issue.check_name}")
-                                    reason_str = "quality_filter:" + ",".join(set(reasons))
-                                    metadata_manager.mark_excluded(report.patient_id, reason_str)
-                                    excluded_count += 1
-                            if excluded_count > 0:
-                                logger.info(f"Marked {excluded_count} patients as excluded due to quality issues")
-                    else:
-                        logger.info("Dry run - skipping actual quality filtering")
+                    logger.info(f"Step duration: {_format_duration(step_durations['quality_filter'])}")
 
         # ====================================================================
         # EXPORT METADATA

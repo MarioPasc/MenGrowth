@@ -47,6 +47,7 @@ dependencies = [
     "pynrrd",
     "scipy",
     "scikit-image",
+    "openpyxl"
 ]
 
 [project.optional-dependencies]

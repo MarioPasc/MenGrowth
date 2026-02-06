@@ -230,6 +230,12 @@ raw_data:
     # Master switch to enable/disable all quality filtering
     enabled: true
 
+    # When true, remove studies/patients with blocking quality issues
+    remove_blocked: true
+
+    # Minimum clean studies required to keep a patient (otherwise patient is removed)
+    min_studies_per_patient: 2
+
     # A1: NRRD Header Validation
     # Validates NRRD file format and required headers
     nrrd_validation:
@@ -252,14 +258,22 @@ raw_data:
       enabled: true
       min_spacing_mm: 0.2        # Minimum voxel size (mm)
       max_spacing_mm: 7.0        # Maximum voxel size (mm) - raised for thick-slice 2D
-      max_anisotropy_ratio: 15.0 # Maximum anisotropy - raised for 2D multi-slice
+      max_anisotropy_ratio: 20.0 # Maximum anisotropy - raised for 2D multi-slice
       action: "warn"             # "warn" or "block"
 
     # B1: SNR-Based Filtering
     # Filters images based on signal-to-noise ratio
+    # Uses corner-based noise estimation with modality-specific thresholds
     snr_filtering:
       enabled: true
-      min_snr: 8.0               # Minimum SNR threshold
+      min_snr: 5.0               # Fallback SNR threshold
+      method: "corner"           # "corner" or "background_percentile"
+      corner_cube_size: 10       # Voxel cube size for corner sampling
+      modality_thresholds:       # Per-modality SNR thresholds
+        t1c: 8.0
+        t1n: 6.0
+        t2w: 5.0
+        t2f: 4.0
       action: "block"            # "warn" or "block"
 
     # B2: Contrast Detection
@@ -272,10 +286,31 @@ raw_data:
 
     # B3: Intensity Outlier Detection
     # Detects NaN, Inf, or extreme intensity values
+    # Per-modality thresholds (FLAIR naturally has higher outlier ratios)
     intensity_outliers:
       enabled: true
       reject_nan_inf: true       # Immediately reject files with NaN/Inf
-      max_outlier_ratio: 10.0    # Maximum max_intensity / 99th percentile
+      max_outlier_ratio: 10.0    # Fallback max_intensity / 99th percentile
+      modality_thresholds:       # Per-modality outlier ratio thresholds
+        t1c: 10.0
+        t1n: 15.0
+        t2w: 12.0
+        t2f: 30.0
+      action: "warn"             # "warn" or "block"
+
+    # B4: Motion Artifact Detection
+    # Detects motion/blurring via gradient entropy analysis
+    motion_artifact:
+      enabled: true
+      min_gradient_entropy: 3.0  # Minimum gradient histogram entropy (bits)
+      action: "warn"             # "warn" or "block"
+
+    # B5: Ghosting Detection
+    # Detects ghosting artifacts via corner signal intensity
+    ghosting_detection:
+      enabled: true
+      max_corner_to_foreground_ratio: 0.15  # Max corner/foreground mean ratio
+      corner_cube_size: 10       # Voxel cube size for corner sampling
       action: "warn"             # "warn" or "block"
 
     # C1: Affine Matrix Validation
@@ -300,20 +335,18 @@ raw_data:
       enabled: true
       action: "warn"             # "warn" or "block"
 
+    # C4: Brain Coverage Validation
+    # Checks minimum physical extent to ensure full brain coverage
+    brain_coverage:
+      enabled: true
+      min_extent_mm: 100.0       # Minimum physical extent per axis (mm)
+      action: "block"            # "warn" or "block"
+
     # D1: Temporal Ordering Validation
     # Validates study IDs reflect proper temporal ordering
     temporal_ordering:
       enabled: true
       action: "warn"             # Always warn-only (no blocking)
-
-    # D2: Anatomical Consistency Across Timepoints
-    # Checks for reasonable brain volume changes between timepoints
-    anatomical_consistency:
-      enabled: true
-      max_volume_change_percent: 15.0  # Maximum volume change between timepoints
-      min_brain_volume_cc: 900.0       # Minimum expected brain volume
-      max_brain_volume_cc: 1750.0      # Maximum expected brain volume
-      action: "warn"                   # "warn" or "block"
 
     # D3: Modality Consistency Across Timepoints
     # Checks if all timepoints have same modalities
