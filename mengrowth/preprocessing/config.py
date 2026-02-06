@@ -163,7 +163,7 @@ class VoxelSpacingConfig:
     enabled: bool = True
     min_spacing_mm: float = 0.3
     max_spacing_mm: float = 3.0
-    max_anisotropy_ratio: float = 3.0
+    max_anisotropy_ratio: float = 20.0
     action: str = "warn"  # "warn" or "block"
 
 
@@ -172,8 +172,17 @@ class SNRFilteringConfig:
     """Configuration for SNR-based filtering."""
 
     enabled: bool = True
-    min_snr: float = 8.0
+    min_snr: float = 5.0
+    method: str = "corner"  # "corner" or "background_percentile"
+    corner_cube_size: int = 10
+    modality_thresholds: Dict[str, float] = field(
+        default_factory=lambda: {"t1c": 8.0, "t1n": 6.0, "t2w": 5.0, "t2f": 4.0}
+    )
     action: str = "block"
+
+    def get_threshold(self, modality: str) -> float:
+        """Get SNR threshold for a modality, falling back to min_snr."""
+        return self.modality_thresholds.get(modality, self.min_snr)
 
 
 @dataclass
@@ -193,7 +202,14 @@ class IntensityOutliersConfig:
     enabled: bool = True
     reject_nan_inf: bool = True
     max_outlier_ratio: float = 10.0  # max vs 99th percentile
+    modality_thresholds: Dict[str, float] = field(
+        default_factory=lambda: {"t1c": 10.0, "t1n": 15.0, "t2w": 12.0, "t2f": 30.0}
+    )
     action: str = "warn"
+
+    def get_threshold(self, modality: str) -> float:
+        """Get outlier ratio threshold for a modality, falling back to max_outlier_ratio."""
+        return self.modality_thresholds.get(modality, self.max_outlier_ratio)
 
 
 @dataclass
@@ -232,13 +248,30 @@ class TemporalOrderingConfig:
 
 
 @dataclass
-class AnatomicalConsistencyConfig:
-    """Configuration for anatomical consistency across timepoints."""
+class MotionArtifactConfig:
+    """Configuration for motion artifact detection."""
 
     enabled: bool = True
-    max_volume_change_percent: float = 15.0
-    min_brain_volume_cc: float = 900.0
-    max_brain_volume_cc: float = 1750.0
+    min_gradient_entropy: float = 3.0
+    action: str = "warn"
+
+
+@dataclass
+class BrainCoverageConfig:
+    """Configuration for brain coverage validation."""
+
+    enabled: bool = True
+    min_extent_mm: float = 100.0
+    action: str = "block"
+
+
+@dataclass
+class GhostingDetectionConfig:
+    """Configuration for ghosting artifact detection."""
+
+    enabled: bool = True
+    max_corner_to_foreground_ratio: float = 0.15
+    corner_cube_size: int = 10
     action: str = "warn"
 
 
@@ -265,6 +298,8 @@ class QualityFilteringConfig:
 
     Attributes:
         enabled: Master switch to enable/disable all quality filtering.
+        remove_blocked: If True, remove studies/patients with blocking issues.
+        min_studies_per_patient: Minimum clean studies to keep a patient.
         nrrd_validation: NRRD header validation settings.
         scout_detection: Scout/localizer detection settings.
         voxel_spacing: Voxel spacing validation settings.
@@ -275,12 +310,16 @@ class QualityFilteringConfig:
         fov_consistency: Field-of-view consistency settings.
         orientation_consistency: Orientation consistency settings.
         temporal_ordering: Temporal ordering validation settings.
-        anatomical_consistency: Anatomical consistency settings.
+        motion_artifact: Motion artifact detection settings.
+        brain_coverage: Brain coverage validation settings.
+        ghosting_detection: Ghosting artifact detection settings.
         modality_consistency: Modality consistency settings.
         registration_reference: Registration reference availability settings.
     """
 
     enabled: bool = True
+    remove_blocked: bool = True
+    min_studies_per_patient: int = 2
     nrrd_validation: NRRDValidationConfig = field(default_factory=NRRDValidationConfig)
     scout_detection: ScoutDetectionConfig = field(default_factory=ScoutDetectionConfig)
     voxel_spacing: VoxelSpacingConfig = field(default_factory=VoxelSpacingConfig)
@@ -301,8 +340,14 @@ class QualityFilteringConfig:
     temporal_ordering: TemporalOrderingConfig = field(
         default_factory=TemporalOrderingConfig
     )
-    anatomical_consistency: AnatomicalConsistencyConfig = field(
-        default_factory=AnatomicalConsistencyConfig
+    motion_artifact: MotionArtifactConfig = field(
+        default_factory=MotionArtifactConfig
+    )
+    brain_coverage: BrainCoverageConfig = field(
+        default_factory=BrainCoverageConfig
+    )
+    ghosting_detection: GhostingDetectionConfig = field(
+        default_factory=GhostingDetectionConfig
     )
     modality_consistency: ModalityConsistencyConfig = field(
         default_factory=ModalityConsistencyConfig
@@ -484,7 +529,12 @@ def _parse_quality_filtering_config(qf_dict: dict) -> QualityFilteringConfig:
     snr_dict = qf_dict.get("snr_filtering", {})
     snr_config = SNRFilteringConfig(
         enabled=snr_dict.get("enabled", True),
-        min_snr=snr_dict.get("min_snr", 8.0),
+        min_snr=snr_dict.get("min_snr", 5.0),
+        method=snr_dict.get("method", "corner"),
+        corner_cube_size=snr_dict.get("corner_cube_size", 10),
+        modality_thresholds=snr_dict.get(
+            "modality_thresholds", {"t1c": 8.0, "t1n": 6.0, "t2w": 5.0, "t2f": 4.0}
+        ),
         action=snr_dict.get("action", "block"),
     )
 
@@ -501,6 +551,10 @@ def _parse_quality_filtering_config(qf_dict: dict) -> QualityFilteringConfig:
         enabled=intensity_dict.get("enabled", True),
         reject_nan_inf=intensity_dict.get("reject_nan_inf", True),
         max_outlier_ratio=intensity_dict.get("max_outlier_ratio", 10.0),
+        modality_thresholds=intensity_dict.get(
+            "modality_thresholds",
+            {"t1c": 10.0, "t1n": 15.0, "t2w": 12.0, "t2f": 30.0},
+        ),
         action=intensity_dict.get("action", "warn"),
     )
 
@@ -531,13 +585,28 @@ def _parse_quality_filtering_config(qf_dict: dict) -> QualityFilteringConfig:
         action=temporal_dict.get("action", "warn"),
     )
 
-    anatomical_dict = qf_dict.get("anatomical_consistency", {})
-    anatomical_config = AnatomicalConsistencyConfig(
-        enabled=anatomical_dict.get("enabled", True),
-        max_volume_change_percent=anatomical_dict.get("max_volume_change_percent", 15.0),
-        min_brain_volume_cc=anatomical_dict.get("min_brain_volume_cc", 900.0),
-        max_brain_volume_cc=anatomical_dict.get("max_brain_volume_cc", 1750.0),
-        action=anatomical_dict.get("action", "warn"),
+    motion_dict = qf_dict.get("motion_artifact", {})
+    motion_config = MotionArtifactConfig(
+        enabled=motion_dict.get("enabled", True),
+        min_gradient_entropy=motion_dict.get("min_gradient_entropy", 3.0),
+        action=motion_dict.get("action", "warn"),
+    )
+
+    coverage_dict = qf_dict.get("brain_coverage", {})
+    coverage_config = BrainCoverageConfig(
+        enabled=coverage_dict.get("enabled", True),
+        min_extent_mm=coverage_dict.get("min_extent_mm", 100.0),
+        action=coverage_dict.get("action", "block"),
+    )
+
+    ghosting_dict = qf_dict.get("ghosting_detection", {})
+    ghosting_config = GhostingDetectionConfig(
+        enabled=ghosting_dict.get("enabled", True),
+        max_corner_to_foreground_ratio=ghosting_dict.get(
+            "max_corner_to_foreground_ratio", 0.15
+        ),
+        corner_cube_size=ghosting_dict.get("corner_cube_size", 10),
+        action=ghosting_dict.get("action", "warn"),
     )
 
     modality_dict = qf_dict.get("modality_consistency", {})
@@ -555,6 +624,8 @@ def _parse_quality_filtering_config(qf_dict: dict) -> QualityFilteringConfig:
 
     return QualityFilteringConfig(
         enabled=qf_dict.get("enabled", True),
+        remove_blocked=qf_dict.get("remove_blocked", True),
+        min_studies_per_patient=qf_dict.get("min_studies_per_patient", 2),
         nrrd_validation=nrrd_config,
         scout_detection=scout_config,
         voxel_spacing=spacing_config,
@@ -565,7 +636,9 @@ def _parse_quality_filtering_config(qf_dict: dict) -> QualityFilteringConfig:
         fov_consistency=fov_config,
         orientation_consistency=orient_config,
         temporal_ordering=temporal_config,
-        anatomical_consistency=anatomical_config,
+        motion_artifact=motion_config,
+        brain_coverage=coverage_config,
+        ghosting_detection=ghosting_config,
         modality_consistency=modality_config,
         registration_reference=reg_ref_config,
     )

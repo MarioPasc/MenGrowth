@@ -5,14 +5,19 @@ metrics before preprocessing. All thresholds are configurable via YAML.
 """
 
 import logging
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import nrrd
 import numpy as np
+from scipy.ndimage import sobel
+from scipy.stats import entropy as scipy_entropy
 
 from mengrowth.preprocessing.config import QualityFilteringConfig
+from mengrowth.preprocessing.utils.filter_raw_data import append_to_rejected_files_csv
+from mengrowth.preprocessing.utils.reorganize_raw_data import RejectedFile
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +109,46 @@ class QualityFilteringStats:
     studies_blocked: int = 0
     patients_passed: int = 0
     patients_blocked: int = 0
+    studies_removed: int = 0
+    patients_removed: int = 0
     issues_by_type: Dict[str, int] = field(default_factory=dict)
+
+
+@dataclass
+class NRRDFileData:
+    """Loaded NRRD file data and metadata."""
+
+    header: Dict[str, Any]
+    data: Optional[np.ndarray]
+    file_path: Path
+    modality: str
+
+
+def load_nrrd_file(
+    file_path: Path, load_data: bool = True
+) -> Optional[NRRDFileData]:
+    """Load an NRRD file, returning header and optionally data.
+
+    Args:
+        file_path: Path to NRRD file.
+        load_data: If True, load both header and data; otherwise header only.
+
+    Returns:
+        NRRDFileData or None on failure.
+    """
+    modality = file_path.stem
+    try:
+        if load_data:
+            data, header = nrrd.read(str(file_path))
+        else:
+            header = nrrd.read_header(str(file_path))
+            data = None
+        return NRRDFileData(
+            header=header, data=data, file_path=file_path, modality=modality
+        )
+    except Exception as e:
+        logger.warning(f"Failed to load {file_path}: {e}")
+        return None
 
 
 # =============================================================================
@@ -113,22 +157,9 @@ class QualityFilteringStats:
 
 
 def validate_nrrd_header(
-    file_path: Path, config: QualityFilteringConfig
+    file_data: NRRDFileData, config: QualityFilteringConfig
 ) -> ValidationResult:
-    """A1: Validate NRRD file header.
-
-    Checks:
-    - File is readable
-    - Contains valid 3D data (if require_3d is True)
-    - Has space/orientation field (if require_space_field is True)
-
-    Args:
-        file_path: Path to NRRD file.
-        config: Quality filtering configuration.
-
-    Returns:
-        ValidationResult with pass/fail status and details.
-    """
+    """A1: Validate NRRD file header."""
     check_name = "nrrd_validation"
     cfg = config.nrrd_validation
 
@@ -137,16 +168,7 @@ def validate_nrrd_header(
             passed=True, check_name=check_name, message="Check disabled"
         )
 
-    try:
-        header = nrrd.read_header(str(file_path))
-    except Exception as e:
-        return ValidationResult(
-            passed=False,
-            check_name=check_name,
-            message=f"Failed to read NRRD header: {e}",
-            action="block",
-            details={"error": str(e)},
-        )
+    header = file_data.header
 
     # Check dimension
     if cfg.require_3d:
@@ -182,21 +204,9 @@ def validate_nrrd_header(
 
 
 def detect_scout_localizer(
-    file_path: Path, config: QualityFilteringConfig
+    file_data: NRRDFileData, config: QualityFilteringConfig
 ) -> ValidationResult:
-    """A2: Detect scout/localizer images.
-
-    Checks:
-    - Minimum dimension in voxels
-    - Maximum slice thickness
-
-    Args:
-        file_path: Path to NRRD file.
-        config: Quality filtering configuration.
-
-    Returns:
-        ValidationResult with pass/fail status and details.
-    """
+    """A2: Detect scout/localizer images."""
     check_name = "scout_detection"
     cfg = config.scout_detection
 
@@ -205,15 +215,7 @@ def detect_scout_localizer(
             passed=True, check_name=check_name, message="Check disabled"
         )
 
-    try:
-        header = nrrd.read_header(str(file_path))
-    except Exception as e:
-        return ValidationResult(
-            passed=False,
-            check_name=check_name,
-            message=f"Failed to read header: {e}",
-            action="block",
-        )
+    header = file_data.header
 
     # Get dimensions
     sizes = header.get("sizes", [])
@@ -264,21 +266,9 @@ def detect_scout_localizer(
 
 
 def check_voxel_spacing(
-    file_path: Path, config: QualityFilteringConfig
+    file_data: NRRDFileData, config: QualityFilteringConfig
 ) -> ValidationResult:
-    """A3: Validate voxel spacing.
-
-    Checks:
-    - Spacing within min/max bounds
-    - Anisotropy ratio within bounds
-
-    Args:
-        file_path: Path to NRRD file.
-        config: Quality filtering configuration.
-
-    Returns:
-        ValidationResult with pass/fail status and details.
-    """
+    """A3: Validate voxel spacing."""
     check_name = "voxel_spacing"
     cfg = config.voxel_spacing
 
@@ -287,16 +277,7 @@ def check_voxel_spacing(
             passed=True, check_name=check_name, message="Check disabled"
         )
 
-    try:
-        header = nrrd.read_header(str(file_path))
-    except Exception as e:
-        return ValidationResult(
-            passed=False,
-            check_name=check_name,
-            message=f"Failed to read header: {e}",
-            action=cfg.action,
-        )
-
+    header = file_data.header
     space_directions = header.get("space directions", None)
     if space_directions is None:
         return ValidationResult(
@@ -393,16 +374,60 @@ def compute_snr_background(data: np.ndarray) -> float:
     return signal_mean / noise_std
 
 
-def check_snr(file_path: Path, config: QualityFilteringConfig) -> ValidationResult:
-    """B1: Check signal-to-noise ratio.
+def compute_snr_corner(data: np.ndarray, cube_size: int = 10) -> float:
+    """Compute SNR using corner-based noise estimation.
+
+    Samples 8 corners of the volume to estimate noise, then computes
+    signal from foreground voxels. Applies Rayleigh correction to the
+    noise standard deviation for magnitude images.
 
     Args:
-        file_path: Path to NRRD file.
-        config: Quality filtering configuration.
+        data: 3D image data array.
+        cube_size: Size of corner cubes in voxels.
 
     Returns:
-        ValidationResult with pass/fail status and details.
+        Estimated SNR value.
     """
+    shape = data.shape
+    if any(s < cube_size * 2 for s in shape[:3]):
+        # Volume too small for corner sampling, fall back
+        return compute_snr_background(data)
+
+    cs = cube_size
+    corners = [
+        data[:cs, :cs, :cs],
+        data[:cs, :cs, -cs:],
+        data[:cs, -cs:, :cs],
+        data[:cs, -cs:, -cs:],
+        data[-cs:, :cs, :cs],
+        data[-cs:, :cs, -cs:],
+        data[-cs:, -cs:, :cs],
+        data[-cs:, -cs:, -cs:],
+    ]
+
+    corner_values = np.concatenate([c.ravel() for c in corners])
+    raw_std = np.std(corner_values)
+
+    # Rayleigh correction for magnitude images
+    noise_std = raw_std * np.sqrt(2.0 / np.pi)
+
+    if noise_std == 0:
+        return float("inf")
+
+    # Signal from 75th percentile of foreground
+    p10 = np.percentile(data, 10)
+    foreground = data[data > p10]
+    if len(foreground) == 0:
+        return 0.0
+
+    signal = np.percentile(foreground, 75)
+    return signal / noise_std
+
+
+def check_snr(
+    file_data: NRRDFileData, config: QualityFilteringConfig
+) -> ValidationResult:
+    """B1: Check signal-to-noise ratio."""
     check_name = "snr_filtering"
     cfg = config.snr_filtering
 
@@ -411,45 +436,36 @@ def check_snr(file_path: Path, config: QualityFilteringConfig) -> ValidationResu
             passed=True, check_name=check_name, message="Check disabled"
         )
 
-    try:
-        data, _ = nrrd.read(str(file_path))
-    except Exception as e:
+    data = file_data.data
+    modality = file_data.modality
+    threshold = cfg.get_threshold(modality)
+
+    if cfg.method == "corner":
+        snr = compute_snr_corner(data, cfg.corner_cube_size)
+    else:
+        snr = compute_snr_background(data)
+
+    if snr < threshold:
         return ValidationResult(
             passed=False,
             check_name=check_name,
-            message=f"Failed to read file: {e}",
+            message=f"SNR {snr:.2f} < {threshold} ({modality})",
             action=cfg.action,
-        )
-
-    snr = compute_snr_background(data)
-
-    if snr < cfg.min_snr:
-        return ValidationResult(
-            passed=False,
-            check_name=check_name,
-            message=f"SNR {snr:.2f} < {cfg.min_snr}",
-            action=cfg.action,
-            details={"snr": snr},
+            details={"snr": snr, "threshold": threshold, "method": cfg.method},
         )
 
     return ValidationResult(
         passed=True,
         check_name=check_name,
-        message=f"SNR {snr:.2f} >= {cfg.min_snr}",
-        details={"snr": snr},
+        message=f"SNR {snr:.2f} >= {threshold} ({modality})",
+        details={"snr": snr, "threshold": threshold, "method": cfg.method},
     )
 
 
-def check_contrast(file_path: Path, config: QualityFilteringConfig) -> ValidationResult:
-    """B2: Check image contrast (detect uniform images).
-
-    Args:
-        file_path: Path to NRRD file.
-        config: Quality filtering configuration.
-
-    Returns:
-        ValidationResult with pass/fail status and details.
-    """
+def check_contrast(
+    file_data: NRRDFileData, config: QualityFilteringConfig
+) -> ValidationResult:
+    """B2: Check image contrast (detect uniform images)."""
     check_name = "contrast_detection"
     cfg = config.contrast_detection
 
@@ -458,16 +474,7 @@ def check_contrast(file_path: Path, config: QualityFilteringConfig) -> Validatio
             passed=True, check_name=check_name, message="Check disabled"
         )
 
-    try:
-        data, _ = nrrd.read(str(file_path))
-    except Exception as e:
-        return ValidationResult(
-            passed=False,
-            check_name=check_name,
-            message=f"Failed to read file: {e}",
-            action=cfg.action,
-        )
-
+    data = file_data.data
     data_flat = data.flatten()
 
     # Check std/mean ratio
@@ -515,17 +522,9 @@ def check_contrast(file_path: Path, config: QualityFilteringConfig) -> Validatio
 
 
 def check_intensity_outliers(
-    file_path: Path, config: QualityFilteringConfig
+    file_data: NRRDFileData, config: QualityFilteringConfig
 ) -> ValidationResult:
-    """B3: Check for intensity outliers (NaN, Inf, extreme values).
-
-    Args:
-        file_path: Path to NRRD file.
-        config: Quality filtering configuration.
-
-    Returns:
-        ValidationResult with pass/fail status and details.
-    """
+    """B3: Check for intensity outliers (NaN, Inf, extreme values)."""
     check_name = "intensity_outliers"
     cfg = config.intensity_outliers
 
@@ -534,15 +533,9 @@ def check_intensity_outliers(
             passed=True, check_name=check_name, message="Check disabled"
         )
 
-    try:
-        data, _ = nrrd.read(str(file_path))
-    except Exception as e:
-        return ValidationResult(
-            passed=False,
-            check_name=check_name,
-            message=f"Failed to read file: {e}",
-            action=cfg.action,
-        )
+    data = file_data.data
+    modality = file_data.modality
+    threshold = cfg.get_threshold(modality)
 
     # Check for NaN/Inf
     if cfg.reject_nan_inf:
@@ -571,20 +564,143 @@ def check_intensity_outliers(
     max_val = np.max(data_valid)
     p99 = np.percentile(data_valid, 99)
 
-    if p99 > 0 and max_val / p99 > cfg.max_outlier_ratio:
+    if p99 > 0 and max_val / p99 > threshold:
         return ValidationResult(
             passed=False,
             check_name=check_name,
-            message=f"Extreme outlier: max/99th = {max_val/p99:.1f} > {cfg.max_outlier_ratio}",
+            message=f"Extreme outlier: max/99th = {max_val/p99:.1f} > {threshold} ({modality})",
             action=cfg.action,
-            details={"max": float(max_val), "p99": float(p99)},
+            details={"max": float(max_val), "p99": float(p99), "threshold": threshold},
         )
 
     return ValidationResult(
         passed=True,
         check_name=check_name,
         message="No intensity outliers",
-        details={"max": float(max_val), "p99": float(p99)},
+        details={"max": float(max_val), "p99": float(p99), "threshold": threshold},
+    )
+
+
+def check_motion_artifact(
+    file_data: NRRDFileData, config: QualityFilteringConfig
+) -> ValidationResult:
+    """B4: Detect motion artifacts via gradient entropy.
+
+    Low gradient entropy suggests blurring/motion artifacts.
+    """
+    check_name = "motion_artifact"
+    cfg = config.motion_artifact
+
+    if not cfg.enabled:
+        return ValidationResult(
+            passed=True, check_name=check_name, message="Check disabled"
+        )
+
+    data = file_data.data.astype(np.float64)
+
+    # Compute gradient magnitude via sobel on each axis
+    grad_mag = np.zeros_like(data)
+    for axis in range(min(3, data.ndim)):
+        grad_mag += sobel(data, axis=axis) ** 2
+    grad_mag = np.sqrt(grad_mag)
+
+    # Compute entropy of gradient histogram
+    hist, _ = np.histogram(grad_mag[grad_mag > 0], bins=256)
+    hist = hist.astype(np.float64)
+    hist_sum = hist.sum()
+    if hist_sum == 0:
+        return ValidationResult(
+            passed=True,
+            check_name=check_name,
+            message="No gradient information",
+        )
+
+    hist_norm = hist / hist_sum
+    grad_entropy = float(scipy_entropy(hist_norm, base=2))
+
+    if grad_entropy < cfg.min_gradient_entropy:
+        return ValidationResult(
+            passed=False,
+            check_name=check_name,
+            message=f"Low gradient entropy {grad_entropy:.2f} < {cfg.min_gradient_entropy} (possible motion/blur)",
+            action=cfg.action,
+            details={"gradient_entropy": grad_entropy},
+        )
+
+    return ValidationResult(
+        passed=True,
+        check_name=check_name,
+        message=f"Gradient entropy {grad_entropy:.2f} OK",
+        details={"gradient_entropy": grad_entropy},
+    )
+
+
+def check_ghosting(
+    file_data: NRRDFileData, config: QualityFilteringConfig
+) -> ValidationResult:
+    """B5: Detect ghosting artifacts via corner signal intensity.
+
+    High signal in corners relative to foreground suggests ghosting.
+    """
+    check_name = "ghosting_detection"
+    cfg = config.ghosting_detection
+
+    if not cfg.enabled:
+        return ValidationResult(
+            passed=True, check_name=check_name, message="Check disabled"
+        )
+
+    data = file_data.data
+    shape = data.shape
+    cs = cfg.corner_cube_size
+
+    if any(s < cs * 2 for s in shape[:3]):
+        return ValidationResult(
+            passed=True,
+            check_name=check_name,
+            message="Volume too small for corner analysis",
+        )
+
+    corners = [
+        data[:cs, :cs, :cs],
+        data[:cs, :cs, -cs:],
+        data[:cs, -cs:, :cs],
+        data[:cs, -cs:, -cs:],
+        data[-cs:, :cs, :cs],
+        data[-cs:, :cs, -cs:],
+        data[-cs:, -cs:, :cs],
+        data[-cs:, -cs:, -cs:],
+    ]
+
+    corner_mean = np.mean(np.abs(np.concatenate([c.ravel() for c in corners])))
+
+    # Foreground mean (voxels above 10th percentile)
+    p10 = np.percentile(data, 10)
+    foreground = data[data > p10]
+    if len(foreground) == 0 or np.mean(foreground) == 0:
+        return ValidationResult(
+            passed=True,
+            check_name=check_name,
+            message="Cannot compute foreground mean",
+        )
+
+    foreground_mean = np.mean(foreground)
+    ratio = corner_mean / foreground_mean
+
+    if ratio > cfg.max_corner_to_foreground_ratio:
+        return ValidationResult(
+            passed=False,
+            check_name=check_name,
+            message=f"Corner/foreground ratio {ratio:.3f} > {cfg.max_corner_to_foreground_ratio} (possible ghosting)",
+            action=cfg.action,
+            details={"corner_foreground_ratio": ratio},
+        )
+
+    return ValidationResult(
+        passed=True,
+        check_name=check_name,
+        message=f"Corner/foreground ratio {ratio:.3f} OK",
+        details={"corner_foreground_ratio": ratio},
     )
 
 
@@ -593,16 +709,10 @@ def check_intensity_outliers(
 # =============================================================================
 
 
-def validate_affine(file_path: Path, config: QualityFilteringConfig) -> ValidationResult:
-    """C1: Validate affine transformation matrix.
-
-    Args:
-        file_path: Path to NRRD file.
-        config: Quality filtering configuration.
-
-    Returns:
-        ValidationResult with pass/fail status and details.
-    """
+def validate_affine(
+    file_data: NRRDFileData, config: QualityFilteringConfig
+) -> ValidationResult:
+    """C1: Validate affine transformation matrix."""
     check_name = "affine_validation"
     cfg = config.affine_validation
 
@@ -611,16 +721,7 @@ def validate_affine(file_path: Path, config: QualityFilteringConfig) -> Validati
             passed=True, check_name=check_name, message="Check disabled"
         )
 
-    try:
-        header = nrrd.read_header(str(file_path))
-    except Exception as e:
-        return ValidationResult(
-            passed=False,
-            check_name=check_name,
-            message=f"Failed to read header: {e}",
-            action=cfg.action,
-        )
-
+    header = file_data.header
     space_directions = header.get("space directions", None)
     if space_directions is None:
         return ValidationResult(
@@ -687,17 +788,9 @@ def validate_affine(file_path: Path, config: QualityFilteringConfig) -> Validati
 
 
 def check_fov_consistency(
-    file_path: Path, config: QualityFilteringConfig
+    file_data: NRRDFileData, config: QualityFilteringConfig
 ) -> ValidationResult:
-    """C2: Check field-of-view consistency (asymmetry).
-
-    Args:
-        file_path: Path to NRRD file.
-        config: Quality filtering configuration.
-
-    Returns:
-        ValidationResult with pass/fail status and details.
-    """
+    """C2: Check field-of-view consistency (asymmetry)."""
     check_name = "fov_consistency"
     cfg = config.fov_consistency
 
@@ -706,16 +799,7 @@ def check_fov_consistency(
             passed=True, check_name=check_name, message="Check disabled"
         )
 
-    try:
-        header = nrrd.read_header(str(file_path))
-    except Exception as e:
-        return ValidationResult(
-            passed=False,
-            check_name=check_name,
-            message=f"Failed to read header: {e}",
-            action="block",
-        )
-
+    header = file_data.header
     sizes = header.get("sizes", [])
     space_directions = header.get("space directions", None)
 
@@ -764,18 +848,66 @@ def check_fov_consistency(
     )
 
 
+def check_brain_coverage(
+    file_data: NRRDFileData, config: QualityFilteringConfig
+) -> ValidationResult:
+    """C4: Check brain coverage (minimum physical extent)."""
+    check_name = "brain_coverage"
+    cfg = config.brain_coverage
+
+    if not cfg.enabled:
+        return ValidationResult(
+            passed=True, check_name=check_name, message="Check disabled"
+        )
+
+    header = file_data.header
+    sizes = header.get("sizes", [])
+    space_directions = header.get("space directions", None)
+
+    if len(sizes) < 3 or space_directions is None:
+        return ValidationResult(
+            passed=True,
+            check_name=check_name,
+            message="Insufficient spatial information",
+        )
+
+    try:
+        extents = []
+        valid_dirs = [d for d in space_directions if d is not None]
+        for i, d in enumerate(valid_dirs[:3]):
+            extent_mm = sizes[i] * np.linalg.norm(d)
+            extents.append(extent_mm)
+
+        min_extent = min(extents)
+
+        if min_extent < cfg.min_extent_mm:
+            return ValidationResult(
+                passed=False,
+                check_name=check_name,
+                message=f"Min physical extent {min_extent:.1f}mm < {cfg.min_extent_mm}mm",
+                action=cfg.action,
+                details={"extents_mm": extents, "min_extent": min_extent},
+            )
+
+        return ValidationResult(
+            passed=True,
+            check_name=check_name,
+            message=f"Coverage OK (min extent {min_extent:.1f}mm)",
+            details={"extents_mm": extents, "min_extent": min_extent},
+        )
+
+    except Exception as e:
+        return ValidationResult(
+            passed=True,
+            check_name=check_name,
+            message=f"Could not compute extents: {e}",
+        )
+
+
 def check_orientation_consistency(
     study_files: Dict[str, Path], config: QualityFilteringConfig
 ) -> ValidationResult:
-    """C3: Check orientation consistency within a study.
-
-    Args:
-        study_files: Dictionary mapping modality names to file paths.
-        config: Quality filtering configuration.
-
-    Returns:
-        ValidationResult with pass/fail status and details.
-    """
+    """C3: Check orientation consistency within a study."""
     check_name = "orientation_consistency"
     cfg = config.orientation_consistency
 
@@ -825,17 +957,7 @@ def check_temporal_ordering(
     metadata_manager: Optional[Any] = None,
     config: Optional[QualityFilteringConfig] = None,
 ) -> ValidationResult:
-    """D1: Check temporal ordering of studies.
-
-    Args:
-        patient_id: Patient identifier.
-        study_ids: List of study IDs in directory order.
-        metadata_manager: Optional metadata manager with acquisition dates.
-        config: Quality filtering configuration.
-
-    Returns:
-        ValidationResult with pass/fail status and details.
-    """
+    """D1: Check temporal ordering of studies."""
     check_name = "temporal_ordering"
 
     if config is None or not config.temporal_ordering.enabled:
@@ -878,87 +1000,10 @@ def check_temporal_ordering(
     )
 
 
-def check_anatomical_consistency(
-    patient_volumes: Dict[str, float], config: QualityFilteringConfig
-) -> ValidationResult:
-    """D2: Check anatomical consistency across timepoints.
-
-    Note: This requires brain volumes which are computed during preprocessing.
-    At curation stage, this check uses rough estimates from image dimensions.
-
-    Args:
-        patient_volumes: Dictionary mapping study_id to estimated brain volume (cc).
-        config: Quality filtering configuration.
-
-    Returns:
-        ValidationResult with pass/fail status and details.
-    """
-    check_name = "anatomical_consistency"
-    cfg = config.anatomical_consistency
-
-    if not cfg.enabled:
-        return ValidationResult(
-            passed=True, check_name=check_name, message="Check disabled"
-        )
-
-    if len(patient_volumes) < 2:
-        return ValidationResult(
-            passed=True,
-            check_name=check_name,
-            message="Need at least 2 studies for comparison",
-        )
-
-    volumes = list(patient_volumes.values())
-    issues = []
-
-    # Check volume bounds
-    for study_id, vol in patient_volumes.items():
-        if vol < cfg.min_brain_volume_cc:
-            issues.append(f"{study_id}: volume {vol:.0f}cc < {cfg.min_brain_volume_cc}cc")
-        if vol > cfg.max_brain_volume_cc:
-            issues.append(f"{study_id}: volume {vol:.0f}cc > {cfg.max_brain_volume_cc}cc")
-
-    # Check volume changes between consecutive studies
-    sorted_studies = sorted(patient_volumes.keys())
-    for i in range(1, len(sorted_studies)):
-        prev_vol = patient_volumes[sorted_studies[i - 1]]
-        curr_vol = patient_volumes[sorted_studies[i]]
-        if prev_vol > 0:
-            change_pct = abs(curr_vol - prev_vol) / prev_vol * 100
-            if change_pct > cfg.max_volume_change_percent:
-                issues.append(
-                    f"{sorted_studies[i-1]}->{sorted_studies[i]}: {change_pct:.1f}% change"
-                )
-
-    if issues:
-        return ValidationResult(
-            passed=False,
-            check_name=check_name,
-            message="; ".join(issues),
-            action=cfg.action,
-            details={"volumes": patient_volumes},
-        )
-
-    return ValidationResult(
-        passed=True,
-        check_name=check_name,
-        message="Anatomical consistency OK",
-        details={"volumes": patient_volumes},
-    )
-
-
 def check_modality_consistency(
     patient_modalities: Dict[str, List[str]], config: QualityFilteringConfig
 ) -> ValidationResult:
-    """D3: Check modality consistency across timepoints.
-
-    Args:
-        patient_modalities: Dict mapping study_id to list of modalities.
-        config: Quality filtering configuration.
-
-    Returns:
-        ValidationResult with pass/fail status and details.
-    """
+    """D3: Check modality consistency across timepoints."""
     check_name = "modality_consistency"
     cfg = config.modality_consistency
 
@@ -979,7 +1024,7 @@ def check_modality_consistency(
         return ValidationResult(
             passed=False,
             check_name=check_name,
-            message=f"Inconsistent modalities across timepoints",
+            message="Inconsistent modalities across timepoints",
             action=cfg.action,
             details={"modalities_per_study": patient_modalities},
         )
@@ -1000,15 +1045,7 @@ def check_modality_consistency(
 def check_registration_reference(
     study_modalities: List[str], config: QualityFilteringConfig
 ) -> ValidationResult:
-    """E1: Check if a valid registration reference modality exists.
-
-    Args:
-        study_modalities: List of modalities in the study.
-        config: Quality filtering configuration.
-
-    Returns:
-        ValidationResult with pass/fail status and details.
-    """
+    """E1: Check if a valid registration reference modality exists."""
     check_name = "registration_reference"
     cfg = config.registration_reference
 
@@ -1077,22 +1114,69 @@ def validate_file(
         modality=modality,
     )
 
-    # A: Data Validation
-    report.results.append(validate_nrrd_header(file_path, config))
-    report.results.append(detect_scout_localizer(file_path, config))
-    report.results.append(check_voxel_spacing(file_path, config))
+    # Load file once
+    file_data = load_nrrd_file(file_path, load_data=load_data)
+    if file_data is None:
+        report.results.append(
+            ValidationResult(
+                passed=False,
+                check_name="file_read",
+                message=f"Failed to read file: {file_path}",
+                action="block",
+            )
+        )
+        return report
 
-    # B: Image Quality (requires loading data)
-    if load_data:
-        report.results.append(check_snr(file_path, config))
-        report.results.append(check_contrast(file_path, config))
-        report.results.append(check_intensity_outliers(file_path, config))
+    # A: Data Validation (header only)
+    report.results.append(validate_nrrd_header(file_data, config))
+    report.results.append(detect_scout_localizer(file_data, config))
+    report.results.append(check_voxel_spacing(file_data, config))
 
-    # C: Geometric
-    report.results.append(validate_affine(file_path, config))
-    report.results.append(check_fov_consistency(file_path, config))
+    # B: Image Quality (requires data)
+    if load_data and file_data.data is not None:
+        report.results.append(check_snr(file_data, config))
+        report.results.append(check_contrast(file_data, config))
+        report.results.append(check_intensity_outliers(file_data, config))
+        report.results.append(check_motion_artifact(file_data, config))
+        report.results.append(check_ghosting(file_data, config))
+
+    # C: Geometric (header only)
+    report.results.append(validate_affine(file_data, config))
+    report.results.append(check_fov_consistency(file_data, config))
+    report.results.append(check_brain_coverage(file_data, config))
 
     return report
+
+
+def _collect_blocking_reasons(patient_report: PatientValidationReport, study_id: str) -> str:
+    """Collect blocking check names for a specific study."""
+    reasons = set()
+    for study_report in patient_report.study_reports:
+        if study_report.study_id != study_id:
+            continue
+        for file_report in study_report.file_reports:
+            for issue in file_report.blocking_issues:
+                reasons.add(issue.check_name)
+        for result in study_report.study_level_results:
+            if not result.passed and result.action == "block":
+                reasons.add(result.check_name)
+    return ",".join(sorted(reasons)) if reasons else "unknown"
+
+
+def _collect_all_blocking_reasons(patient_report: PatientValidationReport) -> str:
+    """Collect all blocking check names across all studies for a patient."""
+    reasons = set()
+    for study_report in patient_report.study_reports:
+        for file_report in study_report.file_reports:
+            for issue in file_report.blocking_issues:
+                reasons.add(issue.check_name)
+        for result in study_report.study_level_results:
+            if not result.passed and result.action == "block":
+                reasons.add(result.check_name)
+    for result in patient_report.patient_level_results:
+        if not result.passed and result.action == "block":
+            reasons.add(result.check_name)
+    return ",".join(sorted(reasons)) if reasons else "unknown"
 
 
 def run_quality_filtering(
@@ -1102,6 +1186,9 @@ def run_quality_filtering(
     dry_run: bool = False,
 ) -> Tuple[QualityFilteringStats, List[PatientValidationReport]]:
     """Run complete quality filtering on dataset.
+
+    Phase 1: Validate all files and collect reports.
+    Phase 2: Remove blocked studies/patients when config.remove_blocked is True.
 
     Args:
         data_root: Path to MenGrowth-2025 directory.
@@ -1119,7 +1206,9 @@ def run_quality_filtering(
     stats = QualityFilteringStats()
     patient_reports: List[PatientValidationReport] = []
 
-    # Find all patient directories
+    # =========================================================================
+    # Phase 1: Validation
+    # =========================================================================
     patient_dirs = sorted([d for d in data_root.iterdir() if d.is_dir()])
     logger.info(f"Found {len(patient_dirs)} patients to validate")
 
@@ -1198,10 +1287,113 @@ def run_quality_filtering(
 
         patient_reports.append(patient_report)
 
-    logger.info(f"Quality filtering complete:")
+    logger.info("Quality filtering validation complete:")
     logger.info(f"  Files: {stats.files_passed} passed, {stats.files_warned} warned, {stats.files_blocked} blocked")
     logger.info(f"  Studies: {stats.studies_passed} passed, {stats.studies_blocked} blocked")
     logger.info(f"  Patients: {stats.patients_passed} passed, {stats.patients_blocked} blocked")
+
+    # =========================================================================
+    # Phase 2: Actionable Removal
+    # =========================================================================
+    if config.remove_blocked and not dry_run:
+        logger.info("Phase 2: Removing blocked studies/patients...")
+        all_rejected_files: List[RejectedFile] = []
+
+        for patient_report in patient_reports:
+            if not patient_report.has_blocking_issues:
+                continue
+
+            patient_id = patient_report.patient_id
+            patient_dir = data_root / patient_id
+
+            if not patient_dir.exists():
+                continue
+
+            # Count blocked vs clean studies
+            blocked_studies = []
+            clean_studies = []
+            for study_report in patient_report.study_reports:
+                if study_report.has_blocking_issues:
+                    blocked_studies.append(study_report.study_id)
+                else:
+                    clean_studies.append(study_report.study_id)
+
+            clean_count = len(clean_studies)
+
+            if clean_count >= config.min_studies_per_patient:
+                # Remove only blocked studies, keep patient
+                for study_id in blocked_studies:
+                    study_dir = patient_dir / study_id
+                    if not study_dir.exists():
+                        continue
+
+                    reasons = _collect_blocking_reasons(patient_report, study_id)
+                    # Log rejected files
+                    for nrrd_file in study_dir.glob("*.nrrd"):
+                        all_rejected_files.append(
+                            RejectedFile(
+                                source_path=str(nrrd_file),
+                                filename=nrrd_file.name,
+                                patient_id=patient_id,
+                                study_name=study_id,
+                                rejection_reason=f"quality_filter:{reasons}",
+                                source_type="quality_filtering",
+                                stage=2,
+                            )
+                        )
+
+                    logger.info(
+                        f"Removing blocked study {patient_id}/{study_id} "
+                        f"(reasons: {reasons})"
+                    )
+                    shutil.rmtree(study_dir)
+                    stats.studies_removed += 1
+            else:
+                # Remove entire patient
+                reasons = _collect_all_blocking_reasons(patient_report)
+
+                # Log rejected files for all studies
+                for study_dir in patient_dir.iterdir():
+                    if not study_dir.is_dir():
+                        continue
+                    for nrrd_file in study_dir.glob("*.nrrd"):
+                        all_rejected_files.append(
+                            RejectedFile(
+                                source_path=str(nrrd_file),
+                                filename=nrrd_file.name,
+                                patient_id=patient_id,
+                                study_name=study_dir.name,
+                                rejection_reason=f"quality_filter:{reasons}",
+                                source_type="quality_filtering",
+                                stage=2,
+                            )
+                        )
+
+                logger.info(
+                    f"Removing patient {patient_id} "
+                    f"(only {clean_count} clean studies < "
+                    f"{config.min_studies_per_patient} required; reasons: {reasons})"
+                )
+                shutil.rmtree(patient_dir)
+                stats.patients_removed += 1
+
+                if metadata_manager:
+                    metadata_manager.mark_excluded(
+                        patient_id, f"quality_filter:{reasons}"
+                    )
+
+        # Write rejections to CSV
+        if all_rejected_files:
+            rejected_csv_path = data_root.parent / "rejected_files.csv"
+            append_to_rejected_files_csv(all_rejected_files, rejected_csv_path)
+
+        logger.info(
+            f"Phase 2 complete: {stats.studies_removed} studies removed, "
+            f"{stats.patients_removed} patients removed"
+        )
+
+    elif config.remove_blocked and dry_run:
+        logger.info("Phase 2 skipped (dry run)")
 
     return stats, patient_reports
 

@@ -685,6 +685,15 @@ def filter_raw_data(
                     reason = "filtered_out"
                 metadata_manager.mark_excluded(patient_id, reason)
 
+    # Reconcile metadata: exclude patients that have no data directory
+    if metadata_manager:
+        existing_patient_ids = {d.name for d in mengrowth_dir.iterdir() if d.is_dir()}
+        for patient_id in metadata_manager.get_patient_ids():
+            patient = metadata_manager.get_patient(patient_id)
+            if patient and patient.included and patient_id not in existing_patient_ids:
+                metadata_manager.mark_excluded(patient_id, "no_data_directory")
+                logger.info(f"Phantom patient fix: {patient_id} excluded (no data directory)")
+
     # Append rejections to CSV
     rejected_csv_path = data_root / "rejected_files.csv"
     append_to_rejected_files_csv(all_rejected_files, rejected_csv_path)
