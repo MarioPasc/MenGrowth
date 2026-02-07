@@ -15,10 +15,12 @@ Input sources:
 
 import csv
 import logging
+import os
 import shutil
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from mengrowth.preprocessing.config import RawDataConfig
 
@@ -365,14 +367,33 @@ def scan_extension(
     return file_list
 
 
+def _copy_single_file(src: Path, dst: Path) -> bool:
+    """Copy a single file, creating parent directories as needed.
+
+    Args:
+        src: Source file path.
+        dst: Destination file path.
+
+    Returns:
+        True on success.
+    """
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dst)
+    return True
+
+
 def copy_and_organize(
     file_list: List[Tuple[Path, str, str]],
     output_root: Path,
     config: RawDataConfig,
     rejected_files: List[RejectedFile],
     dry_run: bool = False,
+    n_workers: Optional[int] = None,
 ) -> Dict[str, int]:
     """Copy and organize files into standardized structure with filename normalization.
+
+    Phase 1 (sequential): Resolve modalities, detect duplicates, build copy task list.
+    Phase 2 (parallel): Copy files using ThreadPoolExecutor.
 
     Args:
         file_list: List of (source_path, patient_id, study_number) tuples.
@@ -380,6 +401,8 @@ def copy_and_organize(
         config: Raw data configuration with modality synonyms and output structure.
         rejected_files: List to append rejected file records to (for duplicates).
         dry_run: If True, log operations without actually copying files.
+        n_workers: Number of parallel threads for file copying. Defaults to
+            half of available CPU cores.
 
     Returns:
         Dictionary with statistics: {'copied': N, 'skipped': N, 'errors': N}.
@@ -387,10 +410,16 @@ def copy_and_organize(
     Raises:
         OSError: If directory creation or file copying fails.
     """
+    if n_workers is None:
+        n_workers = max(1, (os.cpu_count() or 4) // 2)
+
     stats = {"copied": 0, "skipped": 0, "errors": 0}
 
-    # Track processed files to avoid duplicates
+    # =========================================================================
+    # Phase 1: Plan (sequential) - resolve modalities, detect duplicates
+    # =========================================================================
     processed: Set[Tuple[str, str, str]] = set()
+    copy_tasks: List[Tuple[Path, Path, str, str]] = []  # (src, dst, patient_id, study_number)
 
     for source_path, patient_id, study_number in file_list:
         # Standardize modality name from filename
@@ -434,38 +463,68 @@ def copy_and_organize(
         output_dir = output_root / "MenGrowth-2025" / patient_id / study_number
         output_path = output_dir / standardized_filename
 
-        # Log operation
         logger.info(
             f"{'[DRY RUN] ' if dry_run else ''}Copy: {source_path} -> {output_path}"
         )
 
-        if not dry_run:
-            try:
-                # Create output directory if needed
-                output_dir.mkdir(parents=True, exist_ok=True)
+        processed.add(file_key)
 
-                # Copy file
-                shutil.copy2(source_path, output_path)
-                stats["copied"] += 1
-                processed.add(file_key)
-
-            except Exception as e:
-                error_msg = f"Failed to copy: {e}"
-                logger.error(f"{error_msg} - {source_path} to {output_path}")
-                rejected_files.append(
-                    RejectedFile(
-                        source_path=str(source_path),
-                        filename=source_path.name,
-                        patient_id=patient_id,
-                        study_name=study_number,
-                        rejection_reason=error_msg,
-                        source_type="copy_error",
-                    )
-                )
-                stats["errors"] += 1
-        else:
+        if dry_run:
             stats["copied"] += 1
-            processed.add(file_key)
+        else:
+            copy_tasks.append((source_path, output_path, patient_id, study_number))
+
+    # =========================================================================
+    # Phase 2: Execute (parallel) - copy files
+    # =========================================================================
+    if copy_tasks:
+        logger.info(f"Copying {len(copy_tasks)} files using {n_workers} thread(s)...")
+
+        if n_workers <= 1:
+            # Sequential fallback
+            for src, dst, patient_id, study_number in copy_tasks:
+                try:
+                    _copy_single_file(src, dst)
+                    stats["copied"] += 1
+                except Exception as e:
+                    error_msg = f"Failed to copy: {e}"
+                    logger.error(f"{error_msg} - {src} to {dst}")
+                    rejected_files.append(
+                        RejectedFile(
+                            source_path=str(src),
+                            filename=src.name,
+                            patient_id=patient_id,
+                            study_name=study_number,
+                            rejection_reason=error_msg,
+                            source_type="copy_error",
+                        )
+                    )
+                    stats["errors"] += 1
+        else:
+            with ThreadPoolExecutor(max_workers=n_workers) as executor:
+                future_to_info = {
+                    executor.submit(_copy_single_file, src, dst): (src, dst, patient_id, study_number)
+                    for src, dst, patient_id, study_number in copy_tasks
+                }
+                for future in as_completed(future_to_info):
+                    src, dst, patient_id, study_number = future_to_info[future]
+                    try:
+                        future.result()
+                        stats["copied"] += 1
+                    except Exception as e:
+                        error_msg = f"Failed to copy: {e}"
+                        logger.error(f"{error_msg} - {src} to {dst}")
+                        rejected_files.append(
+                            RejectedFile(
+                                source_path=str(src),
+                                filename=src.name,
+                                patient_id=patient_id,
+                                study_name=study_number,
+                                rejection_reason=error_msg,
+                                source_type="copy_error",
+                            )
+                        )
+                        stats["errors"] += 1
 
     return stats
 
@@ -525,6 +584,7 @@ def reorganize_raw_data(
     output_root: Path,
     config: RawDataConfig,
     dry_run: bool = False,
+    n_workers: Optional[int] = None,
 ) -> Dict[str, int]:
     """Reorganize raw MRI data from complex nested structure to standardized format.
 
@@ -593,7 +653,7 @@ def reorganize_raw_data(
     logger.info(f"Total files rejected during scanning: {len(rejected_files)}")
 
     # Copy and organize files
-    stats = copy_and_organize(all_files, output_root, config, rejected_files, dry_run=dry_run)
+    stats = copy_and_organize(all_files, output_root, config, rejected_files, dry_run=dry_run, n_workers=n_workers)
 
     logger.info(
         f"Reorganization complete: {stats['copied']} copied, "

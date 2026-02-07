@@ -584,6 +584,8 @@ def filter_raw_data(
     config: PreprocessingConfig,
     metadata_manager: Optional["MetadataManager"] = None,
     dry_run: bool = False,
+    skip_reid: bool = False,
+    rejected_csv_path: Optional[Path] = None,
 ) -> Dict[str, int]:
     """Filter reorganized raw data based on quality and completeness criteria.
 
@@ -597,6 +599,10 @@ def filter_raw_data(
         metadata_manager: Optional metadata manager to track patient exclusions
             and apply ID mapping.
         dry_run: If True, simulate filtering without making changes.
+        skip_reid: If True, skip patient re-identification (reid will be
+            done as a separate step after quality filtering).
+        rejected_csv_path: Optional explicit path for rejected_files.csv.
+            If None, defaults to data_root / "rejected_files.csv".
 
     Returns:
         Statistics dictionary with keys:
@@ -717,7 +723,8 @@ def filter_raw_data(
                 logger.info(f"Phantom patient fix: {patient_id} excluded (no data directory)")
 
     # Append rejections to CSV
-    rejected_csv_path = data_root / "rejected_files.csv"
+    if rejected_csv_path is None:
+        rejected_csv_path = data_root / "rejected_files.csv"
     append_to_rejected_files_csv(all_rejected_files, rejected_csv_path)
 
     # Remove non-required sequences if configured
@@ -731,8 +738,8 @@ def filter_raw_data(
     else:
         stats["sequences_removed"] = 0
 
-    # Re-identify patients and studies if configured
-    if filtering_config.reid_patients:
+    # Re-identify patients and studies if configured (and not deferred)
+    if filtering_config.reid_patients and not skip_reid:
         logger.info("=" * 80)
         id_mapping = reid_patients_and_studies(mengrowth_dir, dry_run)
         stats["patients_renamed"] = len(id_mapping)
@@ -753,6 +760,9 @@ def filter_raw_data(
             logger.info(f"Applied ID mapping to metadata for {len(metadata_mapping)} patients")
 
         logger.info("=" * 80)
+    elif skip_reid:
+        stats["patients_renamed"] = 0
+        logger.info("Re-identification deferred (skip_reid=True)")
     else:
         stats["patients_renamed"] = 0
 
@@ -768,7 +778,7 @@ def filter_raw_data(
     if filtering_config.keep_only_required_sequences:
         logger.info(f"Non-required sequences removed: {stats['sequences_removed']}")
 
-    if filtering_config.reid_patients:
+    if filtering_config.reid_patients and not skip_reid:
         logger.info(f"Patients renamed: {stats['patients_renamed']}")
         logger.info(f"ID mapping saved to: {data_root}/id_mapping.json")
 

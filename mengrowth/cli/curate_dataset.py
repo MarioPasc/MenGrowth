@@ -4,8 +4,13 @@ This script provides a single entry point for the full data curation workflow:
     1. Reorganize: Convert raw data to standardized structure
     2. Filter: Apply quality and completeness criteria
     2.5. Quality Filter: Validate data quality (SNR, contrast, geometry, etc.)
-    3. Analyze: Compute quality metrics
-    4. Visualize: Generate plots and HTML report
+    3. Reid: Re-identify patients (P* -> MenGrowth-XXXX, after quality filtering for continuous IDs)
+    4. Analyze: Compute quality metrics
+    5. Visualize: Generate plots and HTML report
+
+Output is organized into:
+    {output-root}/dataset/   - patient data, metadata, id_mapping
+    {output-root}/quality/   - QC outputs, metrics, reports
 
 Clinical metadata is processed throughout the pipeline, tracking patient
 inclusion/exclusion and mapping original IDs to MenGrowth IDs.
@@ -18,6 +23,7 @@ Usage:
 
 import argparse
 import logging
+import os
 import sys
 import time
 from pathlib import Path
@@ -29,10 +35,14 @@ from mengrowth.preprocessing.config import (
 )
 from mengrowth.preprocessing.quality_analysis.analyzer import QualityAnalyzer
 from mengrowth.preprocessing.quality_analysis.visualize import QualityVisualizer
-from mengrowth.preprocessing.utils.filter_raw_data import filter_raw_data
+from mengrowth.preprocessing.utils.filter_raw_data import (
+    filter_raw_data,
+    reid_patients_and_studies,
+)
 from mengrowth.preprocessing.utils.metadata import MetadataManager
 from mengrowth.preprocessing.utils.quality_filtering import (
     export_quality_issues,
+    export_quality_metrics,
     run_quality_filtering,
 )
 from mengrowth.preprocessing.utils.reorganize_raw_data import reorganize_raw_data
@@ -105,24 +115,30 @@ Examples:
 Pipeline steps:
   1. REORGANIZE: Convert raw data to standardized structure
      - Source: {input-root}/source/..., {input-root}/extension_1/...
-     - Output: {output-root}/MenGrowth-2025/P{id}/{study}/modality.nrrd
+     - Output: {output-root}/dataset/MenGrowth-2025/P{id}/{study}/modality.nrrd
 
   2. FILTER: Apply quality and completeness criteria
      - Removes studies missing too many sequences
      - Removes patients with insufficient longitudinal data
-     - Optionally re-identifies patients (P1 -> MenGrowth-0001)
 
-  3. ANALYZE: Compute quality metrics
+  2.5. QUALITY FILTER: Validate data quality (SNR, contrast, geometry)
+     - Removes blocked studies/patients
+     - Exports quality metrics JSON and issues CSV
+
+  3. REID: Re-identify patients after quality filtering
+     - P1 -> MenGrowth-0001 (continuous numbering, no gaps)
+
+  4. ANALYZE: Compute quality metrics
      - Spatial properties, intensity statistics, SNR
-     - Output: {output-root}/qc_analysis/*.csv, *.json
+     - Output: {output-root}/quality/qc_analysis/*.csv, *.json
 
-  4. VISUALIZE: Generate plots and HTML report
-     - QC plots + clinical metadata plots
-     - Output: {output-root}/qc_analysis/figures/, quality_analysis_report.html
+  5. VISUALIZE: Generate plots and HTML report
+     - QC plots + clinical metadata + quality filtering plots
+     - Output: {output-root}/quality/qc_analysis/figures/, quality_analysis_report.html
 
-Metadata tracking:
-  - metadata_enriched.csv: Original clinical data + included, exclusion_reason, MenGrowth_ID
-  - metadata_clean.json: Full hierarchical metadata with curation tracking
+Output structure:
+  {output-root}/dataset/    - MenGrowth-2025/, id_mapping.json, metadata
+  {output-root}/quality/    - rejected_files.csv, quality_issues.csv, quality_metrics.json, qc_analysis/
         """,
     )
 
@@ -214,6 +230,13 @@ Metadata tracking:
         help="Enable verbose (DEBUG level) logging.",
     )
 
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Number of parallel workers (default: half of CPU cores).",
+    )
+
     return parser.parse_args()
 
 
@@ -238,6 +261,10 @@ def main() -> int:
             logger.error("--input-root is required unless --skip-reorganize is set")
             return 1
 
+        # Resolve worker count
+        n_workers = args.workers if args.workers is not None else max(1, (os.cpu_count() or 4) // 2)
+        logger.info(f"Parallel workers: {n_workers} (of {os.cpu_count()} CPUs)")
+
         # Load configurations
         logger.info(f"Loading configuration from: {args.config}")
         preprocessing_config = load_preprocessing_config(args.config)
@@ -251,6 +278,12 @@ def main() -> int:
         qa_config = None
         if qa_config_path.exists():
             qa_config = load_quality_analysis_config(qa_config_path)
+
+        # Define output directory structure
+        dataset_dir = args.output_root / "dataset"
+        quality_dir = args.output_root / "quality"
+        mengrowth_dir = dataset_dir / "MenGrowth-2025"
+        qa_output_dir = quality_dir / "qc_analysis"
 
         # Initialize metadata manager
         metadata_manager: Optional[MetadataManager] = None
@@ -289,7 +322,7 @@ def main() -> int:
             logger.info("STEP 1: REORGANIZE")
             logger.info("=" * 60)
             logger.info(f"Input root: {args.input_root}")
-            logger.info(f"Output root: {args.output_root}")
+            logger.info(f"Output: {dataset_dir}")
             logger.info(f"Dry run: {args.dry_run}")
 
             if not args.input_root.exists():
@@ -299,9 +332,10 @@ def main() -> int:
             step_start = time.monotonic()
             reorg_stats = reorganize_raw_data(
                 input_root=args.input_root,
-                output_root=args.output_root,
+                output_root=dataset_dir,
                 config=preprocessing_config.raw_data,
                 dry_run=args.dry_run,
+                n_workers=n_workers,
             )
             step_durations["reorganize"] = time.monotonic() - step_start
 
@@ -311,7 +345,7 @@ def main() -> int:
             logger.info(f"Step duration: {_format_duration(step_durations['reorganize'])}")
 
         # ====================================================================
-        # STEP 2: FILTER
+        # STEP 2: FILTER (reid deferred to Step 3)
         # ====================================================================
         if not args.skip_filter:
             logger.info("")
@@ -322,24 +356,25 @@ def main() -> int:
             if preprocessing_config.filtering is None:
                 logger.warning("Filtering configuration not found, skipping filter step")
             else:
-                mengrowth_dir = args.output_root / "MenGrowth-2025"
                 if not mengrowth_dir.exists():
                     logger.error(
-                        f"MenGrowth-2025 directory not found in {args.output_root}. "
+                        f"MenGrowth-2025 directory not found in {dataset_dir}. "
                         "Run without --skip-reorganize first."
                     )
                     return 1
 
                 logger.info(f"Required sequences: {preprocessing_config.filtering.sequences}")
                 logger.info(f"Min studies per patient: {preprocessing_config.filtering.min_studies_per_patient}")
-                logger.info(f"Re-identify patients: {preprocessing_config.filtering.reid_patients}")
+                logger.info(f"Re-identify patients: {preprocessing_config.filtering.reid_patients} (deferred to after quality filtering)")
 
                 step_start = time.monotonic()
                 filter_stats = filter_raw_data(
-                    data_root=args.output_root,
+                    data_root=dataset_dir,
                     config=preprocessing_config,
                     metadata_manager=metadata_manager,
                     dry_run=args.dry_run,
+                    skip_reid=True,
+                    rejected_csv_path=quality_dir / "rejected_files.csv",
                 )
                 step_durations["filter"] = time.monotonic() - step_start
 
@@ -350,6 +385,7 @@ def main() -> int:
         # ====================================================================
         # STEP 2.5: QUALITY FILTERING
         # ====================================================================
+        qf_reports = None
         if not args.skip_quality_filter:
             logger.info("")
             logger.info("=" * 60)
@@ -366,10 +402,9 @@ def main() -> int:
             if not qf_config.enabled:
                 logger.info("Quality filtering is disabled in configuration")
             else:
-                mengrowth_dir = args.output_root / "MenGrowth-2025"
                 if not mengrowth_dir.exists():
                     logger.warning(
-                        f"MenGrowth-2025 directory not found in {args.output_root}. "
+                        f"MenGrowth-2025 directory not found in {dataset_dir}. "
                         "Skipping quality filtering."
                     )
                 else:
@@ -384,12 +419,14 @@ def main() -> int:
                         config=qf_config,
                         metadata_manager=metadata_manager,
                         dry_run=args.dry_run,
+                        quality_output_dir=quality_dir,
+                        n_workers=n_workers,
                     )
                     step_durations["quality_filter"] = time.monotonic() - step_start
 
-                    # Export quality issues to CSV
-                    quality_issues_path = args.output_root / "quality_issues.csv"
-                    export_quality_issues(qf_reports, quality_issues_path)
+                    # Export quality issues and metrics
+                    export_quality_issues(qf_reports, quality_dir / "quality_issues.csv")
+                    export_quality_metrics(qf_reports, quality_dir / "quality_metrics.json")
 
                     # Log summary
                     logger.info(f"Quality filtering complete:")
@@ -407,6 +444,50 @@ def main() -> int:
                     logger.info(f"Step duration: {_format_duration(step_durations['quality_filter'])}")
 
         # ====================================================================
+        # ENSURE ALL DATASET PATIENTS HAVE METADATA
+        # ====================================================================
+        if metadata_manager and mengrowth_dir.exists():
+            for patient_dir in mengrowth_dir.iterdir():
+                if patient_dir.is_dir():
+                    metadata_manager.ensure_patient_exists(patient_dir.name)
+
+        # ====================================================================
+        # STEP 3: REID (after quality filtering for continuous IDs)
+        # ====================================================================
+        if preprocessing_config.filtering and preprocessing_config.filtering.reid_patients:
+            logger.info("")
+            logger.info("=" * 60)
+            logger.info("STEP 3: REID")
+            logger.info("=" * 60)
+
+            if not mengrowth_dir.exists():
+                logger.warning(
+                    f"MenGrowth-2025 directory not found in {dataset_dir}. "
+                    "Skipping re-identification."
+                )
+            else:
+                logger.info(f"Input: {mengrowth_dir}")
+
+                step_start = time.monotonic()
+                id_mapping = reid_patients_and_studies(mengrowth_dir, args.dry_run)
+                step_durations["reid"] = time.monotonic() - step_start
+
+                # Apply ID mapping to metadata
+                if metadata_manager and id_mapping:
+                    metadata_mapping = {}
+                    for original_id, mapping_info in id_mapping.items():
+                        new_id = mapping_info["new_id"]
+                        metadata_mapping[new_id] = {
+                            "original_id": original_id,
+                            "studies": mapping_info.get("studies", {}),
+                        }
+                    metadata_manager.apply_id_mapping(metadata_mapping)
+                    logger.info(f"Applied ID mapping to metadata for {len(metadata_mapping)} patients")
+
+                logger.info(f"Re-identified {len(id_mapping)} patients")
+                logger.info(f"Step duration: {_format_duration(step_durations['reid'])}")
+
+        # ====================================================================
         # EXPORT METADATA
         # ====================================================================
         if metadata_manager and not args.dry_run:
@@ -415,8 +496,8 @@ def main() -> int:
             logger.info("EXPORTING METADATA")
             logger.info("=" * 60)
 
-            output_csv = args.output_root / preprocessing_config.metadata.output_csv_name
-            output_json = args.output_root / preprocessing_config.metadata.output_json_name
+            output_csv = dataset_dir / preprocessing_config.metadata.output_csv_name
+            output_json = dataset_dir / preprocessing_config.metadata.output_json_name
 
             metadata_manager.export_enriched_csv(output_csv)
             metadata_manager.export_json(output_json)
@@ -430,21 +511,17 @@ def main() -> int:
                 logger.info(f"Exclusion reasons: {summary['exclusion_reasons']}")
 
         # ====================================================================
-        # STEP 3: ANALYZE
+        # STEP 4: ANALYZE
         # ====================================================================
         if not args.skip_analyze:
             logger.info("")
             logger.info("=" * 60)
-            logger.info("STEP 3: ANALYZE")
+            logger.info("STEP 4: ANALYZE")
             logger.info("=" * 60)
 
             if qa_config is None:
                 logger.warning(f"QA config not found at {qa_config_path}, skipping analysis")
             else:
-                # Override input/output paths
-                mengrowth_dir = args.output_root / "MenGrowth-2025"
-                qa_output_dir = args.output_root / "qc_analysis"
-
                 if not mengrowth_dir.exists():
                     logger.warning(f"Data directory not found: {mengrowth_dir}, skipping analysis")
                 else:
@@ -465,15 +542,13 @@ def main() -> int:
                         logger.info("Dry run - skipping actual analysis")
 
         # ====================================================================
-        # STEP 4: VISUALIZE
+        # STEP 5: VISUALIZE
         # ====================================================================
         if not args.skip_visualize:
             logger.info("")
             logger.info("=" * 60)
-            logger.info("STEP 4: VISUALIZE")
+            logger.info("STEP 5: VISUALIZE")
             logger.info("=" * 60)
-
-            qa_output_dir = args.output_root / "qc_analysis"
 
             if not qa_output_dir.exists():
                 logger.warning(f"Analysis results not found: {qa_output_dir}, skipping visualization")
@@ -492,7 +567,13 @@ def main() -> int:
                         config=qa_config,
                         results_dir=qa_output_dir,
                     )
-                    visualizer.run_visualization(metadata_manager=metadata_manager)
+
+                    # Pass quality metrics path for enhanced report
+                    quality_metrics_path = quality_dir / "quality_metrics.json"
+                    visualizer.run_visualization(
+                        metadata_manager=metadata_manager,
+                        quality_metrics_path=quality_metrics_path if quality_metrics_path.exists() else None,
+                    )
                     step_durations["visualize"] = time.monotonic() - step_start
                     logger.info(f"Visualization complete ({_format_duration(step_durations['visualize'])})")
                 else:
@@ -514,20 +595,21 @@ def main() -> int:
                 logger.info(f"  {step_name}: {_format_duration(duration)}")
         logger.info("")
         logger.info("Generated files:")
-        logger.info(f"  - {args.output_root}/MenGrowth-2025/  (reorganized data)")
-        logger.info(f"  - {args.output_root}/rejected_files.csv")
+        logger.info(f"  - {dataset_dir}/MenGrowth-2025/  (reorganized data)")
+        logger.info(f"  - {quality_dir}/rejected_files.csv")
         if preprocessing_config.filtering and preprocessing_config.filtering.reid_patients:
-            logger.info(f"  - {args.output_root}/id_mapping.json")
+            logger.info(f"  - {dataset_dir}/id_mapping.json")
         if not args.skip_quality_filter:
-            logger.info(f"  - {args.output_root}/quality_issues.csv  (quality validation)")
+            logger.info(f"  - {quality_dir}/quality_issues.csv  (quality validation)")
+            logger.info(f"  - {quality_dir}/quality_metrics.json  (all computed metrics)")
         if metadata_manager:
-            logger.info(f"  - {args.output_root}/{preprocessing_config.metadata.output_csv_name}")
-            logger.info(f"  - {args.output_root}/{preprocessing_config.metadata.output_json_name}")
+            logger.info(f"  - {dataset_dir}/{preprocessing_config.metadata.output_csv_name}")
+            logger.info(f"  - {dataset_dir}/{preprocessing_config.metadata.output_json_name}")
         if not args.skip_analyze:
-            logger.info(f"  - {args.output_root}/qc_analysis/  (analysis results)")
+            logger.info(f"  - {qa_output_dir}/  (analysis results)")
         if not args.skip_visualize:
-            logger.info(f"  - {args.output_root}/qc_analysis/figures/  (plots)")
-            logger.info(f"  - {args.output_root}/qc_analysis/quality_analysis_report.html")
+            logger.info(f"  - {qa_output_dir}/figures/  (plots)")
+            logger.info(f"  - {qa_output_dir}/quality_analysis_report.html")
 
         if args.dry_run:
             logger.info("")

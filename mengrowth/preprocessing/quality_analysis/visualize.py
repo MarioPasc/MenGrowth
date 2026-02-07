@@ -746,11 +746,253 @@ class QualityVisualizer:
         self.logger.info(f"Generated {len(clinical_plots)} clinical plots")
         return clinical_plots
 
+    # =========================================================================
+    # QUALITY FILTERING PLOTS
+    # =========================================================================
+
+    def plot_quality_filter_summary(
+        self, quality_metrics: Dict,
+    ) -> Optional[Path]:
+        """Plot stacked bar chart of pass/warn/block counts per check type.
+
+        Args:
+            quality_metrics: Loaded quality_metrics.json data.
+
+        Returns:
+            Path to saved plot file.
+        """
+        checks_summary = quality_metrics.get("summary", {}).get("checks_summary", {})
+        if not checks_summary:
+            self.logger.warning("No checks summary data for quality filter summary plot")
+            return None
+
+        check_names = list(checks_summary.keys())
+        passed = [checks_summary[c].get("passed", 0) for c in check_names]
+        failed = [checks_summary[c].get("failed", 0) for c in check_names]
+
+        fig, ax = plt.subplots(
+            figsize=(self.config.visualization.figure.width * 1.2,
+                     self.config.visualization.figure.height)
+        )
+
+        x = np.arange(len(check_names))
+        width = 0.5
+
+        ax.bar(x, passed, width, label="Passed", color="#27ae60", alpha=0.8)
+        ax.bar(x, failed, width, bottom=passed, label="Failed", color="#e74c3c", alpha=0.8)
+
+        ax.set_xlabel("Check Type", fontsize=12)
+        ax.set_ylabel("Number of Files", fontsize=12)
+        ax.set_title("Quality Filtering Results by Check Type", fontsize=14, fontweight="bold")
+        ax.set_xticks(x)
+        ax.set_xticklabels(check_names, rotation=45, ha="right", fontsize=9)
+        ax.legend()
+        ax.grid(True, alpha=0.3, axis="y")
+
+        plot_path = self.figure_dir / f"quality_filter_summary.{self.config.visualization.figure.format}"
+        plt.tight_layout()
+        plt.savefig(plot_path, dpi=self.config.visualization.figure.dpi)
+        plt.close()
+
+        self.logger.info(f"Saved quality filter summary plot: {plot_path}")
+        return plot_path
+
+    def plot_snr_by_modality(
+        self, quality_metrics: Dict,
+    ) -> Optional[Path]:
+        """Plot violin/box plots of SNR values from quality filtering, per modality.
+
+        Args:
+            quality_metrics: Loaded quality_metrics.json data.
+
+        Returns:
+            Path to saved plot file.
+        """
+        # Extract SNR values per modality from quality metrics
+        snr_data: Dict[str, List[float]] = {}
+        patients = quality_metrics.get("patients", {})
+
+        for patient_id, patient_data in patients.items():
+            for study_id, study_data in patient_data.get("studies", {}).items():
+                for modality, file_data in study_data.get("files", {}).items():
+                    checks = file_data.get("checks", {})
+                    snr_check = checks.get("snr_filtering", {})
+                    details = snr_check.get("details", {})
+                    snr_val = details.get("snr")
+                    if snr_val is not None and np.isfinite(snr_val):
+                        if modality not in snr_data:
+                            snr_data[modality] = []
+                        snr_data[modality].append(snr_val)
+
+        if not snr_data:
+            self.logger.warning("No SNR data available for quality filtering SNR plot")
+            return None
+
+        fig, ax = plt.subplots(
+            figsize=(self.config.visualization.figure.width,
+                     self.config.visualization.figure.height)
+        )
+
+        modalities = sorted(snr_data.keys())
+        data_lists = [snr_data[m] for m in modalities]
+
+        parts = ax.violinplot(data_lists, positions=range(len(modalities)), showmeans=True, showmedians=True)
+
+        # Color the violins
+        for pc in parts["bodies"]:
+            pc.set_facecolor("#3498db")
+            pc.set_alpha(0.7)
+
+        # Add threshold lines (extract from first available check)
+        for patient_data in patients.values():
+            for study_data in patient_data.get("studies", {}).values():
+                for modality, file_data in study_data.get("files", {}).items():
+                    threshold = file_data.get("checks", {}).get("snr_filtering", {}).get("details", {}).get("threshold")
+                    if threshold is not None:
+                        ax.axhline(y=threshold, color="#e74c3c", linestyle="--", linewidth=1.5,
+                                  label=f"Threshold ({threshold})", alpha=0.7)
+                        break
+                else:
+                    continue
+                break
+            else:
+                continue
+            break
+
+        ax.set_xticks(range(len(modalities)))
+        ax.set_xticklabels(modalities)
+        ax.set_xlabel("Modality", fontsize=12)
+        ax.set_ylabel("SNR", fontsize=12)
+        ax.set_title("SNR Distribution by Modality (Quality Filtering)", fontsize=14, fontweight="bold")
+        ax.legend()
+        ax.grid(True, alpha=0.3, axis="y")
+
+        plot_path = self.figure_dir / f"qf_snr_by_modality.{self.config.visualization.figure.format}"
+        plt.tight_layout()
+        plt.savefig(plot_path, dpi=self.config.visualization.figure.dpi)
+        plt.close()
+
+        self.logger.info(f"Saved quality filtering SNR by modality plot: {plot_path}")
+        return plot_path
+
+    def plot_quality_metrics_heatmap(
+        self, quality_metrics: Dict,
+    ) -> Optional[Path]:
+        """Plot patient x check heatmap showing pass/warn/block status.
+
+        Args:
+            quality_metrics: Loaded quality_metrics.json data.
+
+        Returns:
+            Path to saved plot file.
+        """
+        patients = quality_metrics.get("patients", {})
+        if not patients:
+            return None
+
+        # Collect all check names across all files
+        all_check_names: set = set()
+        for patient_data in patients.values():
+            for study_data in patient_data.get("studies", {}).values():
+                for file_data in study_data.get("files", {}).values():
+                    all_check_names.update(file_data.get("checks", {}).keys())
+
+        if not all_check_names:
+            return None
+
+        check_names = sorted(all_check_names)
+        patient_ids = sorted(patients.keys())
+
+        # Build matrix: 0 = all passed, 0.5 = has warnings, 1 = has blocks
+        matrix = np.zeros((len(patient_ids), len(check_names)))
+
+        for i, pid in enumerate(patient_ids):
+            patient_data = patients[pid]
+            for j, check_name in enumerate(check_names):
+                has_failure = False
+                for study_data in patient_data.get("studies", {}).values():
+                    for file_data in study_data.get("files", {}).values():
+                        check = file_data.get("checks", {}).get(check_name, {})
+                        if not check.get("passed", True):
+                            if check.get("action") == "block":
+                                matrix[i, j] = 1.0
+                                has_failure = True
+                                break
+                            else:
+                                matrix[i, j] = max(matrix[i, j], 0.5)
+                    if has_failure:
+                        break
+
+        fig, ax = plt.subplots(
+            figsize=(max(self.config.visualization.figure.width, len(check_names) * 0.8),
+                     max(self.config.visualization.figure.height, len(patient_ids) * 0.3))
+        )
+
+        from matplotlib.colors import ListedColormap
+        cmap = ListedColormap(["#27ae60", "#f39c12", "#e74c3c"])
+
+        im = ax.imshow(matrix, cmap=cmap, aspect="auto", vmin=0, vmax=1)
+
+        ax.set_xticks(range(len(check_names)))
+        ax.set_xticklabels(check_names, rotation=45, ha="right", fontsize=8)
+        ax.set_yticks(range(len(patient_ids)))
+        ax.set_yticklabels(patient_ids, fontsize=7)
+        ax.set_xlabel("Quality Check", fontsize=12)
+        ax.set_ylabel("Patient", fontsize=12)
+        ax.set_title("Quality Check Results per Patient", fontsize=14, fontweight="bold")
+
+        # Legend
+        from matplotlib.patches import Patch
+        legend_elements = [
+            Patch(facecolor="#27ae60", label="Passed"),
+            Patch(facecolor="#f39c12", label="Warning"),
+            Patch(facecolor="#e74c3c", label="Blocked"),
+        ]
+        ax.legend(handles=legend_elements, loc="upper right", fontsize=9)
+
+        plot_path = self.figure_dir / f"quality_metrics_heatmap.{self.config.visualization.figure.format}"
+        plt.tight_layout()
+        plt.savefig(plot_path, dpi=self.config.visualization.figure.dpi)
+        plt.close()
+
+        self.logger.info(f"Saved quality metrics heatmap: {plot_path}")
+        return plot_path
+
+    def generate_quality_filtering_plots(
+        self, quality_metrics: Dict,
+    ) -> Dict[str, Path]:
+        """Generate all quality filtering plots.
+
+        Args:
+            quality_metrics: Loaded quality_metrics.json data.
+
+        Returns:
+            Dictionary mapping plot type to saved file path.
+        """
+        self.logger.info("Generating quality filtering visualizations...")
+        qf_plots = {}
+
+        plot_path = self.plot_quality_filter_summary(quality_metrics)
+        if plot_path:
+            qf_plots["quality_filter_summary"] = plot_path
+
+        plot_path = self.plot_snr_by_modality(quality_metrics)
+        if plot_path:
+            qf_plots["qf_snr_by_modality"] = plot_path
+
+        plot_path = self.plot_quality_metrics_heatmap(quality_metrics)
+        if plot_path:
+            qf_plots["quality_metrics_heatmap"] = plot_path
+
+        self.logger.info(f"Generated {len(qf_plots)} quality filtering plots")
+        return qf_plots
+
     def generate_html_report(
         self,
         results: Dict,
         plot_paths: Dict[str, Path],
         metadata_manager: Optional["MetadataManager"] = None,
+        quality_metrics: Optional[Dict] = None,
     ) -> Path:
         """Generate comprehensive HTML report with plots and tables.
 
@@ -881,6 +1123,44 @@ class QualityVisualizer:
                             f.write(f'<tr><td>{seq}</td><td>{stats["present_count"]}</td><td>{stats["missing_count"]}</td><td>{stats["missing_fraction"]:.2%}</td></tr>\n')
                     f.write("</table>\n")
 
+            # Quality filtering section
+            if quality_metrics:
+                qf_summary = quality_metrics.get("summary", {})
+                f.write("<h2>Quality Filtering Results</h2>\n")
+
+                # Overview metrics
+                f.write('<div class="metrics">\n')
+                f.write(f'<div class="metric"><span class="metric-label">Total Patients:</span><br/><span class="metric-value">{qf_summary.get("total_patients", "N/A")}</span></div>\n')
+                f.write(f'<div class="metric"><span class="metric-label">Patients Passed:</span><br/><span class="metric-value">{qf_summary.get("patients_passed", "N/A")}</span></div>\n')
+                f.write(f'<div class="metric"><span class="metric-label">Patients Blocked:</span><br/><span class="metric-value">{qf_summary.get("patients_blocked", "N/A")}</span></div>\n')
+                f.write('</div>\n')
+
+                # Per-check summary table
+                checks_summary = qf_summary.get("checks_summary", {})
+                if checks_summary:
+                    f.write("<h3>Per-Check Summary</h3>\n")
+                    f.write("<table>\n")
+                    f.write("<tr><th>Check</th><th>Total</th><th>Passed</th><th>Failed</th><th>Pass Rate</th></tr>\n")
+                    for check_name, counts in sorted(checks_summary.items()):
+                        total = counts.get("total", 0)
+                        passed = counts.get("passed", 0)
+                        failed = counts.get("failed", 0)
+                        rate = f"{passed/total:.1%}" if total > 0 else "N/A"
+                        f.write(f'<tr><td>{check_name}</td><td>{total}</td><td>{passed}</td><td>{failed}</td><td>{rate}</td></tr>\n')
+                    f.write("</table>\n")
+
+                # Quality filtering plots
+                qf_plot_names = ["quality_filter_summary", "qf_snr_by_modality", "quality_metrics_heatmap"]
+                qf_plots_in_report = {k: v for k, v in plot_paths.items() if k in qf_plot_names}
+                if qf_plots_in_report:
+                    f.write("<h3>Quality Filtering Visualizations</h3>\n")
+                    for plot_name, plot_path in qf_plots_in_report.items():
+                        rel_path = plot_path.relative_to(self.output_dir)
+                        f.write(f'<div class="plot">\n')
+                        f.write(f'<h4>{plot_name.replace("_", " ").title()}</h4>\n')
+                        f.write(f'<img src="{rel_path}" alt="{plot_name}">\n')
+                        f.write('</div>\n')
+
             # Clinical metadata section
             if metadata_manager:
                 clinical_summary = metadata_manager.get_clinical_summary()
@@ -958,12 +1238,16 @@ class QualityVisualizer:
         return html_path
 
     def run_visualization(
-        self, metadata_manager: Optional["MetadataManager"] = None
+        self,
+        metadata_manager: Optional["MetadataManager"] = None,
+        quality_metrics_path: Optional[Path] = None,
     ) -> Dict[str, Path]:
         """Run complete visualization pipeline.
 
         Args:
             metadata_manager: Optional metadata manager for clinical plots.
+            quality_metrics_path: Optional path to quality_metrics.json for
+                quality filtering plots and enhanced HTML report.
 
         Returns:
             Dictionary of saved file paths.
@@ -984,15 +1268,24 @@ class QualityVisualizer:
         clinical_plots = {}
         if metadata_manager:
             clinical_plots = self.generate_clinical_plots(metadata_manager)
-            # Merge into plot_paths
             plot_paths.update(clinical_plots)
+
+        # Generate quality filtering plots if metrics are available
+        quality_metrics = None
+        if quality_metrics_path and quality_metrics_path.exists():
+            with open(quality_metrics_path, "r", encoding="utf-8") as f:
+                quality_metrics = json.load(f)
+            qf_plots = self.generate_quality_filtering_plots(quality_metrics)
+            plot_paths.update(qf_plots)
 
         # Generate HTML report
         output_paths = {"plots": plot_paths, "clinical_plots": clinical_plots}
 
         if self.config.visualization.html_report.enabled:
             html_path = self.generate_html_report(
-                results, plot_paths, metadata_manager=metadata_manager
+                results, plot_paths,
+                metadata_manager=metadata_manager,
+                quality_metrics=quality_metrics,
             )
             output_paths["html_report"] = html_path
 

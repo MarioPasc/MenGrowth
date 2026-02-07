@@ -525,35 +525,45 @@ class MetadataManager:
         """Return set of all patient IDs."""
         return set(self._patients.keys())
 
+    def ensure_patient_exists(self, patient_id: str) -> None:
+        """Create a stub entry if patient doesn't exist in metadata."""
+        normalized = self._normalize_patient_id(patient_id)
+        if normalized not in self._patients:
+            self._patients[normalized] = PatientMetadata(
+                patient_id=normalized,
+                included=True,
+            )
+            logger.debug(f"Created metadata stub for patient {normalized}")
+
     def mark_excluded(self, patient_id: str, reason: str) -> None:
         """Mark a patient as excluded with reason."""
         normalized = self._normalize_patient_id(patient_id)
-        if normalized in self._patients:
-            self._patients[normalized].included = False
-            self._patients[normalized].exclusion_reason = reason
-            logger.debug(f"Marked patient {normalized} as excluded: {reason}")
-        else:
-            logger.warning(f"Cannot mark unknown patient {patient_id} as excluded")
+        if normalized not in self._patients:
+            self._patients[normalized] = PatientMetadata(patient_id=normalized)
+        self._patients[normalized].included = False
+        self._patients[normalized].exclusion_reason = reason
+        logger.debug(f"Marked patient {normalized} as excluded: {reason}")
 
     def mark_included(self, patient_id: str) -> None:
         """Mark a patient as included (clearing any previous exclusion)."""
         normalized = self._normalize_patient_id(patient_id)
-        if normalized in self._patients:
-            self._patients[normalized].included = True
-            self._patients[normalized].exclusion_reason = None
+        if normalized not in self._patients:
+            self._patients[normalized] = PatientMetadata(patient_id=normalized)
+        self._patients[normalized].included = True
+        self._patients[normalized].exclusion_reason = None
 
     def set_mengrowth_id(self, original_id: str, mengrowth_id: str) -> None:
         """Map original ID to MenGrowth ID."""
         normalized = self._normalize_patient_id(original_id)
-        if normalized in self._patients:
-            self._patients[normalized].mengrowth_id = mengrowth_id
-            self._id_map[normalized] = mengrowth_id
-            self._reverse_id_map[mengrowth_id] = normalized
-            logger.debug(f"Set MenGrowth ID for {normalized}: {mengrowth_id}")
-        else:
-            # Patient exists in dataset but not in clinical metadata xlsx - this is expected
-            # for patients without clinical annotations
-            logger.debug(f"Patient {original_id} not in clinical metadata (no xlsx entry)")
+        if normalized not in self._patients:
+            self._patients[normalized] = PatientMetadata(
+                patient_id=normalized, included=True
+            )
+            logger.debug(f"Created metadata stub for patient {normalized}")
+        self._patients[normalized].mengrowth_id = mengrowth_id
+        self._id_map[normalized] = mengrowth_id
+        self._reverse_id_map[mengrowth_id] = normalized
+        logger.debug(f"Set MenGrowth ID for {normalized}: {mengrowth_id}")
 
     def apply_id_mapping(self, id_mapping: Dict[str, Dict[str, Any]]) -> None:
         """Apply ID mapping from filter's id_mapping.json.

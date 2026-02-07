@@ -5,7 +5,9 @@ metrics before preprocessing. All thresholds are configurable via YAML.
 """
 
 import logging
+import os
 import shutil
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -20,6 +22,14 @@ from mengrowth.preprocessing.utils.filter_raw_data import append_to_rejected_fil
 from mengrowth.preprocessing.utils.reorganize_raw_data import RejectedFile
 
 logger = logging.getLogger(__name__)
+
+try:
+    import cupy as cp
+    from cupyx.scipy.ndimage import sobel as gpu_sobel
+
+    HAS_CUPY = True
+except ImportError:
+    HAS_CUPY = False
 
 
 @dataclass
@@ -582,11 +592,18 @@ def check_intensity_outliers(
 
 
 def check_motion_artifact(
-    file_data: NRRDFileData, config: QualityFilteringConfig
+    file_data: NRRDFileData,
+    config: QualityFilteringConfig,
+    use_gpu: bool = False,
 ) -> ValidationResult:
     """B4: Detect motion artifacts via gradient entropy.
 
     Low gradient entropy suggests blurring/motion artifacts.
+
+    Args:
+        file_data: Loaded NRRD file data.
+        config: Quality filtering configuration.
+        use_gpu: If True and CuPy is available, use GPU for Sobel computation.
     """
     check_name = "motion_artifact"
     cfg = config.motion_artifact
@@ -599,10 +616,17 @@ def check_motion_artifact(
     data = file_data.data.astype(np.float64)
 
     # Compute gradient magnitude via sobel on each axis
-    grad_mag = np.zeros_like(data)
-    for axis in range(min(3, data.ndim)):
-        grad_mag += sobel(data, axis=axis) ** 2
-    grad_mag = np.sqrt(grad_mag)
+    if use_gpu and HAS_CUPY:
+        data_gpu = cp.asarray(data)
+        grad_mag_gpu = cp.zeros_like(data_gpu)
+        for axis in range(min(3, data.ndim)):
+            grad_mag_gpu += gpu_sobel(data_gpu, axis=axis) ** 2
+        grad_mag = cp.asnumpy(cp.sqrt(grad_mag_gpu))
+    else:
+        grad_mag = np.zeros_like(data)
+        for axis in range(min(3, data.ndim)):
+            grad_mag += sobel(data, axis=axis) ** 2
+        grad_mag = np.sqrt(grad_mag)
 
     # Compute entropy of gradient histogram
     hist, _ = np.histogram(grad_mag[grad_mag > 0], bins=256)
@@ -1085,6 +1109,7 @@ def validate_file(
     file_path: Path,
     config: QualityFilteringConfig,
     load_data: bool = True,
+    use_gpu: bool = False,
 ) -> FileValidationReport:
     """Run all file-level validation checks on a single file.
 
@@ -1092,6 +1117,7 @@ def validate_file(
         file_path: Path to NRRD file.
         config: Quality filtering configuration.
         load_data: Whether to load image data (for quality checks).
+        use_gpu: If True and CuPy available, use GPU for Sobel computation.
 
     Returns:
         FileValidationReport with all check results.
@@ -1137,7 +1163,7 @@ def validate_file(
         report.results.append(check_snr(file_data, config))
         report.results.append(check_contrast(file_data, config))
         report.results.append(check_intensity_outliers(file_data, config))
-        report.results.append(check_motion_artifact(file_data, config))
+        report.results.append(check_motion_artifact(file_data, config, use_gpu=use_gpu))
         report.results.append(check_ghosting(file_data, config))
 
     # C: Geometric (header only)
@@ -1152,6 +1178,7 @@ def _validate_patient(
     patient_dir: Path,
     config: QualityFilteringConfig,
     metadata_manager: Optional[Any] = None,
+    use_gpu: bool = False,
 ) -> Tuple[PatientValidationReport, Dict[str, int]]:
     """Validate a single patient directory.
 
@@ -1159,6 +1186,7 @@ def _validate_patient(
         patient_dir: Path to patient directory.
         config: Quality filtering configuration.
         metadata_manager: Optional metadata manager.
+        use_gpu: If True and CuPy available, use GPU for Sobel computation.
 
     Returns:
         Tuple of (patient_report, stats_dict).
@@ -1194,7 +1222,7 @@ def _validate_patient(
 
         for file_path in nrrd_files:
             local_stats["total_files"] += 1
-            file_report = validate_file(file_path, config)
+            file_report = validate_file(file_path, config, use_gpu=use_gpu)
             study_report.file_reports.append(file_report)
 
             if file_report.has_blocking_issues:
@@ -1275,15 +1303,41 @@ def _collect_all_blocking_reasons(patient_report: PatientValidationReport) -> st
     return ",".join(sorted(reasons)) if reasons else "unknown"
 
 
+def _aggregate_patient_stats(
+    stats: QualityFilteringStats,
+    patient_report: PatientValidationReport,
+    local_stats: Dict[str, Any],
+) -> None:
+    """Aggregate per-patient stats into global stats."""
+    stats.total_files += local_stats["total_files"]
+    stats.files_passed += local_stats["files_passed"]
+    stats.files_warned += local_stats["files_warned"]
+    stats.files_blocked += local_stats["files_blocked"]
+    stats.studies_passed += local_stats["studies_passed"]
+    stats.studies_blocked += local_stats["studies_blocked"]
+
+    for issue_type, count in local_stats["issues_by_type"].items():
+        stats.issues_by_type[issue_type] = (
+            stats.issues_by_type.get(issue_type, 0) + count
+        )
+
+    if patient_report.has_blocking_issues:
+        stats.patients_blocked += 1
+    else:
+        stats.patients_passed += 1
+
+
 def run_quality_filtering(
     data_root: Path,
     config: QualityFilteringConfig,
     metadata_manager: Optional[Any] = None,
     dry_run: bool = False,
+    quality_output_dir: Optional[Path] = None,
+    n_workers: Optional[int] = None,
 ) -> Tuple[QualityFilteringStats, List[PatientValidationReport]]:
     """Run complete quality filtering on dataset.
 
-    Phase 1: Validate all files and collect reports.
+    Phase 1: Validate all files and collect reports (parallelized).
     Phase 2: Remove blocked studies/patients when config.remove_blocked is True.
 
     Args:
@@ -1291,6 +1345,10 @@ def run_quality_filtering(
         config: Quality filtering configuration.
         metadata_manager: Optional metadata manager for additional context.
         dry_run: If True, don't delete files.
+        quality_output_dir: Optional directory for writing rejected files CSV.
+            If None, defaults to data_root.parent.
+        n_workers: Number of parallel workers for validation. Defaults to
+            half of available CPU cores. Set to 1 for sequential processing.
 
     Returns:
         Tuple of (stats, patient_reports).
@@ -1298,6 +1356,12 @@ def run_quality_filtering(
     if not config.enabled:
         logger.info("Quality filtering is disabled")
         return QualityFilteringStats(), []
+
+    if n_workers is None:
+        n_workers = max(1, (os.cpu_count() or 4) // 2)
+
+    # Use GPU only in single-process mode to avoid CUDA fork issues
+    use_gpu = HAS_CUPY and n_workers <= 1
 
     stats = QualityFilteringStats()
     patient_reports: List[PatientValidationReport] = []
@@ -1308,6 +1372,8 @@ def run_quality_filtering(
     patient_dirs = sorted([d for d in data_root.iterdir() if d.is_dir()])
     total_patients = len(patient_dirs)
     logger.info(f"Found {total_patients} patients to validate")
+    logger.info(f"Using {n_workers} worker(s) for validation" +
+                (" (GPU accelerated)" if use_gpu else ""))
 
     # Count total files for progress estimation
     total_files_estimate = sum(
@@ -1318,44 +1384,45 @@ def run_quality_filtering(
     )
     logger.info(f"Estimated {total_files_estimate} files to validate")
 
-    for idx, patient_dir in enumerate(patient_dirs, 1):
-        patient_id = patient_dir.name
-        num_studies = len([d for d in patient_dir.iterdir() if d.is_dir()])
-        num_files = sum(
-            len(list(study.glob("*.nrrd")))
-            for study in patient_dir.iterdir()
-            if study.is_dir()
-        )
+    if n_workers <= 1:
+        # Sequential mode (or GPU mode)
+        for idx, patient_dir in enumerate(patient_dirs, 1):
+            patient_id = patient_dir.name
+            logger.info(f"Validating patient {idx}/{total_patients}: {patient_id}")
 
-        logger.info(
-            f"Validating patient {idx}/{total_patients}: {patient_id} "
-            f"({num_studies} studies, {num_files} files)"
-        )
-
-        patient_report, local_stats = _validate_patient(
-            patient_dir, config, metadata_manager
-        )
-
-        # Aggregate stats
-        stats.total_files += local_stats["total_files"]
-        stats.files_passed += local_stats["files_passed"]
-        stats.files_warned += local_stats["files_warned"]
-        stats.files_blocked += local_stats["files_blocked"]
-        stats.studies_passed += local_stats["studies_passed"]
-        stats.studies_blocked += local_stats["studies_blocked"]
-
-        for issue_type, count in local_stats["issues_by_type"].items():
-            stats.issues_by_type[issue_type] = (
-                stats.issues_by_type.get(issue_type, 0) + count
+            patient_report, local_stats = _validate_patient(
+                patient_dir, config, metadata_manager, use_gpu=use_gpu
             )
+            patient_reports.append(patient_report)
 
-        if patient_report.has_blocking_issues:
-            stats.patients_blocked += 1
-            logger.debug(f"  Patient {patient_id} has blocking issues")
-        else:
-            stats.patients_passed += 1
+            # Aggregate stats
+            _aggregate_patient_stats(stats, patient_report, local_stats)
+    else:
+        # Parallel mode with ProcessPoolExecutor
+        # Note: metadata_manager=None in workers (not picklable),
+        # temporal ordering check doesn't actually use it.
+        logger.info(f"Submitting {total_patients} patients to process pool...")
 
-        patient_reports.append(patient_report)
+        with ProcessPoolExecutor(max_workers=n_workers) as executor:
+            future_to_patient = {
+                executor.submit(_validate_patient, patient_dir, config, None): patient_dir.name
+                for patient_dir in patient_dirs
+            }
+
+            completed = 0
+            for future in as_completed(future_to_patient):
+                patient_id = future_to_patient[future]
+                completed += 1
+                try:
+                    patient_report, local_stats = future.result()
+                    patient_reports.append(patient_report)
+                    _aggregate_patient_stats(stats, patient_report, local_stats)
+                    logger.info(f"Validated patient {completed}/{total_patients}: {patient_id}")
+                except Exception:
+                    logger.exception(f"Error validating patient {patient_id}")
+
+        # Sort reports by patient_id to maintain deterministic order
+        patient_reports.sort(key=lambda r: r.patient_id)
 
     logger.info("Quality filtering validation complete:")
     logger.info(f"  Files: {stats.files_passed} passed, {stats.files_warned} warned, {stats.files_blocked} blocked")
@@ -1454,7 +1521,10 @@ def run_quality_filtering(
 
         # Write rejections to CSV
         if all_rejected_files:
-            rejected_csv_path = data_root.parent / "rejected_files.csv"
+            if quality_output_dir is not None:
+                rejected_csv_path = quality_output_dir / "rejected_files.csv"
+            else:
+                rejected_csv_path = data_root.parent / "rejected_files.csv"
             append_to_rejected_files_csv(all_rejected_files, rejected_csv_path)
 
         logger.info(
@@ -1479,6 +1549,19 @@ def export_quality_issues(
         output_path: Path to output CSV file.
     """
     import csv
+    import json as _json
+
+    fieldnames = [
+        "patient_id",
+        "study_id",
+        "modality",
+        "file_path",
+        "check_name",
+        "action",
+        "message",
+        "level",
+        "details",
+    ]
 
     rows = []
     for patient_report in patient_reports:
@@ -1496,6 +1579,7 @@ def export_quality_issues(
                             "action": result.action,
                             "message": result.message,
                             "level": "file",
+                            "details": _json.dumps(result.details) if result.details else "",
                         })
 
             # Study-level issues
@@ -1510,6 +1594,7 @@ def export_quality_issues(
                         "action": result.action,
                         "message": result.message,
                         "level": "study",
+                        "details": _json.dumps(result.details) if result.details else "",
                     })
 
         # Patient-level issues
@@ -1524,30 +1609,155 @@ def export_quality_issues(
                     "action": result.action,
                     "message": result.message,
                     "level": "patient",
+                    "details": _json.dumps(result.details) if result.details else "",
                 })
 
     # Write CSV
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w", newline="", encoding="utf-8") as f:
-        if rows:
-            writer = csv.DictWriter(f, fieldnames=rows[0].keys())
-            writer.writeheader()
-            writer.writerows(rows)
-        else:
-            # Write empty file with headers
-            writer = csv.DictWriter(
-                f,
-                fieldnames=[
-                    "patient_id",
-                    "study_id",
-                    "modality",
-                    "file_path",
-                    "check_name",
-                    "action",
-                    "message",
-                    "level",
-                ],
-            )
-            writer.writeheader()
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
 
     logger.info(f"Exported {len(rows)} quality issues to {output_path}")
+
+
+def _serialize_details(details: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert numpy types in details dict to JSON-serializable types."""
+    import json as _json
+
+    serialized = {}
+    for k, v in details.items():
+        if isinstance(v, (np.integer,)):
+            serialized[k] = int(v)
+        elif isinstance(v, (np.floating,)):
+            serialized[k] = float(v)
+        elif isinstance(v, np.ndarray):
+            serialized[k] = v.tolist()
+        elif isinstance(v, (list, tuple)):
+            serialized[k] = [
+                float(x) if isinstance(x, (np.floating,)) else
+                int(x) if isinstance(x, (np.integer,)) else
+                x.tolist() if isinstance(x, np.ndarray) else x
+                for x in v
+            ]
+        elif isinstance(v, dict):
+            serialized[k] = _serialize_details(v)
+        else:
+            serialized[k] = v
+    return serialized
+
+
+def export_quality_metrics(
+    patient_reports: List[PatientValidationReport],
+    output_path: Path,
+) -> None:
+    """Export ALL computed quality metrics per file to JSON.
+
+    This exports every metric value (both passing and failing) so that
+    downstream analysis and visualization can use the raw values.
+
+    Args:
+        patient_reports: List of patient validation reports.
+        output_path: Path to output JSON file.
+    """
+    import json as _json
+
+    patients_data = {}
+    checks_summary: Dict[str, Dict[str, int]] = {}
+
+    for patient_report in patient_reports:
+        patient_id = patient_report.patient_id
+        patient_status = "blocked" if patient_report.has_blocking_issues else "passed"
+
+        studies_data = {}
+        for study_report in patient_report.study_reports:
+            study_id = study_report.study_id
+            study_status = "blocked" if study_report.has_blocking_issues else "passed"
+
+            files_data = {}
+            for file_report in study_report.file_reports:
+                modality = file_report.modality
+                checks_data = {}
+
+                for result in file_report.results:
+                    check_entry = {
+                        "passed": result.passed,
+                        "action": result.action,
+                        "message": result.message,
+                    }
+                    if result.details:
+                        check_entry["details"] = _serialize_details(result.details)
+
+                    checks_data[result.check_name] = check_entry
+
+                    # Update summary counts
+                    if result.check_name not in checks_summary:
+                        checks_summary[result.check_name] = {
+                            "total": 0, "passed": 0, "failed": 0,
+                        }
+                    checks_summary[result.check_name]["total"] += 1
+                    if result.passed:
+                        checks_summary[result.check_name]["passed"] += 1
+                    else:
+                        checks_summary[result.check_name]["failed"] += 1
+
+                files_data[modality] = {"checks": checks_data}
+
+            # Study-level checks
+            study_level_checks = {}
+            for result in study_report.study_level_results:
+                check_entry = {
+                    "passed": result.passed,
+                    "action": result.action,
+                    "message": result.message,
+                }
+                if result.details:
+                    check_entry["details"] = _serialize_details(result.details)
+                study_level_checks[result.check_name] = check_entry
+
+            studies_data[study_id] = {
+                "status": study_status,
+                "files": files_data,
+                "study_level_checks": study_level_checks,
+            }
+
+        # Patient-level checks
+        patient_level_checks = {}
+        for result in patient_report.patient_level_results:
+            check_entry = {
+                "passed": result.passed,
+                "action": result.action,
+                "message": result.message,
+            }
+            if result.details:
+                check_entry["details"] = _serialize_details(result.details)
+            patient_level_checks[result.check_name] = check_entry
+
+        patients_data[patient_id] = {
+            "status": patient_status,
+            "studies": studies_data,
+            "patient_level_checks": patient_level_checks,
+        }
+
+    # Build summary
+    total_patients = len(patient_reports)
+    patients_passed = sum(
+        1 for r in patient_reports if not r.has_blocking_issues
+    )
+
+    output = {
+        "patients": patients_data,
+        "summary": {
+            "total_patients": total_patients,
+            "patients_passed": patients_passed,
+            "patients_blocked": total_patients - patients_passed,
+            "checks_summary": checks_summary,
+        },
+    }
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as f:
+        _json.dump(output, f, indent=2)
+
+    logger.info(f"Exported quality metrics to {output_path}")
