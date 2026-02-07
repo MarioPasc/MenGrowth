@@ -54,7 +54,8 @@ dependencies = [
 preprocessing = [
     "brats==0.1.6",
     "brats[preprocessing]",
-    "intensity-normalization @ git+https://github.com/jcreinhold/intensity-normalization.git@6d2e486"
+    "intensity-normalization @ git+https://github.com/jcreinhold/intensity-normalization.git@6d2e486",
+    "cupy-cuda12x",
 ]
 
 [project.urls]
