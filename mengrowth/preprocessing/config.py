@@ -203,9 +203,9 @@ class IntensityOutliersConfig:
     reject_nan_inf: bool = True
     max_outlier_ratio: float = 10.0  # max vs 99th percentile
     modality_thresholds: Dict[str, float] = field(
-        default_factory=lambda: {"t1c": 10.0, "t1n": 15.0, "t2w": 12.0, "t2f": 30.0}
+        default_factory=lambda: {"t1c": 10.0, "t1n": 15.0, "t2w": 12.0, "t2f": 20.0}
     )
-    action: str = "warn"
+    action: str = "block"
 
     def get_threshold(self, modality: str) -> float:
         """Get outlier ratio threshold for a modality, falling back to max_outlier_ratio."""
@@ -249,11 +249,25 @@ class TemporalOrderingConfig:
 
 @dataclass
 class MotionArtifactConfig:
-    """Configuration for motion artifact detection."""
+    """Configuration for motion artifact detection.
+
+    Modality-specific thresholds account for inherent differences in gradient
+    entropy distributions: FLAIR images have lower entropy due to fluid
+    suppression, while T2W images have higher entropy from strong tissue
+    contrast.  Defaults are set at ~2 sigma below each modality's empirical
+    mean (derived from MenGrowth cohort statistics).
+    """
 
     enabled: bool = True
-    min_gradient_entropy: float = 3.0
-    action: str = "warn"
+    min_gradient_entropy: float = 3.0  # Fallback threshold
+    modality_thresholds: Dict[str, float] = field(
+        default_factory=lambda: {"t1c": 3.3, "t1n": 3.0, "t2w": 3.7, "t2f": 2.7}
+    )
+    action: str = "block"
+
+    def get_threshold(self, modality: str) -> float:
+        """Get gradient entropy threshold for a modality, falling back to min_gradient_entropy."""
+        return self.modality_thresholds.get(modality, self.min_gradient_entropy)
 
 
 @dataclass
@@ -553,9 +567,9 @@ def _parse_quality_filtering_config(qf_dict: dict) -> QualityFilteringConfig:
         max_outlier_ratio=intensity_dict.get("max_outlier_ratio", 10.0),
         modality_thresholds=intensity_dict.get(
             "modality_thresholds",
-            {"t1c": 10.0, "t1n": 15.0, "t2w": 12.0, "t2f": 30.0},
+            {"t1c": 10.0, "t1n": 15.0, "t2w": 12.0, "t2f": 20.0},
         ),
-        action=intensity_dict.get("action", "warn"),
+        action=intensity_dict.get("action", "block"),
     )
 
     affine_dict = qf_dict.get("affine_validation", {})
@@ -589,7 +603,11 @@ def _parse_quality_filtering_config(qf_dict: dict) -> QualityFilteringConfig:
     motion_config = MotionArtifactConfig(
         enabled=motion_dict.get("enabled", True),
         min_gradient_entropy=motion_dict.get("min_gradient_entropy", 3.0),
-        action=motion_dict.get("action", "warn"),
+        modality_thresholds=motion_dict.get(
+            "modality_thresholds",
+            {"t1c": 3.3, "t1n": 3.0, "t2w": 3.7, "t2f": 2.7},
+        ),
+        action=motion_dict.get("action", "block"),
     )
 
     coverage_dict = qf_dict.get("brain_coverage", {})

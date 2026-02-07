@@ -254,10 +254,11 @@ raw_data:
     # A3: Voxel Spacing Validation
     # Validates voxel spacing is within reasonable bounds
     # Note: 2D multi-slice acquisitions have high anisotropy (5-6.5mm slice, 0.4mm in-plane)
+    # max_spacing raised to 7.5 to avoid floating-point boundary false positives at 7.0mm
     voxel_spacing:
       enabled: true
       min_spacing_mm: 0.2        # Minimum voxel size (mm)
-      max_spacing_mm: 7.0        # Maximum voxel size (mm) - raised for thick-slice 2D
+      max_spacing_mm: 7.5        # Maximum voxel size (mm) - raised for thick-slice 2D
       max_anisotropy_ratio: 20.0 # Maximum anisotropy - raised for 2D multi-slice
       action: "warn"             # "warn" or "block"
 
@@ -287,6 +288,8 @@ raw_data:
     # B3: Intensity Outlier Detection
     # Detects NaN, Inf, or extreme intensity values
     # Per-modality thresholds (FLAIR naturally has higher outlier ratios)
+    # Action: block — extreme dynamic range corrupts histogram-based normalization
+    # (WhiteStripe, Z-score) and compresses useful signal into <10% of intensity scale
     intensity_outliers:
       enabled: true
       reject_nan_inf: true       # Immediately reject files with NaN/Inf
@@ -295,15 +298,27 @@ raw_data:
         t1c: 10.0
         t1n: 15.0
         t2w: 12.0
-        t2f: 30.0
-      action: "warn"             # "warn" or "block"
+        t2f: 20.0                # Tightened from 30.0 (P95=17.4, catches genuine corruption)
+      action: "block"            # "warn" or "block"
 
     # B4: Motion Artifact Detection
     # Detects motion/blurring via gradient entropy analysis
+    # Per-modality thresholds at ~2σ below empirical mean (MenGrowth cohort):
+    #   t1c: mean=4.63, σ=0.68 → 2σ=3.27 → 3.3
+    #   t1n: mean=4.62, σ=0.83 → 2σ=2.96 → 3.0
+    #   t2w: mean=5.22, σ=0.76 → 2σ=3.70 → 3.7
+    #   t2f: mean=4.67, σ=0.97 → 2σ=2.73 → 2.7 (lower due to fluid suppression)
+    # Action: block — gradient entropy <threshold means <8 effective gradient bins,
+    # insufficient for reliable intensity-based registration (MI/CC)
     motion_artifact:
       enabled: true
-      min_gradient_entropy: 3.0  # Minimum gradient histogram entropy (bits)
-      action: "warn"             # "warn" or "block"
+      min_gradient_entropy: 3.0  # Fallback threshold (bits)
+      modality_thresholds:       # Per-modality gradient entropy thresholds
+        t1c: 3.3
+        t1n: 3.0
+        t2w: 3.7
+        t2f: 2.7
+      action: "block"            # "warn" or "block"
 
     # B5: Ghosting Detection
     # Detects ghosting artifacts via corner signal intensity

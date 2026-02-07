@@ -642,13 +642,16 @@ def check_motion_artifact(
     hist_norm = hist / hist_sum
     grad_entropy = float(scipy_entropy(hist_norm, base=2))
 
-    if grad_entropy < cfg.min_gradient_entropy:
+    modality = file_data.modality
+    threshold = cfg.get_threshold(modality)
+
+    if grad_entropy < threshold:
         return ValidationResult(
             passed=False,
             check_name=check_name,
-            message=f"Low gradient entropy {grad_entropy:.2f} < {cfg.min_gradient_entropy} (possible motion/blur)",
+            message=f"Low gradient entropy {grad_entropy:.2f} < {threshold} ({modality})",
             action=cfg.action,
-            details={"gradient_entropy": grad_entropy},
+            details={"gradient_entropy": grad_entropy, "threshold": threshold},
         )
 
     return ValidationResult(
