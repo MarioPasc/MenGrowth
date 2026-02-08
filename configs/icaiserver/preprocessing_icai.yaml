@@ -291,9 +291,13 @@ preprocessing:
       save_visualization: true # Save visualization for intensity normalization step
       intensity_normalization:
           method: fcm  # null | "zscore" | "kde" | "percentile_minmax" | "whitestripe" | "fcm" | "lsq"
+          # Alternative: method: zscore for BraTS/nnU-Net compatibility
 
           # Common parameters
           norm_value: 1.0  # For zscore, kde, lsq
+
+          # Z-score specific parameters
+          clip_range: null  # Optional [low, high] clipping after z-score (e.g., [-5.0, 5.0])
 
           # Percentile MinMax parameters
           p1: 1.0

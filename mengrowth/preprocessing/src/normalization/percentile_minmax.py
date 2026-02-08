@@ -112,12 +112,32 @@ class PercentileMinMaxNormalizer(BaseNormalizer):
             image_sitk = sitk.ReadImage(str(input_path))
             image_array = sitk.GetArrayFromImage(image_sitk)
 
-            # Compute percentiles
-            p1_value = np.percentile(image_array, self.p1)
-            p2_value = np.percentile(image_array, self.p2)
+            # Load or derive brain mask
+            if mask_path is not None and Path(mask_path).exists():
+                mask_sitk = sitk.ReadImage(str(mask_path))
+                brain_mask = sitk.GetArrayFromImage(mask_sitk) > 0
+                mask_source = "skull_stripping"
+                self.logger.info(f"Using brain mask from: {mask_path}")
+            else:
+                brain_mask = image_array > 0
+                mask_source = "nonzero_fallback"
+                self.logger.info("No brain mask provided, using nonzero voxels as fallback")
+
+            brain_voxels = image_array[brain_mask]
+            total_voxels = image_array.size
+            brain_voxel_count = int(brain_voxels.size)
+            brain_coverage_percent = 100.0 * brain_voxel_count / total_voxels
 
             self.logger.info(
-                f"Percentiles: P{self.p1}={p1_value:.3f}, P{self.p2}={p2_value:.3f}"
+                f"Brain coverage: {brain_coverage_percent:.1f}% ({brain_voxel_count}/{total_voxels} voxels)"
+            )
+
+            # Compute percentiles on brain voxels only
+            p1_value = np.percentile(brain_voxels, self.p1)
+            p2_value = np.percentile(brain_voxels, self.p2)
+
+            self.logger.info(
+                f"Percentiles (brain-only): P{self.p1}={p1_value:.3f}, P{self.p2}={p2_value:.3f}"
             )
 
             # Avoid division by zero
@@ -128,18 +148,20 @@ class PercentileMinMaxNormalizer(BaseNormalizer):
                 )
                 p2_value = p1_value + 1e-8  # Add small epsilon
 
-            # Apply normalization: I'(x) = (I(x) - p1_value) / (p2_value - p1_value)
-            normalized_array = (image_array - p1_value) / (p2_value - p1_value)
+            # Apply normalization within brain mask only; background stays 0
+            normalized_array = np.zeros_like(image_array, dtype=np.float64)
+            normalized_array[brain_mask] = (image_array[brain_mask] - p1_value) / (p2_value - p1_value)
 
-            # Store original and normalized ranges
+            # Store original and normalized ranges (brain voxels only)
             original_range = [float(image_array.min()), float(image_array.max())]
-            normalized_range = [float(normalized_array.min()), float(normalized_array.max())]
+            brain_normalized = normalized_array[brain_mask]
+            normalized_range = [float(brain_normalized.min()), float(brain_normalized.max())]
 
             self.logger.info(
                 f"Original range: [{original_range[0]:.3f}, {original_range[1]:.3f}]"
             )
             self.logger.info(
-                f"Normalized range: [{normalized_range[0]:.3f}, {normalized_range[1]:.3f}]"
+                f"Normalized range (brain): [{normalized_range[0]:.3f}, {normalized_range[1]:.3f}]"
             )
 
             # Create output image
@@ -159,6 +181,9 @@ class PercentileMinMaxNormalizer(BaseNormalizer):
                 "p2_percentile": self.p2,
                 "original_range": original_range,
                 "normalized_range": normalized_range,
+                "brain_voxel_count": brain_voxel_count,
+                "brain_coverage_percent": brain_coverage_percent,
+                "mask_source": mask_source,
             }
 
         except Exception as e:

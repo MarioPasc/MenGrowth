@@ -1259,6 +1259,9 @@ class IntensityNormalizationConfig:
     p1: float = 1.0
     p2: float = 99.0
 
+    # Z-score specific parameters
+    clip_range: Optional[List[float]] = None  # Optional [low, high] clipping after z-score (e.g., [-5.0, 5.0])
+
     # WhiteStripe parameters
     width: float = 0.05
     width_l: Optional[float] = None
@@ -1291,6 +1294,13 @@ class IntensityNormalizationConfig:
                 raise ConfigurationError(
                     f"norm_value must be positive, got {self.norm_value}"
                 )
+
+            # Validate clip_range (used by zscore)
+            if self.clip_range is not None:
+                if len(self.clip_range) != 2 or self.clip_range[0] >= self.clip_range[1]:
+                    raise ConfigurationError(
+                        f"clip_range must be [low, high] with low < high, got {self.clip_range}"
+                    )
 
             # Validate WhiteStripe parameters
             if self.method == "whitestripe":

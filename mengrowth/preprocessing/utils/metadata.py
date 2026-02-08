@@ -305,6 +305,7 @@ class PatientMetadata:
     age: Optional[int] = None
     sex: Optional[int] = None  # 0=male, 1=female
     medical_history: Optional[int] = None
+    scanner: Optional[str] = None  # MRI scanner/equipment ("Equipo" in original xlsx)
     first_study: Optional[Dict[str, Any]] = None
     controls: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     groundtruth: Optional[Dict[str, Any]] = None
@@ -352,11 +353,20 @@ class PatientMetadata:
         # Parse medical history safely (can be comma-separated like "1, 5")
         medical_history = safe_int(general.get("medical_history"))
 
+        # Extract scanner/equipment from first_study RM data ("Equipo" in xlsx)
+        scanner = None
+        rm_data = first_study.get("rm", {})
+        if rm_data:
+            raw_scanner = rm_data.get("machine")
+            if raw_scanner is not None and str(raw_scanner).strip():
+                scanner = str(raw_scanner).strip()
+
         return cls(
             patient_id=patient_id,
             age=age,
             sex=sex,
             medical_history=medical_history,
+            scanner=scanner,
             first_study=first_study if first_study else None,
             controls=controls,
             groundtruth=groundtruth if groundtruth else None,
@@ -453,9 +463,20 @@ class MetadataManager:
 
         self._patients = {}
         for patient_id, data in self._raw_json_data.items():
-            self._patients[patient_id] = PatientMetadata.from_json_dict(
-                patient_id, data
-            )
+            patient = PatientMetadata.from_json_dict(patient_id, data)
+
+            # Restore curation tracking fields from _curation block
+            curation = data.get("_curation", {})
+            if "included" in curation:
+                patient.included = curation["included"]
+            if curation.get("exclusion_reason") is not None:
+                patient.exclusion_reason = curation["exclusion_reason"]
+            if curation.get("mengrowth_id") is not None:
+                patient.mengrowth_id = curation["mengrowth_id"]
+                self._id_map[patient_id] = patient.mengrowth_id
+                self._reverse_id_map[patient.mengrowth_id] = patient_id
+
+            self._patients[patient_id] = patient
 
         logger.info(f"Loaded metadata for {len(self._patients)} patients from {json_path}")
 
@@ -481,6 +502,7 @@ class MetadataManager:
                 patient_id=patient_id,
                 age=int(row["age"]) if pd.notna(row.get("age")) else None,
                 sex=int(row["sex"]) if pd.notna(row.get("sex")) else None,
+                scanner=str(row["scanner"]) if pd.notna(row.get("scanner")) else None,
                 included=bool(row["included"]) if pd.notna(row.get("included")) else True,
                 exclusion_reason=str(row["exclusion_reason"]) if pd.notna(row.get("exclusion_reason")) else None,
                 mengrowth_id=str(row["MenGrowth_ID"]) if pd.notna(row.get("MenGrowth_ID")) else None,
@@ -591,6 +613,7 @@ class MetadataManager:
                 "age": patient.age,
                 "sex": patient.sex,
                 "medical_history": patient.medical_history,
+                "scanner": patient.scanner,
                 "first_study_volume": patient.get_first_study_volume(),
                 "growth": patient.get_growth_status(),
                 "num_controls": patient.get_num_controls(),
@@ -699,6 +722,12 @@ class MetadataManager:
                 "total": sum(controls_counts),
             }
 
+        # Scanner distribution
+        scanner_counts: Dict[str, int] = {}
+        for p in included_patients:
+            scanner = p.scanner or "unknown"
+            scanner_counts[scanner] = scanner_counts.get(scanner, 0) + 1
+
         # Exclusion reasons
         exclusion_reasons: Dict[str, int] = {}
         for p in excluded_patients:
@@ -714,6 +743,7 @@ class MetadataManager:
             "growth_distribution": growth_counts,
             "volume_stats": volume_stats,
             "controls_stats": controls_stats,
+            "scanner_distribution": scanner_counts,
             "exclusion_reasons": exclusion_reasons,
         }
 

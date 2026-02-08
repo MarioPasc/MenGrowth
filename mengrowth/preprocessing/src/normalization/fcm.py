@@ -163,10 +163,41 @@ class FCMNormalizer(BaseNormalizer):
             # Load NIfTI with nibabel
             self.logger.debug(f"Loading image: {input_path}")
             input_img = nib.load(str(input_path))
-            
+
             input_img.get_data = input_img.get_fdata  # For compatibility with older nibabel versions
             input_img.with_data = lambda data: nib.Nifti1Image(data, input_img.affine)
-            
+
+            input_data = input_img.get_fdata()
+
+            # Store original range
+            original_range = [float(input_data.min()), float(input_data.max())]
+
+            # Load or derive brain mask
+            brain_mask_nib = None
+            if mask_path is not None and Path(mask_path).exists():
+                brain_mask_nib = nib.load(str(mask_path))
+                brain_mask_arr = brain_mask_nib.get_fdata() > 0
+                mask_source = "skull_stripping"
+                self.logger.info(f"Using brain mask from: {mask_path}")
+            else:
+                brain_mask_arr = input_data > 0
+                brain_mask_nib = nib.Nifti1Image(
+                    brain_mask_arr.astype(np.uint8), input_img.affine
+                )
+                mask_source = "nonzero_fallback"
+                self.logger.info("No brain mask provided, using nonzero voxels as fallback")
+
+            # Compatibility shim for older nibabel API used by intensity_normalization package
+            brain_mask_nib.get_data = brain_mask_nib.get_fdata
+
+            total_voxels = input_data.size
+            brain_voxel_count = int(np.sum(brain_mask_arr))
+            brain_coverage_percent = 100.0 * brain_voxel_count / total_voxels
+
+            self.logger.info(
+                f"Brain coverage: {brain_coverage_percent:.1f}% ({brain_voxel_count}/{total_voxels} voxels)"
+            )
+
             # Apply FCM normalization using intensity-normalization package
             self.logger.info("Applying FCM normalization using intensity-normalization package...")
             normalizer = FCMNormalize(
@@ -178,17 +209,9 @@ class FCMNormalizer(BaseNormalizer):
             )
             modality = infer_modality_from_filename(str(input_path))
             self.logger.info(f"Inferred modality: {modality}, input: {input_path}")
-            
-            # Pass nibabel image to normalizer
-            normalized_result = normalizer(input_img)
 
-            if type(input_img) is not np.ndarray:
-                input_data = input_img.get_fdata()
-            else:
-                input_data = input_img
-
-            # Store original range
-            original_range = [float(input_data.min()), float(input_data.max())]
+            # Pass nibabel image and brain mask to normalizer
+            normalized_result = normalizer(input_img, mask=brain_mask_nib)
 
             # Extract data from result
             if hasattr(normalized_result, 'get_fdata'):
@@ -196,17 +219,20 @@ class FCMNormalizer(BaseNormalizer):
             elif isinstance(normalized_result, np.ndarray):
                 normalized_data = normalized_result
             else:
-                # Fallback
                 normalized_data = normalized_result.get_fdata()
 
-            # Store normalized range
-            normalized_range = [float(normalized_data.min()), float(normalized_data.max())]
+            # Ensure background is zero
+            normalized_data[~brain_mask_arr] = 0.0
+
+            # Store normalized range (brain voxels only)
+            brain_normalized = normalized_data[brain_mask_arr]
+            normalized_range = [float(brain_normalized.min()), float(brain_normalized.max())]
 
             self.logger.info(
                 f"Original range: [{original_range[0]:.3f}, {original_range[1]:.3f}]"
             )
             self.logger.info(
-                f"Normalized range: [{normalized_range[0]:.3f}, {normalized_range[1]:.3f}]"
+                f"Normalized range (brain): [{normalized_range[0]:.3f}, {normalized_range[1]:.3f}]"
             )
 
             # Save normalized image
@@ -224,6 +250,9 @@ class FCMNormalizer(BaseNormalizer):
                 "modality": str(modality),
                 "original_range": original_range,
                 "normalized_range": normalized_range,
+                "brain_voxel_count": brain_voxel_count,
+                "brain_coverage_percent": brain_coverage_percent,
+                "mask_source": mask_source,
             }
 
         except Exception as e:

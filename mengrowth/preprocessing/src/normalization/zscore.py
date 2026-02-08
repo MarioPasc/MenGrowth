@@ -1,23 +1,28 @@
-"""Z-score normalization using intensity-normalization package.
+"""Z-score normalization on brain voxels.
 
 This module implements z-score intensity normalization that standardizes images
-by subtracting the mean and dividing by the standard deviation. This centers
-the intensity distribution and scales it to unit variance.
+by subtracting the mean and dividing by the standard deviation, computed on
+brain voxels only (excluding background zeros from skull-stripped images).
+
+This implements the nnU-Net/BraTS convention:
+    I'(x) = (I(x) - mean_brain) / std_brain
+
+where mean_brain and std_brain are computed over brain voxels only (mask > 0).
+Background voxels remain exactly 0.
 
 Reference:
-    intensity-normalization package: https://github.com/jcreinhold/intensity-normalization
+    nnU-Net: Isensee et al. (2021), "nnU-Net: a self-configuring method for
+    deep learning-based biomedical image segmentation"
 """
 
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional, List
 import logging
 
 import nibabel as nib
-
-from intensity_normalization.normalizers.individual.zscore import ZScoreNormalizer as ZScoreNormalize
+import numpy as np
 
 from mengrowth.preprocessing.src.normalization.base import BaseNormalizer
-from mengrowth.preprocessing.src.normalization.utils import infer_modality_from_filename
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +51,7 @@ class ZScoreNormalizer(BaseNormalizer):
         Args:
             config: Configuration dictionary containing:
                 - norm_value: Scaling factor after z-score (default=1.0)
+                - clip_range: Optional [low, high] clipping bounds after z-score (default=None)
             verbose: Enable verbose logging
         """
         super().__init__(
@@ -55,12 +61,19 @@ class ZScoreNormalizer(BaseNormalizer):
 
         # Extract norm_value parameter with default
         self.norm_value = config.get("norm_value", 1.0)
+        self.clip_range: Optional[List[float]] = config.get("clip_range", None)
 
         if self.norm_value <= 0:
             raise ValueError(f"norm_value must be positive, got {self.norm_value}")
 
+        if self.clip_range is not None:
+            if len(self.clip_range) != 2 or self.clip_range[0] >= self.clip_range[1]:
+                raise ValueError(
+                    f"clip_range must be [low, high] with low < high, got {self.clip_range}"
+                )
+
         self.logger.info(
-            f"Initialized ZScoreNormalizer: norm_value={self.norm_value}"
+            f"Initialized ZScoreNormalizer: norm_value={self.norm_value}, clip_range={self.clip_range}"
         )
 
     def execute(
@@ -102,35 +115,67 @@ class ZScoreNormalizer(BaseNormalizer):
         self.log_execution(input_path, output_path)
 
         try:
-
             # Load NIfTI with nibabel
             self.logger.debug(f"Loading image: {input_path}")
             input_img = nib.load(str(input_path))
-            input_img.get_data = input_img.get_fdata  # For compatibility with older nibabel versions
-            input_img.with_data = lambda data: nib.Nifti1Image(data, input_img.affine)
             input_data = input_img.get_fdata()
-
 
             # Store original range
             original_range = [float(input_data.min()), float(input_data.max())]
 
-            # Apply z-score normalization using intensity-normalization package
-            self.logger.info("Applying z-score normalization using intensity-normalization package...")
+            # Load or derive brain mask
+            if mask_path is not None and Path(mask_path).exists():
+                mask_img = nib.load(str(mask_path))
+                brain_mask = mask_img.get_fdata() > 0
+                mask_source = "skull_stripping"
+                self.logger.info(f"Using brain mask from: {mask_path}")
+            else:
+                brain_mask = input_data > 0
+                mask_source = "nonzero_fallback"
+                self.logger.info("No brain mask provided, using nonzero voxels as fallback")
 
-            normalizer = ZScoreNormalize()
-            modality = infer_modality_from_filename(input_path)
-            self.logger.info(f"Inferred modality: {modality}, type: {type(modality)}, input: {input_path}")
-            normalized_data = normalizer(input_data)
+            brain_voxels = input_data[brain_mask]
+            total_voxels = input_data.size
+            brain_voxel_count = int(brain_voxels.size)
+            brain_coverage_percent = 100.0 * brain_voxel_count / total_voxels
 
+            self.logger.info(
+                f"Brain coverage: {brain_coverage_percent:.1f}% ({brain_voxel_count}/{total_voxels} voxels)"
+            )
 
-            # Store normalized range
-            normalized_range = [float(normalized_data.min()), float(normalized_data.max())]
+            # Compute mean and std on brain voxels only (nnU-Net/BraTS convention)
+            mean_val = float(np.mean(brain_voxels))
+            std_val = float(np.std(brain_voxels))
+
+            self.logger.info(f"Brain voxel stats: mean={mean_val:.3f}, std={std_val:.3f}")
+
+            if std_val < 1e-8:
+                self.logger.warning(
+                    f"Standard deviation is near zero ({std_val:.3e}). "
+                    "Z-score normalization may not be meaningful."
+                )
+                std_val = 1e-8
+
+            # Apply z-score: normalized[brain_mask] = (image[brain_mask] - mean) / std
+            # Background stays 0
+            normalized_data = np.zeros_like(input_data, dtype=np.float64)
+            normalized_data[brain_mask] = (input_data[brain_mask] - mean_val) / std_val
+
+            # Apply optional clipping
+            if self.clip_range is not None:
+                low, high = self.clip_range
+                normalized_data[brain_mask] = np.clip(normalized_data[brain_mask], low, high)
+                self.logger.info(f"Clipped z-score values to [{low}, {high}]")
+
+            # Store normalized range (brain voxels only)
+            brain_normalized = normalized_data[brain_mask]
+            normalized_range = [float(brain_normalized.min()), float(brain_normalized.max())]
 
             self.logger.info(
                 f"Original range: [{original_range[0]:.3f}, {original_range[1]:.3f}]"
             )
             self.logger.info(
-                f"Normalized range: [{normalized_range[0]:.3f}, {normalized_range[1]:.3f}]"
+                f"Normalized range (brain): [{normalized_range[0]:.3f}, {normalized_range[1]:.3f}]"
             )
 
             # Save normalized image
@@ -140,9 +185,15 @@ class ZScoreNormalizer(BaseNormalizer):
             self.logger.info("Z-score normalization complete")
 
             return {
+                "mean": mean_val,
+                "std": std_val,
                 "norm_value": self.norm_value,
+                "clip_range": self.clip_range,
                 "original_range": original_range,
                 "normalized_range": normalized_range,
+                "brain_voxel_count": brain_voxel_count,
+                "brain_coverage_percent": brain_coverage_percent,
+                "mask_source": mask_source,
             }
 
         except Exception as e:

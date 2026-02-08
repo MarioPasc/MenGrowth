@@ -439,6 +439,7 @@ class PreprocessingOrchestrator:
         if method == "zscore":
             norm_config_dict = {
                 "norm_value": config.intensity_normalization.norm_value,
+                "clip_range": config.intensity_normalization.clip_range,
             }
             return ZScoreNormalizer(config=norm_config_dict, verbose=self.verbose)
         elif method == "kde":
