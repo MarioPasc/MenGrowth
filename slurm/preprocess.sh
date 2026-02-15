@@ -38,7 +38,7 @@ echo ""
 # ========================================================================
 # CONFIGURATION
 # ========================================================================
-export CONDA_ENV_NAME="growth"
+export CONDA_ENV_NAME="mengrowth"
 export REPO_SRC="/mnt/home/users/tic_163_uma/mpascual/fscratch/repos/MenGrowth"
 export CONFIG_FILE="${REPO_SRC}/configs/picasso/preprocessing.yaml"
 export DATASET_ROOT="/mnt/home/users/tic_163_uma/mpascual/fscratch/datasets/meningiomas/MenGrowth-2025"
