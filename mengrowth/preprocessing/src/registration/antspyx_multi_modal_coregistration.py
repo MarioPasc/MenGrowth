@@ -19,7 +19,7 @@ from mengrowth.preprocessing.src.registration.base import BaseRegistrator
 from mengrowth.preprocessing.src.registration.stdout_capture import capture_stdout
 from mengrowth.preprocessing.src.registration.diagnostic_parser import (
     parse_ants_diagnostic_output,
-    extract_transform_types
+    extract_transform_types,
 )
 
 logger = logging.getLogger(__name__)
@@ -53,7 +53,9 @@ class AntsPyXMultiModalCoregistration(BaseRegistrator):
         self.logger = logging.getLogger(__name__)
         self.save_detailed_info = config.get("save_detailed_registration_info", False)
         self.use_center_of_mass_init = config.get("use_center_of_mass_init", True)
-        self.validate_registration_quality = config.get("validate_registration_quality", True)
+        self.validate_registration_quality = config.get(
+            "validate_registration_quality", True
+        )
         self.quality_warning_threshold = config.get("quality_warning_threshold", -0.3)
 
         # Validate antspyx is available
@@ -66,11 +68,7 @@ class AntsPyXMultiModalCoregistration(BaseRegistrator):
             )
 
     def execute(
-        self,
-        study_dir: Path,
-        artifacts_dir: Path,
-        modalities: List[str],
-        **kwargs: Any
+        self, study_dir: Path, artifacts_dir: Path, modalities: List[str], **kwargs: Any
     ) -> Dict[str, Any]:
         """Execute multi-modal coregistration for a single study.
 
@@ -91,7 +89,9 @@ class AntsPyXMultiModalCoregistration(BaseRegistrator):
             RuntimeError: If registration fails
         """
         start_time = time.time()
-        self.logger.info(f"[AntsPyX] Starting multi-modal coregistration in {study_dir.name}")
+        self.logger.info(
+            f"[AntsPyX] Starting multi-modal coregistration in {study_dir.name}"
+        )
 
         # 1. Discover available modality files
         modality_files = self._discover_modality_files(study_dir, modalities)
@@ -105,7 +105,9 @@ class AntsPyXMultiModalCoregistration(BaseRegistrator):
         # 2. Select reference modality
         reference_modality = self._select_reference_modality(
             available_modalities=list(modality_files.keys()),
-            priority_str=self.config.get("reference_modality_priority", "t1c > t1n > t2f > t2w")
+            priority_str=self.config.get(
+                "reference_modality_priority", "t1c > t1n > t2f > t2w"
+            ),
         )
         reference_path = modality_files[reference_modality]
 
@@ -139,7 +141,7 @@ class AntsPyXMultiModalCoregistration(BaseRegistrator):
                     moving_path=moving_path,
                     transform_path=transform_path,
                     study_dir=study_dir,
-                    modality=modality
+                    modality=modality,
                 )
 
                 transforms[modality] = actual_transform
@@ -155,13 +157,13 @@ class AntsPyXMultiModalCoregistration(BaseRegistrator):
         elapsed = time.time() - start_time
         self.logger.info(
             f"Completed registration in {elapsed:.1f}s. "
-            f"Registered {len(registered_modalities)}/{len(modality_files)-1} modalities"
+            f"Registered {len(registered_modalities)}/{len(modality_files) - 1} modalities"
         )
 
         return {
             "reference_modality": reference_modality,
             "registered_modalities": registered_modalities,
-            "transforms": transforms
+            "transforms": transforms,
         }
 
     def _register_modality(
@@ -170,7 +172,7 @@ class AntsPyXMultiModalCoregistration(BaseRegistrator):
         moving_path: Path,
         transform_path: Path,
         study_dir: Path,
-        modality: str
+        modality: str,
     ) -> Tuple[Path, Path]:
         """Register a single modality to the reference using AntsPyX.
 
@@ -229,24 +231,20 @@ class AntsPyXMultiModalCoregistration(BaseRegistrator):
 
             # Multi-resolution parameters
             number_of_iterations_list = self.config.get(
-                "number_of_iterations",
-                [[1000, 500, 250]]
+                "number_of_iterations", [[1000, 500, 250]]
             )
-            shrink_factors_list = self.config.get(
-                "shrink_factors",
-                [[4, 2, 1]]
-            )
-            smoothing_sigmas_list = self.config.get(
-                "smoothing_sigmas",
-                [[2, 1, 0]]
-            )
+            shrink_factors_list = self.config.get("shrink_factors", [[4, 2, 1]])
+            smoothing_sigmas_list = self.config.get("smoothing_sigmas", [[2, 1, 0]])
 
             # For multi-stage, use parameters from the final stage
             # AntsPyX handles multi-resolution internally for composite transforms
             if len(number_of_iterations_list) > 0:
                 # For Affine (which includes Rigid), use the affine parameters
                 # Typically the second set of parameters if available
-                if len(number_of_iterations_list) > 1 and type_of_transform in ["Affine", "SyN"]:
+                if len(number_of_iterations_list) > 1 and type_of_transform in [
+                    "Affine",
+                    "SyN",
+                ]:
                     aff_iterations = tuple(number_of_iterations_list[-1])
                     aff_shrink_factors = tuple(shrink_factors_list[-1])
                     aff_smoothing_sigmas = tuple(smoothing_sigmas_list[-1])
@@ -264,7 +262,7 @@ class AntsPyXMultiModalCoregistration(BaseRegistrator):
             transform_prefix = str(transform_path.with_suffix("").with_suffix(""))
 
             if self.verbose:
-                self.logger.debug(f"[DEBUG] [AntsPyX] Calling ants.registration with:")
+                self.logger.debug("[DEBUG] [AntsPyX] Calling ants.registration with:")
                 self.logger.debug(f"  transforms: {transforms}")
                 self.logger.debug(f"  type_of_transform: {type_of_transform}")
                 self.logger.debug(f"  aff_metric: {metric}")
@@ -276,9 +274,11 @@ class AntsPyXMultiModalCoregistration(BaseRegistrator):
                 self.logger.debug(f"  outprefix: {transform_prefix}")
 
             # Compute center-of-mass alignment as initial transform if enabled
+            # NOTE: ants.registration() expects initial_transform as a file path string,
+            # not an ANTsTransform object. We write the transform to a temp file.
             initial_tx = None
             if self.use_center_of_mass_init:
-                self.logger.info(f"  Computing center-of-mass initialization...")
+                self.logger.info("  Computing center-of-mass initialization...")
                 try:
                     fixed_com = ants.get_center_of_mass(fixed_img)
                     moving_com = ants.get_center_of_mass(moving_img)
@@ -286,15 +286,23 @@ class AntsPyXMultiModalCoregistration(BaseRegistrator):
                     # Create translation to align centers
                     translation = [f - m for f, m in zip(fixed_com, moving_com)]
 
-                    initial_tx = ants.create_ants_transform(
-                        transform_type='Euler3DTransform',
+                    com_tx = ants.create_ants_transform(
+                        transform_type="Euler3DTransform",
                         center=moving_com,
-                        translation=translation
+                        translation=translation,
                     )
+                    # Write to temp file — ants.registration() needs a file path, not an object
+                    com_tx_path = study_dir / f"_temp_{modality}_com_init.mat"
+                    ants.write_transform(com_tx, str(com_tx_path))
+                    initial_tx = str(com_tx_path)
                     if self.verbose:
-                        self.logger.debug(f"[DEBUG] [AntsPyX] COM translation: {translation}")
+                        self.logger.debug(
+                            f"[DEBUG] [AntsPyX] COM translation: {translation}"
+                        )
                 except Exception as com_error:
-                    self.logger.warning(f"  COM initialization failed, proceeding without: {com_error}")
+                    self.logger.warning(
+                        f"  COM initialization failed, proceeding without: {com_error}"
+                    )
                     initial_tx = None
 
             # Perform registration
@@ -317,7 +325,7 @@ class AntsPyXMultiModalCoregistration(BaseRegistrator):
                         aff_shrink_factors=aff_shrink_factors,
                         aff_smoothing_sigmas=aff_smoothing_sigmas,
                         write_composite_transform=write_composite,
-                        verbose=True  # Force verbose for stdout capture
+                        verbose=True,  # Force verbose for stdout capture
                     )
                 captured_stdout = captured.getvalue()
             else:
@@ -334,20 +342,22 @@ class AntsPyXMultiModalCoregistration(BaseRegistrator):
                     aff_shrink_factors=aff_shrink_factors,
                     aff_smoothing_sigmas=aff_smoothing_sigmas,
                     write_composite_transform=write_composite,
-                    verbose=self.verbose
+                    verbose=self.verbose,
                 )
 
             if self.verbose:
-                self.logger.debug(f"[DEBUG] [AntsPyX] Registration completed")
+                self.logger.debug("[DEBUG] [AntsPyX] Registration completed")
 
             # Extract warped image
-            warped_img = result['warpedmovout']
+            warped_img = result["warpedmovout"]
 
             # Get transform file paths
-            fwd_transforms = result['fwdtransforms']  # List of paths
+            fwd_transforms = result["fwdtransforms"]  # List of paths
 
             if self.verbose:
-                self.logger.debug(f"[DEBUG] [AntsPyX] Forward transforms: {fwd_transforms}")
+                self.logger.debug(
+                    f"[DEBUG] [AntsPyX] Forward transforms: {fwd_transforms}"
+                )
 
             # Determine actual transform path
             # If write_composite_transform=True, look for Composite.h5
@@ -356,25 +366,37 @@ class AntsPyXMultiModalCoregistration(BaseRegistrator):
                 actual_transform_path = Path(transform_prefix + "Composite.h5")
                 if not actual_transform_path.exists():
                     # Fallback to first transform
-                    actual_transform_path = Path(fwd_transforms[0]) if fwd_transforms else None
+                    actual_transform_path = (
+                        Path(fwd_transforms[0]) if fwd_transforms else None
+                    )
             else:
-                actual_transform_path = Path(fwd_transforms[0]) if fwd_transforms else None
+                actual_transform_path = (
+                    Path(fwd_transforms[0]) if fwd_transforms else None
+                )
 
             if not actual_transform_path or not actual_transform_path.exists():
-                raise RuntimeError(f"Transform file not created: {actual_transform_path}")
+                raise RuntimeError(
+                    f"Transform file not created: {actual_transform_path}"
+                )
 
             # Compute and log registration quality if enabled
             if self.validate_registration_quality:
-                quality_metrics = self._compute_registration_quality(fixed_img, warped_img)
-                corr_sim = quality_metrics.get('correlation_similarity')
-                corr_dissim = quality_metrics.get('correlation_dissimilarity')
+                quality_metrics = self._compute_registration_quality(
+                    fixed_img, warped_img
+                )
+                corr_sim = quality_metrics.get("correlation_similarity")
+                corr_dissim = quality_metrics.get("correlation_dissimilarity")
                 self.logger.info(
-                    f"    Registration quality: Corr={corr_sim:.4f}" if corr_sim is not None else
-                    f"    Registration quality: Corr=N/A"
+                    f"    Registration quality: Corr={corr_sim:.4f}"
+                    if corr_sim is not None
+                    else "    Registration quality: Corr=N/A"
                 )
 
                 # Warn if quality is poor (correlation_dissimilarity > threshold means poor alignment)
-                if corr_dissim is not None and corr_dissim > self.quality_warning_threshold:
+                if (
+                    corr_dissim is not None
+                    and corr_dissim > self.quality_warning_threshold
+                ):
                     self.logger.warning(
                         f"    WARNING: Registration quality may be poor! "
                         f"Correlation dissimilarity ({corr_dissim:.4f}) "
@@ -389,15 +411,17 @@ class AntsPyXMultiModalCoregistration(BaseRegistrator):
                 raise RuntimeError(f"Registered image not created: {temp_output}")
 
             if self.verbose:
-                self.logger.debug(f"[DEBUG] [AntsPyX] Outputs verified successfully")
-                self.logger.debug(f"[DEBUG] [AntsPyX] Replacing {moving_path.name} with registered version")
+                self.logger.debug("[DEBUG] [AntsPyX] Outputs verified successfully")
+                self.logger.debug(
+                    f"[DEBUG] [AntsPyX] Replacing {moving_path.name} with registered version"
+                )
 
             # Replace original with registered version (in-place)
             final_output = moving_path
             temp_output.replace(final_output)
 
             if self.verbose:
-                self.logger.debug(f"[DEBUG] [AntsPyX] File replacement complete")
+                self.logger.debug("[DEBUG] [AntsPyX] File replacement complete")
 
             # Save detailed registration info if enabled
             if self.save_detailed_info and captured_stdout:
@@ -411,17 +435,23 @@ class AntsPyXMultiModalCoregistration(BaseRegistrator):
                         "type_of_transform": type_of_transform,
                         "metric": metric,
                         "metric_bins": metric_bins,
-                        "sampling_strategy": self.config.get("sampling_strategy", "Random"),
+                        "sampling_strategy": self.config.get(
+                            "sampling_strategy", "Random"
+                        ),
                         "sampling_percentage": sampling_percentage,
                         "number_of_iterations": number_of_iterations_list,
                         "shrink_factors": shrink_factors_list,
                         "smoothing_sigmas": smoothing_sigmas_list,
-                        "convergence_threshold": self.config.get("convergence_threshold", 1e-6),
-                        "convergence_window_size": self.config.get("convergence_window_size", 10),
+                        "convergence_threshold": self.config.get(
+                            "convergence_threshold", 1e-6
+                        ),
+                        "convergence_window_size": self.config.get(
+                            "convergence_window_size", 10
+                        ),
                         "write_composite_transform": write_composite,
-                        "interpolation": self.config.get("interpolation", "Linear")
+                        "interpolation": self.config.get("interpolation", "Linear"),
                     },
-                    registration_type="intra_study_to_reference"
+                    registration_type="intra_study_to_reference",
                 )
 
             return final_output, actual_transform_path
@@ -438,7 +468,7 @@ class AntsPyXMultiModalCoregistration(BaseRegistrator):
         moving_path: Path,
         transform_path: Path,
         config_params: Dict[str, Any],
-        registration_type: str
+        registration_type: str,
     ) -> None:
         """Save detailed registration information to JSON.
 
@@ -466,27 +496,31 @@ class AntsPyXMultiModalCoregistration(BaseRegistrator):
                     "output_image": moving_path.name,  # In-place replacement
                     "transform_file": transform_path.name,
                     "success": True,
-                    "error_message": None
+                    "error_message": None,
                 },
                 "parameters": config_params,
                 "timing": {
-                    "total_elapsed_time_seconds": parsed_diagnostics.get("total_elapsed_time_seconds"),
+                    "total_elapsed_time_seconds": parsed_diagnostics.get(
+                        "total_elapsed_time_seconds"
+                    ),
                     "stages": [
                         {
                             "stage_index": stage["stage_index"],
-                            "transform_type": transform_types[stage["stage_index"]] if stage["stage_index"] < len(transform_types) else "Unknown",
-                            "elapsed_time_seconds": stage.get("elapsed_time_seconds")
+                            "transform_type": transform_types[stage["stage_index"]]
+                            if stage["stage_index"] < len(transform_types)
+                            else "Unknown",
+                            "elapsed_time_seconds": stage.get("elapsed_time_seconds"),
                         }
                         for stage in parsed_diagnostics.get("stages", [])
-                    ]
+                    ],
                 },
-                "convergence": {
-                    "stages": parsed_diagnostics.get("stages", [])
-                },
+                "convergence": {"stages": parsed_diagnostics.get("stages", [])},
                 "stdout_capture": {
                     "full_output": stdout,
-                    "command_lines_ok": parsed_diagnostics.get("command_lines_ok", False)
-                }
+                    "command_lines_ok": parsed_diagnostics.get(
+                        "command_lines_ok", False
+                    ),
+                },
             }
 
         except Exception as parse_error:
@@ -499,11 +533,9 @@ class AntsPyXMultiModalCoregistration(BaseRegistrator):
                     "engine": "antspyx",
                     "fixed_image": fixed_path.name,
                     "moving_image": moving_path.name,
-                    "error_message": f"Parsing failed: {str(parse_error)}"
+                    "error_message": f"Parsing failed: {str(parse_error)}",
                 },
-                "stdout_capture": {
-                    "full_output": stdout
-                }
+                "stdout_capture": {"full_output": stdout},
             }
 
         try:
@@ -521,19 +553,21 @@ class AntsPyXMultiModalCoregistration(BaseRegistrator):
             json_path = detailed_info_dir / json_filename
 
             # Write JSON
-            with open(json_path, 'w', encoding='utf-8') as f:
-                json.dump(info, f, indent=2, default=str)  # default=str handles inf, datetime
+            with open(json_path, "w", encoding="utf-8") as f:
+                json.dump(
+                    info, f, indent=2, default=str
+                )  # default=str handles inf, datetime
 
             self.logger.info(f"Saved detailed registration info: {json_path.name}")
 
         except Exception as write_error:
-            self.logger.error(f"Failed to write detailed registration info: {write_error}")
+            self.logger.error(
+                f"Failed to write detailed registration info: {write_error}"
+            )
             # Don't raise - registration succeeded, just diagnostic save failed
 
     def _compute_registration_quality(
-        self,
-        fixed_img: "ants.ANTsImage",
-        warped_img: "ants.ANTsImage"
+        self, fixed_img: "ants.ANTsImage", warped_img: "ants.ANTsImage"
     ) -> Dict[str, float]:
         """Compute quality metrics for registration result.
 
@@ -551,21 +585,21 @@ class AntsPyXMultiModalCoregistration(BaseRegistrator):
 
         # Compute Mattes Mutual Information (lower = more similar in ANTs)
         mi_dissimilarity = ants.image_similarity(
-            fixed_img, warped_img,
-            metric_type='MattesMutualInformation'
+            fixed_img, warped_img, metric_type="MattesMutualInformation"
         )
 
         # Compute correlation (returns -1 for perfect match)
         corr_dissimilarity = ants.image_similarity(
-            fixed_img, warped_img,
-            metric_type='Correlation'
+            fixed_img, warped_img, metric_type="Correlation"
         )
 
         return {
             "mi_dissimilarity": float(mi_dissimilarity),
             "correlation_dissimilarity": float(corr_dissimilarity),
             # Convert to similarity (0-1 scale, higher = better)
-            "correlation_similarity": float(-corr_dissimilarity) if corr_dissimilarity is not None else None
+            "correlation_similarity": float(-corr_dissimilarity)
+            if corr_dissimilarity is not None
+            else None,
         }
 
     def visualize(
@@ -574,7 +608,7 @@ class AntsPyXMultiModalCoregistration(BaseRegistrator):
         moving_path: Path,
         registered_path: Path,
         output_path: Path,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> None:
         """Generate visualization comparing reference, moving, and registered images.
 
@@ -632,7 +666,7 @@ class AntsPyXMultiModalCoregistration(BaseRegistrator):
             fig.suptitle(
                 f"Multi-Modal Coregistration (AntsPyX): {modality}\n"
                 f"Transform: {transform_path.name if hasattr(transform_path, 'name') else transform_path}",
-                fontsize=12
+                fontsize=12,
             )
 
             plt.tight_layout()

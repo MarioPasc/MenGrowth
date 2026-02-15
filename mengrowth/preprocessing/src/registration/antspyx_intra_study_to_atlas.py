@@ -18,7 +18,7 @@ from mengrowth.preprocessing.src.registration.base import BaseRegistrator
 from mengrowth.preprocessing.src.registration.stdout_capture import capture_stdout
 from mengrowth.preprocessing.src.registration.diagnostic_parser import (
     parse_ants_diagnostic_output,
-    extract_transform_types
+    extract_transform_types,
 )
 
 logger = logging.getLogger(__name__)
@@ -40,10 +40,7 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
     """
 
     def __init__(
-        self,
-        config: Dict[str, Any],
-        reference_modality: str,
-        verbose: bool = False
+        self, config: Dict[str, Any], reference_modality: str, verbose: bool = False
     ) -> None:
         """Initialize atlas registration step with AntsPyX.
 
@@ -57,7 +54,9 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
         self.logger = logging.getLogger(__name__)
         self.save_detailed_info = config.get("save_detailed_registration_info", False)
         self.use_center_of_mass_init = config.get("use_center_of_mass_init", True)
-        self.validate_registration_quality = config.get("validate_registration_quality", True)
+        self.validate_registration_quality = config.get(
+            "validate_registration_quality", True
+        )
         self.quality_warning_threshold = config.get("quality_warning_threshold", -0.3)
 
         # Validate antspyx is available
@@ -75,7 +74,7 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
         artifacts_dir: Path,
         modalities: List[str],
         intra_study_transforms: Dict[str, Path],
-        **kwargs: Any
+        **kwargs: Any,
     ) -> Dict[str, Any]:
         """Execute atlas registration for a single study.
 
@@ -107,7 +106,9 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
 
         if self.verbose:
             self.logger.debug(f"[DEBUG] [AntsPyX] Atlas path: {atlas_path}")
-            self.logger.debug(f"[DEBUG] [AntsPyX] Reference modality: {self.reference_modality}")
+            self.logger.debug(
+                f"[DEBUG] [AntsPyX] Reference modality: {self.reference_modality}"
+            )
 
         # 1. Register reference modality to atlas
         reference_file = study_dir / f"{self.reference_modality}.nii.gz"
@@ -117,17 +118,21 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
         registration_dir = artifacts_dir / "registration"
         registration_dir.mkdir(parents=True, exist_ok=True)
 
-        ref_to_atlas_transform_path = registration_dir / f"{self.reference_modality}_to_atlasComposite.h5"
+        ref_to_atlas_transform_path = (
+            registration_dir / f"{self.reference_modality}_to_atlasComposite.h5"
+        )
 
         try:
             self.logger.info(f"Registering {self.reference_modality} to atlas...")
-            ref_registered_path, ref_to_atlas_transform, quality_metrics = self._register_reference_to_atlas(
-                reference_path=reference_file,
-                atlas_path=atlas_path,
-                transform_path=ref_to_atlas_transform_path,
-                study_dir=study_dir
+            ref_registered_path, ref_to_atlas_transform, quality_metrics = (
+                self._register_reference_to_atlas(
+                    reference_path=reference_file,
+                    atlas_path=atlas_path,
+                    transform_path=ref_to_atlas_transform_path,
+                    study_dir=study_dir,
+                )
             )
-            self.logger.info(f"✓ Reference registered to atlas")
+            self.logger.info("✓ Reference registered to atlas")
 
         except Exception as e:
             self.logger.error(f"✗ Failed to register reference to atlas: {e}")
@@ -137,7 +142,9 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
 
         # 2. Apply transforms to all other modalities
         atlas_transforms = {}
-        registered_modalities = [self.reference_modality]  # Reference is already registered
+        registered_modalities = [
+            self.reference_modality
+        ]  # Reference is already registered
 
         for modality in modalities:
             if modality == self.reference_modality:
@@ -148,7 +155,9 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
             modality_file = study_dir / f"{modality}.nii.gz"
             if not modality_file.exists():
                 if self.verbose:
-                    self.logger.debug(f"[DEBUG] [AntsPyX] Modality {modality} not found, skipping")
+                    self.logger.debug(
+                        f"[DEBUG] [AntsPyX] Modality {modality} not found, skipping"
+                    )
                 continue
 
             # Get the M→ref transform from step 3a
@@ -167,12 +176,12 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
                     m_to_ref_transform=m_to_ref_transform,
                     ref_to_atlas_transform=ref_to_atlas_transform,
                     study_dir=study_dir,
-                    modality=modality
+                    modality=modality,
                 )
 
                 atlas_transforms[modality] = {
                     "m_to_ref": m_to_ref_transform,
-                    "ref_to_atlas": ref_to_atlas_transform
+                    "ref_to_atlas": ref_to_atlas_transform,
                 }
                 registered_modalities.append(modality)
                 self.logger.info(f"✓ {modality} transformed to atlas space")
@@ -192,7 +201,7 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
             "ref_to_atlas_transform": ref_to_atlas_transform,
             "atlas_transforms": atlas_transforms,
             "registered_modalities": registered_modalities,
-            "quality_metrics": quality_metrics
+            "quality_metrics": quality_metrics,
         }
 
     def _register_reference_to_atlas(
@@ -200,7 +209,7 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
         reference_path: Path,
         atlas_path: Path,
         transform_path: Path,
-        study_dir: Path
+        study_dir: Path,
     ) -> Tuple[Path, Path, Optional[Dict[str, float]]]:
         """Register reference modality to atlas using AntsPyX.
 
@@ -222,7 +231,7 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
         import ants
 
         if self.verbose:
-            self.logger.debug(f"[DEBUG] [AntsPyX] Reference→Atlas registration setup:")
+            self.logger.debug("[DEBUG] [AntsPyX] Reference→Atlas registration setup:")
             self.logger.debug(f"  Fixed (atlas):   {atlas_path}")
             self.logger.debug(f"  Moving (ref):    {reference_path}")
 
@@ -254,16 +263,13 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
 
             # Multi-resolution parameters
             number_of_iterations_list = self.config.get(
-                "number_of_iterations",
-                [[1000, 500, 250], [500, 250, 100]]
+                "number_of_iterations", [[1000, 500, 250], [500, 250, 100]]
             )
             shrink_factors_list = self.config.get(
-                "shrink_factors",
-                [[4, 2, 1], [2, 1, 1]]
+                "shrink_factors", [[4, 2, 1], [2, 1, 1]]
             )
             smoothing_sigmas_list = self.config.get(
-                "smoothing_sigmas",
-                [[2, 1, 0], [1, 0, 0]]
+                "smoothing_sigmas", [[2, 1, 0], [1, 0, 0]]
             )
 
             # For multi-stage, use parameters from the final stage
@@ -287,12 +293,14 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
             transform_prefix = str(transform_path.with_suffix("").with_suffix(""))
 
             if self.verbose:
-                self.logger.debug(f"[DEBUG] [AntsPyX] Atlas registration parameters:")
+                self.logger.debug("[DEBUG] [AntsPyX] Atlas registration parameters:")
                 self.logger.debug(f"  type_of_transform: {type_of_transform}")
                 self.logger.debug(f"  aff_metric: {metric}")
                 self.logger.debug(f"  aff_iterations: {aff_iterations}")
 
             # Compute center-of-mass alignment as initial transform if enabled
+            # NOTE: ants.registration() expects initial_transform as a file path string,
+            # not an ANTsTransform object. We write the transform to a temp file.
             initial_tx = None
             if self.use_center_of_mass_init:
                 self.logger.info("  Computing center-of-mass initialization...")
@@ -303,15 +311,26 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
                     # Create translation to align centers
                     translation = [a - r for a, r in zip(atlas_com, ref_com)]
 
-                    initial_tx = ants.create_ants_transform(
-                        transform_type='Euler3DTransform',
+                    com_tx = ants.create_ants_transform(
+                        transform_type="Euler3DTransform",
                         center=ref_com,
-                        translation=translation
+                        translation=translation,
                     )
+                    # Write to temp file — ants.registration() needs a file path, not an object
+                    com_tx_path = (
+                        study_dir
+                        / f"_temp_{self.reference_modality}_atlas_com_init.mat"
+                    )
+                    ants.write_transform(com_tx, str(com_tx_path))
+                    initial_tx = str(com_tx_path)
                     if self.verbose:
-                        self.logger.debug(f"[DEBUG] [AntsPyX] COM translation: {translation}")
+                        self.logger.debug(
+                            f"[DEBUG] [AntsPyX] COM translation: {translation}"
+                        )
                 except Exception as com_error:
-                    self.logger.warning(f"  COM initialization failed, proceeding without: {com_error}")
+                    self.logger.warning(
+                        f"  COM initialization failed, proceeding without: {com_error}"
+                    )
                     initial_tx = None
 
             # Perform registration
@@ -332,7 +351,7 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
                         aff_shrink_factors=aff_shrink_factors,
                         aff_smoothing_sigmas=aff_smoothing_sigmas,
                         write_composite_transform=True,
-                        verbose=True  # Force verbose for stdout capture
+                        verbose=True,  # Force verbose for stdout capture
                     )
                 captured_stdout = captured.getvalue()
             else:
@@ -349,18 +368,20 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
                     aff_shrink_factors=aff_shrink_factors,
                     aff_smoothing_sigmas=aff_smoothing_sigmas,
                     write_composite_transform=True,
-                    verbose=self.verbose
+                    verbose=self.verbose,
                 )
 
             if self.verbose:
-                self.logger.debug(f"[DEBUG] [AntsPyX] Registration completed")
+                self.logger.debug("[DEBUG] [AntsPyX] Registration completed")
 
             # Extract outputs
-            warped_img = result['warpedmovout']
-            fwd_transforms = result['fwdtransforms']
+            warped_img = result["warpedmovout"]
+            fwd_transforms = result["fwdtransforms"]
 
             if self.verbose:
-                self.logger.debug(f"[DEBUG] [AntsPyX] Forward transforms: {fwd_transforms}")
+                self.logger.debug(
+                    f"[DEBUG] [AntsPyX] Forward transforms: {fwd_transforms}"
+                )
 
             # Determine actual transform path
             actual_transform_path = Path(transform_prefix + "Composite.h5")
@@ -373,18 +394,24 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
             # Compute and log registration quality if enabled
             quality_metrics = None
             if self.validate_registration_quality:
-                quality_metrics = self._compute_registration_quality(atlas_img, warped_img)
-                corr_sim = quality_metrics.get('correlation_similarity')
-                corr_dissim = quality_metrics.get('correlation_dissimilarity')
+                quality_metrics = self._compute_registration_quality(
+                    atlas_img, warped_img
+                )
+                corr_sim = quality_metrics.get("correlation_similarity")
+                corr_dissim = quality_metrics.get("correlation_dissimilarity")
                 self.logger.info(
                     f"  Registration quality: MI={quality_metrics['mi_dissimilarity']:.4f}, "
-                    f"Corr={corr_sim:.4f}" if corr_sim is not None else
-                    f"  Registration quality: MI={quality_metrics['mi_dissimilarity']:.4f}, "
+                    f"Corr={corr_sim:.4f}"
+                    if corr_sim is not None
+                    else f"  Registration quality: MI={quality_metrics['mi_dissimilarity']:.4f}, "
                     f"Corr=N/A"
                 )
 
                 # Warn if quality is poor (correlation_dissimilarity > threshold means poor alignment)
-                if corr_dissim is not None and corr_dissim > self.quality_warning_threshold:
+                if (
+                    corr_dissim is not None
+                    and corr_dissim > self.quality_warning_threshold
+                ):
                     self.logger.warning(
                         f"  WARNING: Registration quality may be poor! "
                         f"Correlation dissimilarity ({corr_dissim:.4f}) "
@@ -403,7 +430,9 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
             temp_output.replace(final_output)
 
             if self.verbose:
-                self.logger.debug(f"[DEBUG] [AntsPyX] Replaced {reference_path.name} with atlas-space version")
+                self.logger.debug(
+                    f"[DEBUG] [AntsPyX] Replaced {reference_path.name} with atlas-space version"
+                )
 
             # Save detailed registration info if enabled
             if self.save_detailed_info and captured_stdout:
@@ -417,16 +446,22 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
                         "type_of_transform": type_of_transform,
                         "metric": metric,
                         "metric_bins": metric_bins,
-                        "sampling_strategy": self.config.get("sampling_strategy", "Random"),
+                        "sampling_strategy": self.config.get(
+                            "sampling_strategy", "Random"
+                        ),
                         "sampling_percentage": sampling_percentage,
                         "number_of_iterations": number_of_iterations_list,
                         "shrink_factors": shrink_factors_list,
                         "smoothing_sigmas": smoothing_sigmas_list,
-                        "convergence_threshold": self.config.get("convergence_threshold", 1e-6),
-                        "convergence_window_size": self.config.get("convergence_window_size", 10),
-                        "interpolation": self.config.get("interpolation", "Linear")
+                        "convergence_threshold": self.config.get(
+                            "convergence_threshold", 1e-6
+                        ),
+                        "convergence_window_size": self.config.get(
+                            "convergence_window_size", 10
+                        ),
+                        "interpolation": self.config.get("interpolation", "Linear"),
                     },
-                    registration_type="intra_study_to_atlas"
+                    registration_type="intra_study_to_atlas",
                 )
 
             return final_output, actual_transform_path, quality_metrics
@@ -437,9 +472,7 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
             raise RuntimeError(error_msg) from e
 
     def _compute_registration_quality(
-        self,
-        fixed_img: "ants.ANTsImage",
-        warped_img: "ants.ANTsImage"
+        self, fixed_img: "ants.ANTsImage", warped_img: "ants.ANTsImage"
     ) -> Dict[str, float]:
         """Compute quality metrics for registration result.
 
@@ -457,21 +490,21 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
 
         # Compute Mattes Mutual Information (lower = more similar in ANTs)
         mi_dissimilarity = ants.image_similarity(
-            fixed_img, warped_img,
-            metric_type='MattesMutualInformation'
+            fixed_img, warped_img, metric_type="MattesMutualInformation"
         )
 
         # Compute correlation (returns -1 for perfect match)
         corr_dissimilarity = ants.image_similarity(
-            fixed_img, warped_img,
-            metric_type='Correlation'
+            fixed_img, warped_img, metric_type="Correlation"
         )
 
         return {
             "mi_dissimilarity": float(mi_dissimilarity),
             "correlation_dissimilarity": float(corr_dissimilarity),
             # Convert to similarity (0-1 scale, higher = better)
-            "correlation_similarity": float(-corr_dissimilarity) if corr_dissimilarity is not None else None
+            "correlation_similarity": float(-corr_dissimilarity)
+            if corr_dissimilarity is not None
+            else None,
         }
 
     def _apply_transforms_to_modality(
@@ -481,7 +514,7 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
         m_to_ref_transform: Path,
         ref_to_atlas_transform: Path,
         study_dir: Path,
-        modality: str
+        modality: str,
     ) -> Path:
         """Apply composed transforms to bring modality to atlas space using AntsPyX.
 
@@ -503,7 +536,9 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
 
         if self.verbose:
             self.logger.debug(f"[DEBUG] [AntsPyX] Applying transforms for {modality}:")
-            self.logger.debug(f"  Transforms: [{m_to_ref_transform.name}, {ref_to_atlas_transform.name}]")
+            self.logger.debug(
+                f"  Transforms: [{m_to_ref_transform.name}, {ref_to_atlas_transform.name}]"
+            )
 
         try:
             # Load images
@@ -518,7 +553,7 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
                 "BSpline": "bSpline",
                 "NearestNeighbor": "nearestNeighbor",
                 "Gaussian": "gaussian",
-                "MultiLabel": "multiLabel"
+                "MultiLabel": "multiLabel",
             }
             ants_interpolator = interp_map.get(interpolation, "linear")
 
@@ -529,12 +564,9 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
             transformed = ants.apply_transforms(
                 fixed=atlas_img,
                 moving=modality_img,
-                transformlist=[
-                    str(ref_to_atlas_transform),
-                    str(m_to_ref_transform)
-                ],
+                transformlist=[str(ref_to_atlas_transform), str(m_to_ref_transform)],
                 interpolator=ants_interpolator,
-                defaultvalue=0
+                defaultvalue=0,
             )
 
             # Save to temp location
@@ -549,7 +581,9 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
             temp_output.replace(final_output)
 
             if self.verbose:
-                self.logger.debug(f"[DEBUG] [AntsPyX] Replaced {modality_path.name} with atlas-space version")
+                self.logger.debug(
+                    f"[DEBUG] [AntsPyX] Replaced {modality_path.name} with atlas-space version"
+                )
 
             return final_output
 
@@ -565,7 +599,7 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
         moving_path: Path,
         transform_path: Path,
         config_params: Dict[str, Any],
-        registration_type: str
+        registration_type: str,
     ) -> None:
         """Save detailed registration information to JSON.
 
@@ -593,27 +627,31 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
                     "output_image": moving_path.name,  # In-place replacement
                     "transform_file": transform_path.name,
                     "success": True,
-                    "error_message": None
+                    "error_message": None,
                 },
                 "parameters": config_params,
                 "timing": {
-                    "total_elapsed_time_seconds": parsed_diagnostics.get("total_elapsed_time_seconds"),
+                    "total_elapsed_time_seconds": parsed_diagnostics.get(
+                        "total_elapsed_time_seconds"
+                    ),
                     "stages": [
                         {
                             "stage_index": stage["stage_index"],
-                            "transform_type": transform_types[stage["stage_index"]] if stage["stage_index"] < len(transform_types) else "Unknown",
-                            "elapsed_time_seconds": stage.get("elapsed_time_seconds")
+                            "transform_type": transform_types[stage["stage_index"]]
+                            if stage["stage_index"] < len(transform_types)
+                            else "Unknown",
+                            "elapsed_time_seconds": stage.get("elapsed_time_seconds"),
                         }
                         for stage in parsed_diagnostics.get("stages", [])
-                    ]
+                    ],
                 },
-                "convergence": {
-                    "stages": parsed_diagnostics.get("stages", [])
-                },
+                "convergence": {"stages": parsed_diagnostics.get("stages", [])},
                 "stdout_capture": {
                     "full_output": stdout,
-                    "command_lines_ok": parsed_diagnostics.get("command_lines_ok", False)
-                }
+                    "command_lines_ok": parsed_diagnostics.get(
+                        "command_lines_ok", False
+                    ),
+                },
             }
 
         except Exception as parse_error:
@@ -626,11 +664,9 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
                     "engine": "antspyx",
                     "fixed_image": fixed_path.name,
                     "moving_image": moving_path.name,
-                    "error_message": f"Parsing failed: {str(parse_error)}"
+                    "error_message": f"Parsing failed: {str(parse_error)}",
                 },
-                "stdout_capture": {
-                    "full_output": stdout
-                }
+                "stdout_capture": {"full_output": stdout},
             }
 
         try:
@@ -647,13 +683,17 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
             json_path = detailed_info_dir / json_filename
 
             # Write JSON
-            with open(json_path, 'w', encoding='utf-8') as f:
-                json.dump(info, f, indent=2, default=str)  # default=str handles inf, datetime
+            with open(json_path, "w", encoding="utf-8") as f:
+                json.dump(
+                    info, f, indent=2, default=str
+                )  # default=str handles inf, datetime
 
             self.logger.info(f"Saved detailed registration info: {json_path.name}")
 
         except Exception as write_error:
-            self.logger.error(f"Failed to write detailed registration info: {write_error}")
+            self.logger.error(
+                f"Failed to write detailed registration info: {write_error}"
+            )
             # Don't raise - registration succeeded, just diagnostic save failed
 
     def visualize(
@@ -662,7 +702,7 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
         reference_path: Optional[Path] = None,
         modality_paths: Optional[Dict[str, Path]] = None,
         output_dir: Optional[Path] = None,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> None:
         """Generate visualizations for atlas registration.
 
@@ -678,46 +718,51 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
             **kwargs: Additional parameters (e.g., output_path, modality_path, modality)
         """
         # Handle single mode (registration.py usage)
-        output_path = kwargs.get('output_path')
+        output_path = kwargs.get("output_path")
         if output_path is not None:
-            modality_path = kwargs.get('modality_path')
-            
+            modality_path = kwargs.get("modality_path")
+
             if atlas_path and reference_path and not modality_path:
-                self.visualize_reference_to_atlas(atlas_path, reference_path, output_path)
+                self.visualize_reference_to_atlas(
+                    atlas_path, reference_path, output_path
+                )
                 return
             elif atlas_path and modality_path:
-                modality = kwargs.get('modality', 'unknown')
-                self.visualize_modality_in_atlas_space(atlas_path, modality_path, output_path, modality)
+                modality = kwargs.get("modality", "unknown")
+                self.visualize_modality_in_atlas_space(
+                    atlas_path, modality_path, output_path, modality
+                )
                 return
 
         try:
             # 1. Visualize reference→atlas alignment
             if output_dir and atlas_path and reference_path:
                 output_dir.mkdir(parents=True, exist_ok=True)
-                ref_output = output_dir / f"atlas_registration_reference.png"
-                self.visualize_reference_to_atlas(atlas_path, reference_path, ref_output)
+                ref_output = output_dir / "atlas_registration_reference.png"
+                self.visualize_reference_to_atlas(
+                    atlas_path, reference_path, ref_output
+                )
 
             # 2. Visualize each modality in atlas space
             if output_dir and atlas_path and modality_paths:
                 for modality, mod_path in modality_paths.items():
                     if modality == self.reference_modality:
                         continue
-                    
+
                     if not mod_path.exists():
                         continue
 
                     mod_output = output_dir / f"atlas_registration_{modality}.png"
-                    self.visualize_modality_in_atlas_space(atlas_path, mod_path, mod_output, modality)
+                    self.visualize_modality_in_atlas_space(
+                        atlas_path, mod_path, mod_output, modality
+                    )
 
         except Exception as e:
             self.logger.error(f"Failed to generate visualization: {e}")
             raise RuntimeError(f"Visualization failed: {e}") from e
 
     def visualize_reference_to_atlas(
-        self,
-        atlas_path: Path,
-        reference_path: Path,
-        output_path: Path
+        self, atlas_path: Path, reference_path: Path, output_path: Path
     ) -> None:
         """Visualize reference modality registration to atlas."""
         try:
@@ -743,9 +788,11 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
             axes[1].set_title(f"Reference ({self.reference_modality}) in Atlas Space")
             axes[1].axis("off")
 
-            fig.suptitle(f"Atlas Registration (AntsPyX): Reference Alignment", fontsize=12)
+            fig.suptitle(
+                "Atlas Registration (AntsPyX): Reference Alignment", fontsize=12
+            )
             plt.tight_layout()
-            
+
             output_path.parent.mkdir(parents=True, exist_ok=True)
             plt.savefig(output_path, dpi=150, bbox_inches="tight")
             plt.close()
@@ -756,11 +803,7 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
             raise
 
     def visualize_modality_in_atlas_space(
-        self,
-        atlas_path: Path,
-        modality_path: Path,
-        output_path: Path,
-        modality: str
+        self, atlas_path: Path, modality_path: Path, output_path: Path, modality: str
     ) -> None:
         """Visualize modality in atlas space."""
         try:
@@ -786,7 +829,9 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
             axes[1].set_title(f"{modality} in Atlas Space")
             axes[1].axis("off")
 
-            fig.suptitle(f"Atlas Registration (AntsPyX): {modality} Alignment", fontsize=12)
+            fig.suptitle(
+                f"Atlas Registration (AntsPyX): {modality} Alignment", fontsize=12
+            )
             plt.tight_layout()
 
             output_path.parent.mkdir(parents=True, exist_ok=True)

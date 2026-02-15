@@ -132,6 +132,32 @@ fi
 echo ""
 
 # ========================================================================
+# PRE-DOWNLOAD: HD-BET weights (compute nodes have no internet)
+# ========================================================================
+echo "Checking HD-BET model weights..."
+# Activate conda on login node to access the package
+if command -v conda >/dev/null 2>&1; then
+    eval "$(conda shell.bash hook 2>/dev/null)" || true
+    conda activate "${CONDA_ENV_NAME}" 2>/dev/null || true
+fi
+
+python -c "
+from brainles_hd_bet.utils import get_params_fname, maybe_download_parameters
+missing = [i for i in range(5) if not get_params_fname(i).exists()]
+if missing:
+    print(f'  Downloading HD-BET weights for folds: {missing}')
+    for fold in missing:
+        maybe_download_parameters(fold)
+    print('  HD-BET weights: download complete')
+else:
+    print('  HD-BET weights: all 5 folds already present')
+" || {
+    echo "WARNING: Could not verify HD-BET weights. Skull stripping may fail."
+    echo "         Manual download: python -c \"from brainles_hd_bet.utils import maybe_download_parameters; [maybe_download_parameters(i) for i in range(5)]\""
+}
+echo ""
+
+# ========================================================================
 # SUBMIT ARRAY JOB
 # ========================================================================
 ARRAY_MAX=$((NUM_PATIENTS - 1))

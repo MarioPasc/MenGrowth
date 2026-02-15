@@ -132,6 +132,18 @@ from mengrowth.preprocessing.src.preprocess import run_preprocessing
 print('[OK]   MenGrowth imports')
 "
 
+# HD-BET weights check (no internet on compute nodes)
+python -c "
+from brainles_hd_bet.utils import get_params_fname
+missing = [i for i in range(5) if not get_params_fname(i).exists()]
+if missing:
+    print(f'[FAIL] HD-BET weights missing for folds: {missing}')
+    print('       Run on login node: python -c \"from brainles_hd_bet.utils import maybe_download_parameters; [maybe_download_parameters(i) for i in range(5)]\"')
+    exit(1)
+else:
+    print('[OK]   HD-BET weights: all 5 folds present')
+"
+
 # CUDA check
 python -c "
 import torch
