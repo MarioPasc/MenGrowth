@@ -11,7 +11,6 @@ import logging
 import time
 
 import nibabel as nib
-import numpy as np
 import matplotlib.pyplot as plt
 
 from mengrowth.preprocessing.src.registration.base import BaseRegistrator
@@ -35,10 +34,7 @@ class IntraStudyToAtlas(BaseRegistrator):
     """
 
     def __init__(
-        self,
-        config: Dict[str, Any],
-        reference_modality: str,
-        verbose: bool = False
+        self, config: Dict[str, Any], reference_modality: str, verbose: bool = False
     ) -> None:
         """Initialize atlas registration step.
 
@@ -57,7 +53,7 @@ class IntraStudyToAtlas(BaseRegistrator):
         artifacts_dir: Path,
         modalities: List[str],
         intra_study_transforms: Dict[str, Path],
-        **kwargs: Any
+        **kwargs: Any,
     ) -> Dict[str, Any]:
         """Execute atlas registration for a single study.
 
@@ -99,17 +95,21 @@ class IntraStudyToAtlas(BaseRegistrator):
         registration_dir = artifacts_dir / "registration"
         registration_dir.mkdir(parents=True, exist_ok=True)
 
-        ref_to_atlas_transform_path = registration_dir / f"{self.reference_modality}_to_atlasComposite.h5"
+        ref_to_atlas_transform_path = (
+            registration_dir / f"{self.reference_modality}_to_atlasComposite.h5"
+        )
 
         try:
             self.logger.info(f"Registering {self.reference_modality} to atlas...")
-            ref_registered_path, ref_to_atlas_transform = self._register_reference_to_atlas(
-                reference_path=reference_file,
-                atlas_path=atlas_path,
-                transform_path=ref_to_atlas_transform_path,
-                study_dir=study_dir
+            ref_registered_path, ref_to_atlas_transform = (
+                self._register_reference_to_atlas(
+                    reference_path=reference_file,
+                    atlas_path=atlas_path,
+                    transform_path=ref_to_atlas_transform_path,
+                    study_dir=study_dir,
+                )
             )
-            self.logger.info(f"✓ Reference registered to atlas")
+            self.logger.info("✓ Reference registered to atlas")
 
         except Exception as e:
             self.logger.error(f"✗ Failed to register reference to atlas: {e}")
@@ -117,7 +117,9 @@ class IntraStudyToAtlas(BaseRegistrator):
 
         # 2. Apply transforms to all other modalities
         atlas_transforms = {}
-        registered_modalities = [self.reference_modality]  # Reference is already registered
+        registered_modalities = [
+            self.reference_modality
+        ]  # Reference is already registered
 
         for modality in modalities:
             if modality == self.reference_modality:
@@ -128,7 +130,9 @@ class IntraStudyToAtlas(BaseRegistrator):
             modality_file = study_dir / f"{modality}.nii.gz"
             if not modality_file.exists():
                 if self.verbose:
-                    self.logger.debug(f"[DEBUG] Modality {modality} not found, skipping")
+                    self.logger.debug(
+                        f"[DEBUG] Modality {modality} not found, skipping"
+                    )
                 continue
 
             # Get the M→ref transform from step 3a
@@ -147,12 +151,12 @@ class IntraStudyToAtlas(BaseRegistrator):
                     m_to_ref_transform=m_to_ref_transform,
                     ref_to_atlas_transform=ref_to_atlas_transform,
                     study_dir=study_dir,
-                    modality=modality
+                    modality=modality,
                 )
 
                 atlas_transforms[modality] = {
                     "m_to_ref": m_to_ref_transform,
-                    "ref_to_atlas": ref_to_atlas_transform
+                    "ref_to_atlas": ref_to_atlas_transform,
                 }
                 registered_modalities.append(modality)
                 self.logger.info(f"✓ {modality} transformed to atlas space")
@@ -171,7 +175,7 @@ class IntraStudyToAtlas(BaseRegistrator):
             "atlas_path": atlas_path,
             "reference_to_atlas_transform": ref_to_atlas_transform,
             "atlas_transforms": atlas_transforms,
-            "registered_modalities": registered_modalities
+            "registered_modalities": registered_modalities,
         }
 
     def _register_reference_to_atlas(
@@ -179,7 +183,7 @@ class IntraStudyToAtlas(BaseRegistrator):
         reference_path: Path,
         atlas_path: Path,
         transform_path: Path,
-        study_dir: Path
+        study_dir: Path,
     ) -> Tuple[Path, Path]:
         """Register reference modality to atlas using ANTs.
 
@@ -201,7 +205,7 @@ class IntraStudyToAtlas(BaseRegistrator):
         temp_output = study_dir / f"_temp_{self.reference_modality}_atlas.nii.gz"
 
         if self.verbose:
-            self.logger.debug(f"[DEBUG] Reference→Atlas registration setup:")
+            self.logger.debug("[DEBUG] Reference→Atlas registration setup:")
             self.logger.debug(f"  Fixed (atlas):   {atlas_path}")
             self.logger.debug(f"  Moving (ref):    {reference_path}")
             self.logger.debug(f"  Transform path:  {transform_path}")
@@ -235,16 +239,13 @@ class IntraStudyToAtlas(BaseRegistrator):
 
         # Multi-resolution schedule
         reg.inputs.number_of_iterations = self.config.get(
-            "number_of_iterations",
-            [[1000, 500, 250], [500, 250, 100]]
+            "number_of_iterations", [[1000, 500, 250], [500, 250, 100]]
         )
         reg.inputs.shrink_factors = self.config.get(
-            "shrink_factors",
-            [[4, 2, 1], [2, 1, 1]]
+            "shrink_factors", [[4, 2, 1], [2, 1, 1]]
         )
         reg.inputs.smoothing_sigmas = self.config.get(
-            "smoothing_sigmas",
-            [[2, 1, 0], [1, 0, 0]]
+            "smoothing_sigmas", [[2, 1, 0], [1, 0, 0]]
         )
         reg.inputs.sigma_units = ["vox"] * len(transforms)
 
@@ -256,7 +257,9 @@ class IntraStudyToAtlas(BaseRegistrator):
 
         # Output configuration
         reg.inputs.write_composite_transform = True
-        transform_prefix = str(transform_path.with_suffix("").with_suffix(""))  # Remove .h5 if present
+        transform_prefix = str(
+            transform_path.with_suffix("").with_suffix("")
+        )  # Remove .h5 if present
         reg.inputs.output_transform_prefix = transform_prefix
         reg.inputs.output_warped_image = str(temp_output)
 
@@ -271,16 +274,18 @@ class IntraStudyToAtlas(BaseRegistrator):
         reg.inputs.verbose = self.verbose
 
         if self.verbose:
-            self.logger.debug(f"[DEBUG] ANTs parameters:")
+            self.logger.debug("[DEBUG] ANTs parameters:")
             self.logger.debug(f"  Transforms: {transforms}")
             self.logger.debug(f"  Metric: {metric} (bins={metric_bins})")
-            self.logger.debug(f"  Sampling: {sampling_strategy} ({sampling_percentage*100}%)")
+            self.logger.debug(
+                f"  Sampling: {sampling_strategy} ({sampling_percentage * 100}%)"
+            )
             self.logger.debug(f"  Interpolation: {interpolation}")
             self.logger.debug(f"  Actual transform: {actual_transform_path}")
 
         try:
             if self.verbose:
-                self.logger.debug(f"[DEBUG] Executing ANTs registration...")
+                self.logger.debug("[DEBUG] Executing ANTs registration...")
 
             result = reg.run()
 
@@ -303,7 +308,9 @@ class IntraStudyToAtlas(BaseRegistrator):
             temp_output.replace(final_output)
 
             if self.verbose:
-                self.logger.debug(f"[DEBUG] Replaced {reference_path.name} with atlas-space version")
+                self.logger.debug(
+                    f"[DEBUG] Replaced {reference_path.name} with atlas-space version"
+                )
 
             return final_output, actual_transform_path
 
@@ -319,14 +326,19 @@ class IntraStudyToAtlas(BaseRegistrator):
         m_to_ref_transform: Path,
         ref_to_atlas_transform: Path,
         study_dir: Path,
-        modality: str
+        modality: str,
     ) -> Path:
-        """Apply composed transforms to bring modality to atlas space.
+        """Apply ref-to-atlas transform to bring modality to atlas space.
+
+        After step 3a, all modality files have been coregistered to reference space
+        in-place. Therefore we only need to apply the ref_to_atlas transform here.
+        The m_to_ref_transform parameter is retained for logging/provenance but is
+        NOT applied (it was already applied in-place during step 3a).
 
         Args:
-            modality_path: Path to modality file (in reference space)
+            modality_path: Path to modality file (already in reference space after step 3a)
             atlas_path: Path to atlas (defines output space)
-            m_to_ref_transform: Transform from modality to reference
+            m_to_ref_transform: Transform from modality to reference (kept for provenance, not applied)
             ref_to_atlas_transform: Transform from reference to atlas
             study_dir: Study directory
             modality: Modality name
@@ -342,10 +354,12 @@ class IntraStudyToAtlas(BaseRegistrator):
         temp_output = study_dir / f"_temp_{modality}_atlas.nii.gz"
 
         if self.verbose:
-            self.logger.debug(f"[DEBUG] Applying transforms for {modality}:")
+            self.logger.debug(f"[DEBUG] Applying atlas transform for {modality}:")
             self.logger.debug(f"  Input: {modality_path}")
             self.logger.debug(f"  Atlas: {atlas_path}")
-            self.logger.debug(f"  Transforms: [{m_to_ref_transform.name}, {ref_to_atlas_transform.name}]")
+            self.logger.debug(
+                f"  Transform: {ref_to_atlas_transform.name} (m_to_ref already applied in step 3a)"
+            )
             self.logger.debug(f"  Temp output: {temp_output}")
 
         # Initialize ApplyTransforms
@@ -354,13 +368,10 @@ class IntraStudyToAtlas(BaseRegistrator):
         apply_xfm.inputs.input_image = str(modality_path)
         apply_xfm.inputs.reference_image = str(atlas_path)
 
-        # ANTs applies transforms in REVERSE order
-        # We want: modality → ref → atlas
-        # So list must be: [ref_to_atlas, m_to_ref]
-        apply_xfm.inputs.transforms = [
-            str(ref_to_atlas_transform),
-            str(m_to_ref_transform)
-        ]
+        # Only apply ref_to_atlas transform.
+        # The modality file is already in reference space (step 3a replaced it in-place),
+        # so applying m_to_ref again would double-transform and cause catastrophic displacement.
+        apply_xfm.inputs.transforms = [str(ref_to_atlas_transform)]
 
         apply_xfm.inputs.interpolation = self.config.get("interpolation", "Linear")
         apply_xfm.inputs.default_value = 0
@@ -368,7 +379,7 @@ class IntraStudyToAtlas(BaseRegistrator):
 
         try:
             if self.verbose:
-                self.logger.debug(f"[DEBUG] Executing ApplyTransforms...")
+                self.logger.debug("[DEBUG] Executing ApplyTransforms...")
 
             result = apply_xfm.run()
 
@@ -380,7 +391,9 @@ class IntraStudyToAtlas(BaseRegistrator):
             temp_output.replace(final_output)
 
             if self.verbose:
-                self.logger.debug(f"[DEBUG] Replaced {modality_path.name} with atlas-space version")
+                self.logger.debug(
+                    f"[DEBUG] Replaced {modality_path.name} with atlas-space version"
+                )
 
             return final_output
 
@@ -395,7 +408,7 @@ class IntraStudyToAtlas(BaseRegistrator):
         reference_path: Path,
         modality_paths: Dict[str, Path],
         output_dir: Path,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> None:
         """Generate visualizations for atlas registration.
 
@@ -420,7 +433,7 @@ class IntraStudyToAtlas(BaseRegistrator):
             self._visualize_reference_to_atlas(
                 atlas_path=atlas_path,
                 reference_path=reference_path,
-                output_path=output_dir / "step3b_atlas_registration_reference.png"
+                output_path=output_dir / "step3b_atlas_registration_reference.png",
             )
 
             # 2. Modality in atlas space visualizations
@@ -429,7 +442,7 @@ class IntraStudyToAtlas(BaseRegistrator):
                     atlas_path=atlas_path,
                     modality_path=modality_path,
                     modality_name=modality,
-                    output_path=output_dir / f"step3b_atlas_space_{modality}.png"
+                    output_path=output_dir / f"step3b_atlas_space_{modality}.png",
                 )
 
         except Exception as e:
@@ -437,10 +450,7 @@ class IntraStudyToAtlas(BaseRegistrator):
             raise RuntimeError(f"Visualization failed: {e}") from e
 
     def _visualize_reference_to_atlas(
-        self,
-        atlas_path: Path,
-        reference_path: Path,
-        output_path: Path
+        self, atlas_path: Path, reference_path: Path, output_path: Path
     ) -> None:
         """Visualize reference modality registration to atlas.
 
@@ -472,7 +482,9 @@ class IntraStudyToAtlas(BaseRegistrator):
         axes[1].set_title(f"Reference ({self.reference_modality}) in Atlas Space")
         axes[1].axis("off")
 
-        fig.suptitle(f"Atlas Registration: {self.reference_modality} → Atlas", fontsize=12)
+        fig.suptitle(
+            f"Atlas Registration: {self.reference_modality} → Atlas", fontsize=12
+        )
         plt.tight_layout()
         plt.savefig(output_path, dpi=150, bbox_inches="tight")
         plt.close()
@@ -484,7 +496,7 @@ class IntraStudyToAtlas(BaseRegistrator):
         atlas_path: Path,
         modality_path: Path,
         modality_name: str,
-        output_path: Path
+        output_path: Path,
     ) -> None:
         """Visualize modality in atlas space.
 

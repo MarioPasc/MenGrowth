@@ -516,12 +516,17 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
         study_dir: Path,
         modality: str,
     ) -> Path:
-        """Apply composed transforms to bring modality to atlas space using AntsPyX.
+        """Apply ref-to-atlas transform to bring modality to atlas space using AntsPyX.
+
+        After step 3a, all modality files have been coregistered to reference space
+        in-place. Therefore we only need to apply the ref_to_atlas transform here.
+        The m_to_ref_transform parameter is retained for logging/provenance but is
+        NOT applied (it was already applied in-place during step 3a).
 
         Args:
-            modality_path: Path to modality file (in reference space)
+            modality_path: Path to modality file (already in reference space after step 3a)
             atlas_path: Path to atlas (defines output space)
-            m_to_ref_transform: Transform from modality to reference
+            m_to_ref_transform: Transform from modality to reference (kept for provenance, not applied)
             ref_to_atlas_transform: Transform from reference to atlas
             study_dir: Study directory
             modality: Modality name
@@ -535,9 +540,11 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
         import ants
 
         if self.verbose:
-            self.logger.debug(f"[DEBUG] [AntsPyX] Applying transforms for {modality}:")
             self.logger.debug(
-                f"  Transforms: [{m_to_ref_transform.name}, {ref_to_atlas_transform.name}]"
+                f"[DEBUG] [AntsPyX] Applying atlas transform for {modality}:"
+            )
+            self.logger.debug(
+                f"  Transform: {ref_to_atlas_transform.name} (m_to_ref already applied in step 3a)"
             )
 
         try:
@@ -557,14 +564,13 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
             }
             ants_interpolator = interp_map.get(interpolation, "linear")
 
-            # Apply transforms
-            # AntsPyX applies in reverse order (same as ANTs)
-            # We want: modality → ref → atlas
-            # So list is: [ref_to_atlas, m_to_ref]
+            # Apply only ref_to_atlas transform.
+            # The modality file is already in reference space (step 3a replaced it in-place),
+            # so applying m_to_ref again would double-transform and cause catastrophic displacement.
             transformed = ants.apply_transforms(
                 fixed=atlas_img,
                 moving=modality_img,
-                transformlist=[str(ref_to_atlas_transform), str(m_to_ref_transform)],
+                transformlist=[str(ref_to_atlas_transform)],
                 interpolator=ants_interpolator,
                 defaultvalue=0,
             )
