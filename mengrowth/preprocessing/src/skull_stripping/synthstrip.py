@@ -57,10 +57,7 @@ class SynthStripSkullStripper(BaseSkullStripper):
         )
 
     def execute(
-        self,
-        input_path: Path,
-        output_path: Path,
-        **kwargs: Any
+        self, input_path: Path, output_path: Path, **kwargs: Any
     ) -> Dict[str, Any]:
         """Execute SynthStrip skull stripping.
 
@@ -102,7 +99,9 @@ class SynthStripSkullStripper(BaseSkullStripper):
         try:
             # Import SynthStrip
             try:
-                from brainles_preprocessing.brain_extraction.synthstrip import SynthStripExtractor
+                from brainles_preprocessing.brain_extraction.synthstrip import (
+                    SynthStripExtractor,
+                )
             except ImportError as e:
                 raise ImportError(
                     "SynthStrip dependencies not found. Install with:\n"
@@ -120,7 +119,7 @@ class SynthStripSkullStripper(BaseSkullStripper):
                 if self.device >= torch.cuda.device_count():
                     raise RuntimeError(
                         f"GPU {self.device} requested but only {torch.cuda.device_count()} "
-                        f"GPU(s) available (0-{torch.cuda.device_count()-1})"
+                        f"GPU(s) available (0-{torch.cuda.device_count() - 1})"
                     )
 
             # Create temporary output path for SynthStrip
@@ -148,7 +147,7 @@ class SynthStripSkullStripper(BaseSkullStripper):
                 input_image_path=input_path,
                 masked_image_path=temp_output,
                 brain_mask_path=mask_path,
-                device=device_obj
+                device=device_obj,
             )
 
             # Load images for statistics and custom fill_value application
@@ -160,6 +159,27 @@ class SynthStripSkullStripper(BaseSkullStripper):
             input_data = input_img.get_fdata()
             masked_data = masked_img.get_fdata()
             mask_data = mask_img.get_fdata()
+
+            # Post-process mask: keep only the largest connected component.
+            # Removes any disconnected blobs outside the main brain mass.
+            from scipy.ndimage import label as cc_label
+
+            binary_mask = (mask_data > 0).astype(np.int32)
+            labeled, n_components = cc_label(binary_mask)
+            if n_components > 1:
+                component_sizes = np.bincount(labeled.ravel())[
+                    1:
+                ]  # skip background (label 0)
+                largest_label = np.argmax(component_sizes) + 1
+                mask_data = (labeled == largest_label).astype(mask_data.dtype)
+                cleaned_mask_img = nib.Nifti1Image(
+                    mask_data, mask_img.affine, mask_img.header
+                )
+                nib.save(cleaned_mask_img, str(mask_path))
+                self.logger.info(
+                    f"Mask cleanup: removed {n_components - 1} disconnected component(s), "
+                    f"kept largest ({int(component_sizes[largest_label - 1])} voxels)"
+                )
 
             # Compute brain volume statistics
             voxel_volume_mm3 = np.prod(input_img.header.get_zooms())
@@ -204,10 +224,10 @@ class SynthStripSkullStripper(BaseSkullStripper):
                 "parameters": {
                     "border": self.border,
                     "device": str(self.device),
-                    "fill_value": self.fill_value
+                    "fill_value": self.fill_value,
                 },
                 "brain_volume_mm3": float(brain_volume_mm3),
-                "brain_coverage_percent": float(brain_coverage_percent)
+                "brain_coverage_percent": float(brain_coverage_percent),
             }
 
         except Exception as e:
@@ -215,11 +235,7 @@ class SynthStripSkullStripper(BaseSkullStripper):
             raise RuntimeError(f"SynthStrip skull stripping failed: {e}") from e
 
     def visualize(
-        self,
-        before_path: Path,
-        after_path: Path,
-        output_path: Path,
-        **kwargs: Any
+        self, before_path: Path, after_path: Path, output_path: Path, **kwargs: Any
     ) -> None:
         """Generate 3×4 visualization of skull stripping results.
 
@@ -245,7 +261,8 @@ class SynthStripSkullStripper(BaseSkullStripper):
         """
         try:
             import matplotlib
-            matplotlib.use('Agg')  # Headless rendering
+
+            matplotlib.use("Agg")  # Headless rendering
             import matplotlib.pyplot as plt
             from matplotlib.colors import ListedColormap
 
@@ -260,7 +277,7 @@ class SynthStripSkullStripper(BaseSkullStripper):
             brain_coverage_percent = kwargs.get("brain_coverage_percent", 0.0)
 
             # Load images
-            self.logger.debug(f"Loading images for visualization")
+            self.logger.debug("Loading images for visualization")
             original_img = nib.load(str(before_path))
             skull_stripped_img = nib.load(str(after_path))
             mask_img = nib.load(str(mask_path))
@@ -280,29 +297,48 @@ class SynthStripSkullStripper(BaseSkullStripper):
 
             # Define views and slices
             views = [
-                ("Axial", original_data[:, :, axial_slice], skull_stripped_data[:, :, axial_slice], mask_data[:, :, axial_slice]),
-                ("Sagittal", original_data[sagittal_slice, :, :], skull_stripped_data[sagittal_slice, :, :], mask_data[sagittal_slice, :, :]),
-                ("Coronal", original_data[:, coronal_slice, :], skull_stripped_data[:, coronal_slice, :], mask_data[:, coronal_slice, :])
+                (
+                    "Axial",
+                    original_data[:, :, axial_slice],
+                    skull_stripped_data[:, :, axial_slice],
+                    mask_data[:, :, axial_slice],
+                ),
+                (
+                    "Sagittal",
+                    original_data[sagittal_slice, :, :],
+                    skull_stripped_data[sagittal_slice, :, :],
+                    mask_data[sagittal_slice, :, :],
+                ),
+                (
+                    "Coronal",
+                    original_data[:, coronal_slice, :],
+                    skull_stripped_data[:, coronal_slice, :],
+                    mask_data[:, coronal_slice, :],
+                ),
             ]
 
-            for row, (view_name, orig_slice, stripped_slice, mask_slice) in enumerate(views):
+            for row, (view_name, orig_slice, stripped_slice, mask_slice) in enumerate(
+                views
+            ):
                 # Column 0: Original
-                axes[row, 0].imshow(orig_slice.T, cmap='gray', origin='lower')
-                axes[row, 0].set_title(f'{view_name}: Original')
-                axes[row, 0].axis('off')
+                axes[row, 0].imshow(orig_slice.T, cmap="gray", origin="lower")
+                axes[row, 0].set_title(f"{view_name}: Original")
+                axes[row, 0].axis("off")
 
                 # Column 1: Mask overlay
-                axes[row, 1].imshow(orig_slice.T, cmap='gray', origin='lower')
+                axes[row, 1].imshow(orig_slice.T, cmap="gray", origin="lower")
                 # Create red overlay for mask
-                red_cmap = ListedColormap(['none', 'red'])
-                axes[row, 1].imshow(mask_slice.T, cmap=red_cmap, alpha=0.5, origin='lower')
-                axes[row, 1].set_title(f'{view_name}: Mask Overlay')
-                axes[row, 1].axis('off')
+                red_cmap = ListedColormap(["none", "red"])
+                axes[row, 1].imshow(
+                    mask_slice.T, cmap=red_cmap, alpha=0.5, origin="lower"
+                )
+                axes[row, 1].set_title(f"{view_name}: Mask Overlay")
+                axes[row, 1].axis("off")
 
                 # Column 2: Skull-stripped
-                axes[row, 2].imshow(stripped_slice.T, cmap='gray', origin='lower')
-                axes[row, 2].set_title(f'{view_name}: Skull-stripped')
-                axes[row, 2].axis('off')
+                axes[row, 2].imshow(stripped_slice.T, cmap="gray", origin="lower")
+                axes[row, 2].set_title(f"{view_name}: Skull-stripped")
+                axes[row, 2].axis("off")
 
                 # Column 3: Histogram (only for first row)
                 if row == 0:
@@ -310,16 +346,30 @@ class SynthStripSkullStripper(BaseSkullStripper):
                     orig_nonzero = original_data[original_data > 0]
                     stripped_nonzero = skull_stripped_data[skull_stripped_data > 0]
 
-                    axes[row, 3].hist(orig_nonzero, bins=50, alpha=0.7, color='blue', label='Original', density=True)
-                    axes[row, 3].hist(stripped_nonzero, bins=50, alpha=0.7, color='orange', label='Skull-stripped', density=True)
-                    axes[row, 3].set_xlabel('Intensity')
-                    axes[row, 3].set_ylabel('Density')
-                    axes[row, 3].set_title('Intensity Distribution')
+                    axes[row, 3].hist(
+                        orig_nonzero,
+                        bins=50,
+                        alpha=0.7,
+                        color="blue",
+                        label="Original",
+                        density=True,
+                    )
+                    axes[row, 3].hist(
+                        stripped_nonzero,
+                        bins=50,
+                        alpha=0.7,
+                        color="orange",
+                        label="Skull-stripped",
+                        density=True,
+                    )
+                    axes[row, 3].set_xlabel("Intensity")
+                    axes[row, 3].set_ylabel("Density")
+                    axes[row, 3].set_title("Intensity Distribution")
                     axes[row, 3].legend()
                     axes[row, 3].grid(True, alpha=0.3)
                 else:
                     # Hide histogram for other rows
-                    axes[row, 3].axis('off')
+                    axes[row, 3].axis("off")
 
             # Add metadata text box at bottom
             metadata_text = (
@@ -330,13 +380,19 @@ class SynthStripSkullStripper(BaseSkullStripper):
                 f"Brain Coverage: {brain_coverage_percent:.1f}% of original | "
                 f"Fill Value: {parameters.get('fill_value', 0.0)}"
             )
-            fig.text(0.5, 0.02, metadata_text, ha='center', fontsize=10,
-                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+            fig.text(
+                0.5,
+                0.02,
+                metadata_text,
+                ha="center",
+                fontsize=10,
+                bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5),
+            )
 
             # Adjust layout and save
             plt.tight_layout(rect=[0, 0.04, 1, 1])
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            plt.savefig(output_path, dpi=150, bbox_inches='tight')
+            plt.savefig(output_path, dpi=150, bbox_inches="tight")
             plt.close(fig)
 
             self.logger.info(f"Visualization saved: {output_path}")
