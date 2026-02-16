@@ -6,7 +6,17 @@ including data harmonization, normalization, and other preprocessing steps.
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, List, Optional, Union, Dict, Any, Callable, Tuple, TYPE_CHECKING
+from typing import (
+    Literal,
+    List,
+    Optional,
+    Union,
+    Dict,
+    Any,
+    Callable,
+    Tuple,
+    TYPE_CHECKING,
+)
 import yaml
 import logging
 
@@ -18,12 +28,14 @@ logger = logging.getLogger(__name__)
 
 class ConfigurationError(Exception):
     """Raised when configuration is invalid or incomplete."""
+
     pass
 
 
 # ============================================================================
 # Dynamic Pipeline Infrastructure
 # ============================================================================
+
 
 @dataclass
 class StepMetadata:
@@ -33,6 +45,7 @@ class StepMetadata:
         level: Whether step operates per-modality, at study level, or at patient level
         description: Human-readable description of the step
     """
+
     level: Literal["modality", "study", "patient"]
     description: str = ""
 
@@ -42,35 +55,31 @@ class StepMetadata:
 STEP_METADATA: Dict[str, StepMetadata] = {
     "data_harmonization": StepMetadata(
         level="modality",
-        description="NRRD→NIfTI conversion, reorientation, background removal"
+        description="NRRD→NIfTI conversion, reorientation, background removal",
     ),
     "bias_field_correction": StepMetadata(
-        level="modality",
-        description="N4 bias field correction"
+        level="modality", description="N4 bias field correction"
     ),
     "resampling": StepMetadata(
         level="modality",
-        description="Isotropic resampling (bspline, eclare, composite)"
+        description="Isotropic resampling (bspline, eclare, composite)",
     ),
     "cubic_padding": StepMetadata(
         level="study",
-        description="Zero-pad volumes to cubic shape for registration stability"
+        description="Zero-pad volumes to cubic shape for registration stability",
     ),
     "longitudinal_registration": StepMetadata(
         level="patient",
-        description="Longitudinal registration across patient timestamps"
+        description="Longitudinal registration across patient timestamps",
     ),
     "registration": StepMetadata(
-        level="study",
-        description="Multi-modal coregistration and atlas registration"
+        level="study", description="Multi-modal coregistration and atlas registration"
     ),
     "skull_stripping": StepMetadata(
-        level="study",
-        description="Brain extraction (HD-BET, SynthStrip)"
+        level="study", description="Brain extraction (HD-BET, SynthStrip)"
     ),
     "intensity_normalization": StepMetadata(
-        level="modality",
-        description="Intensity normalization (zscore, kde, fcm, etc.)"
+        level="modality", description="Intensity normalization (zscore, kde, fcm, etc.)"
     ),
 }
 
@@ -89,11 +98,12 @@ class StepExecutionContext:
         step_config: Step-specific configuration object
         all_study_dirs: List of all study directories for patient-level steps
     """
+
     patient_id: str
     study_dir: Optional[Path]
     modality: Optional[str]
     paths: Optional[Dict[str, Path]]
-    orchestrator: 'PreprocessingOrchestrator'
+    orchestrator: "PreprocessingOrchestrator"
     step_name: str
     step_config: Any
     all_study_dirs: Optional[List[Path]] = None
@@ -163,6 +173,7 @@ class StepRegistry:
 # Configuration Dataclasses
 # ============================================================================
 
+
 @dataclass
 class BackgroundZeroingConfig:
     """Configuration for background removal.
@@ -209,7 +220,10 @@ class BackgroundZeroingConfig:
         expand_air_mask: Voxels to dilate air mask (LESS conservative - expands air) (default: 0)
         Note: Use either air_border_margin OR expand_air_mask, not both > 0
     """
-    method: Optional[Literal["border_connected_percentile", "self_head_mask", "otsu_foreground"]] = "border_connected_percentile"
+
+    method: Optional[
+        Literal["border_connected_percentile", "self_head_mask", "otsu_foreground"]
+    ] = "border_connected_percentile"
 
     # Parameters for border_connected_percentile
     percentile_low: float = 0.7
@@ -246,7 +260,11 @@ class BackgroundZeroingConfig:
     def __post_init__(self) -> None:
         """Validate configuration values."""
         # Validate method
-        valid_methods = ["border_connected_percentile", "self_head_mask", "otsu_foreground"]
+        valid_methods = [
+            "border_connected_percentile",
+            "self_head_mask",
+            "otsu_foreground",
+        ]
         if self.method is not None and self.method not in valid_methods:
             raise ConfigurationError(
                 f"method must be None or one of {valid_methods}, got {self.method}"
@@ -356,6 +374,7 @@ class BackgroundZeroingConfig:
         # Warn if both erosion and dilation are enabled (conflicting intentions)
         if self.air_border_margin > 0 and self.expand_air_mask > 0:
             import logging
+
             logging.getLogger(__name__).warning(
                 f"Both air_border_margin ({self.air_border_margin}) and expand_air_mask ({self.expand_air_mask}) "
                 "are > 0. These have opposite effects. Consider using only one."
@@ -373,6 +392,7 @@ class BiasFieldCorrectionConfig:
         bias_field_fwhm: Full-width-at-half-maximum for Gaussian smoothing [0.15-0.5]
         convergence_threshold: Early stopping convergence threshold
     """
+
     method: Optional[Literal["n4"]] = "n4"
     shrink_factor: int = 4
     max_iterations: List[int] = field(default_factory=lambda: [50, 50, 50, 50])
@@ -383,9 +403,7 @@ class BiasFieldCorrectionConfig:
         """Validate configuration values."""
         # Validate method
         if self.method is not None and self.method != "n4":
-            raise ConfigurationError(
-                f"method must be None or 'n4', got {self.method}"
-            )
+            raise ConfigurationError(f"method must be None or 'n4', got {self.method}")
 
         # Skip validation if method is None (bias correction disabled)
         if self.method is None:
@@ -433,9 +451,12 @@ class DataHarmonizationStepConfig:
         reorient_to: Target orientation convention ("RAS" or "LPS")
         background_zeroing: Configuration for background removal
     """
+
     save_visualization: bool = True
     reorient_to: Literal["RAS", "LPS"] = "RAS"
-    background_zeroing: BackgroundZeroingConfig = field(default_factory=BackgroundZeroingConfig)
+    background_zeroing: BackgroundZeroingConfig = field(
+        default_factory=BackgroundZeroingConfig
+    )
 
     def __post_init__(self) -> None:
         """Ensure background_zeroing is a BackgroundZeroingConfig instance."""
@@ -456,14 +477,19 @@ class BiasFieldCorrectionStepConfig:
         save_artifact: Whether to save bias field NIfTI to artifacts directory
         bias_field_correction: Configuration for bias field correction method
     """
+
     save_visualization: bool = True
     save_artifact: bool = True
-    bias_field_correction: BiasFieldCorrectionConfig = field(default_factory=BiasFieldCorrectionConfig)
+    bias_field_correction: BiasFieldCorrectionConfig = field(
+        default_factory=BiasFieldCorrectionConfig
+    )
 
     def __post_init__(self) -> None:
         """Ensure bias_field_correction is a BiasFieldCorrectionConfig instance."""
         if isinstance(self.bias_field_correction, dict):
-            self.bias_field_correction = BiasFieldCorrectionConfig(**self.bias_field_correction)
+            self.bias_field_correction = BiasFieldCorrectionConfig(
+                **self.bias_field_correction
+            )
 
 
 # Backwards compatibility alias
@@ -494,11 +520,14 @@ class ResamplingConfig:
         suffix: Suffix to add to ECLARE output filename (used if method=="eclare")
         gpu_id: GPU ID(s) to use for ECLARE - int or list of ints (used if method=="eclare")
     """
+
     method: Optional[Literal["bspline", "eclare", "composite"]] = "bspline"
     target_voxel_size: List[float] = field(default_factory=lambda: [1.0, 1.0, 1.0])
 
     # Normalization parameters (applied before resampling)
-    normalize_method: Optional[Literal["zscore", "kde", "percentile_minmax", "whitestripe", "fcm", "lsq"]] = None
+    normalize_method: Optional[
+        Literal["zscore", "kde", "percentile_minmax", "whitestripe", "fcm", "lsq"]
+    ] = None
     p1: float = 1.0
     p2: float = 99.0
     norm_value: float = 1.0
@@ -536,14 +565,25 @@ class ResamplingConfig:
     def __post_init__(self) -> None:
         """Validate configuration values."""
         # Validate method
-        if self.method is not None and self.method not in ["bspline", "eclare", "composite"]:
+        if self.method is not None and self.method not in [
+            "bspline",
+            "eclare",
+            "composite",
+        ]:
             raise ConfigurationError(
                 f"method must be None, 'bspline', 'eclare', or 'composite', got {self.method}"
             )
 
         # Validate normalization parameters
         if self.normalize_method is not None:
-            valid_methods = ["zscore", "kde", "percentile_minmax", "whitestripe", "fcm", "lsq"]
+            valid_methods = [
+                "zscore",
+                "kde",
+                "percentile_minmax",
+                "whitestripe",
+                "fcm",
+                "lsq",
+            ]
             if self.normalize_method not in valid_methods:
                 raise ConfigurationError(
                     f"normalize_method must be None or one of {valid_methods}, "
@@ -568,11 +608,17 @@ class ResamplingConfig:
                     raise ConfigurationError(
                         f"whitestripe_width must be in (0.0, 1.0], got {self.whitestripe_width}"
                     )
-                if self.whitestripe_width_l is not None and not 0.0 < self.whitestripe_width_l <= 1.0:
+                if (
+                    self.whitestripe_width_l is not None
+                    and not 0.0 < self.whitestripe_width_l <= 1.0
+                ):
                     raise ConfigurationError(
                         f"whitestripe_width_l must be in (0.0, 1.0], got {self.whitestripe_width_l}"
                     )
-                if self.whitestripe_width_u is not None and not 0.0 < self.whitestripe_width_u <= 1.0:
+                if (
+                    self.whitestripe_width_u is not None
+                    and not 0.0 < self.whitestripe_width_u <= 1.0
+                ):
                     raise ConfigurationError(
                         f"whitestripe_width_u must be in (0.0, 1.0], got {self.whitestripe_width_u}"
                     )
@@ -620,14 +666,19 @@ class ResamplingConfig:
 
         # Validate BSpline parameters (if using BSpline)
         if self.method == "bspline":
-            if not isinstance(self.bspline_order, int) or not (0 <= self.bspline_order <= 5):
+            if not isinstance(self.bspline_order, int) or not (
+                0 <= self.bspline_order <= 5
+            ):
                 raise ConfigurationError(
                     f"bspline_order must be an integer in [0, 5], got {self.bspline_order}"
                 )
 
         # Validate ECLARE parameters (if using ECLARE)
         if self.method == "eclare":
-            if not isinstance(self.conda_environment_eclare, str) or not self.conda_environment_eclare:
+            if (
+                not isinstance(self.conda_environment_eclare, str)
+                or not self.conda_environment_eclare
+            ):
                 raise ConfigurationError(
                     f"conda_environment_eclare must be a non-empty string, got {self.conda_environment_eclare}"
                 )
@@ -683,7 +734,11 @@ class ResamplingConfig:
                 )
 
             # Validate resample_mm_to_interpolator_if_max_mm_dl_method
-            if not 0 < self.resample_mm_to_interpolator_if_max_mm_dl_method < self.max_mm_dl_method:
+            if (
+                not 0
+                < self.resample_mm_to_interpolator_if_max_mm_dl_method
+                < self.max_mm_dl_method
+            ):
                 raise ConfigurationError(
                     f"resample_mm_to_interpolator_if_max_mm_dl_method must be between 0 and max_mm_dl_method, "
                     f"got {self.resample_mm_to_interpolator_if_max_mm_dl_method} (max_mm_dl_method={self.max_mm_dl_method})"
@@ -698,6 +753,7 @@ class ResamplingStepConfig:
         save_visualization: Whether to save visualization outputs for this step
         resampling: Configuration for resampling method
     """
+
     save_visualization: bool = True
     resampling: ResamplingConfig = field(default_factory=ResamplingConfig)
 
@@ -730,9 +786,12 @@ class CubicPaddingConfig:
             - "max_across_modalities": Use max dimension across all modalities in study
             - "max_per_modality": Use max dimension of each individual image
     """
+
     method: Optional[Literal["symmetric"]] = "symmetric"
     fill_value_mode: Literal["min", "zero"] = "min"
-    target_shape_mode: Literal["max_across_modalities", "max_per_modality"] = "max_across_modalities"
+    target_shape_mode: Literal["max_across_modalities", "max_per_modality"] = (
+        "max_across_modalities"
+    )
 
     def __post_init__(self) -> None:
         """Validate configuration values."""
@@ -759,6 +818,7 @@ class CubicPaddingStepConfig:
         save_visualization: Whether to save visualization outputs
         cubic_padding: Configuration for padding method
     """
+
     save_visualization: bool = True
     cubic_padding: CubicPaddingConfig = field(default_factory=CubicPaddingConfig)
 
@@ -796,6 +856,7 @@ class IntraStudyToReferenceConfig:
         validate_registration_quality: Compute and log registration quality metrics
         quality_warning_threshold: Warn if correlation dissimilarity > this threshold
     """
+
     method: Optional[Literal["ants"]] = "ants"
     engine: Optional[Literal["nipype", "antspyx"]] = None
     reference_modality_priority: str = "t1c > t1n > t2f > t2w"
@@ -804,7 +865,9 @@ class IntraStudyToReferenceConfig:
     metric_bins: int = 32
     sampling_strategy: str = "Random"
     sampling_percentage: float = 0.2
-    number_of_iterations: List[List[int]] = field(default_factory=lambda: [[1000, 500, 250]])
+    number_of_iterations: List[List[int]] = field(
+        default_factory=lambda: [[1000, 500, 250]]
+    )
     shrink_factors: List[List[int]] = field(default_factory=lambda: [[8, 4, 2, 1]])
     smoothing_sigmas: List[List[int]] = field(default_factory=lambda: [[4, 2, 1, 0]])
     convergence_threshold: float = 1e-6
@@ -836,9 +899,7 @@ class IntraStudyToReferenceConfig:
 
         # Validate reference_modality_priority
         if not self.reference_modality_priority:
-            raise ConfigurationError(
-                "reference_modality_priority cannot be empty"
-            )
+            raise ConfigurationError("reference_modality_priority cannot be empty")
         if ">" not in self.reference_modality_priority:
             # Single modality specified
             if not self.reference_modality_priority.strip():
@@ -855,9 +916,7 @@ class IntraStudyToReferenceConfig:
                 )
         elif isinstance(self.transform_type, list):
             if not self.transform_type:
-                raise ConfigurationError(
-                    "transform_type list cannot be empty"
-                )
+                raise ConfigurationError("transform_type list cannot be empty")
             for t in self.transform_type:
                 if t not in valid_transforms:
                     raise ConfigurationError(
@@ -915,9 +974,7 @@ class IntraStudyToReferenceConfig:
                 f"number_of_iterations must be a list, got {type(self.number_of_iterations)}"
             )
         if not all(isinstance(level, list) for level in self.number_of_iterations):
-            raise ConfigurationError(
-                "number_of_iterations must be a list of lists"
-            )
+            raise ConfigurationError("number_of_iterations must be a list of lists")
 
         # Validate shrink_factors
         if not isinstance(self.shrink_factors, list):
@@ -925,9 +982,7 @@ class IntraStudyToReferenceConfig:
                 f"shrink_factors must be a list, got {type(self.shrink_factors)}"
             )
         if not all(isinstance(level, list) for level in self.shrink_factors):
-            raise ConfigurationError(
-                "shrink_factors must be a list of lists"
-            )
+            raise ConfigurationError("shrink_factors must be a list of lists")
 
         # Validate smoothing_sigmas
         if not isinstance(self.smoothing_sigmas, list):
@@ -935,9 +990,7 @@ class IntraStudyToReferenceConfig:
                 f"smoothing_sigmas must be a list, got {type(self.smoothing_sigmas)}"
             )
         if not all(isinstance(level, list) for level in self.smoothing_sigmas):
-            raise ConfigurationError(
-                "smoothing_sigmas must be a list of lists"
-            )
+            raise ConfigurationError("smoothing_sigmas must be a list of lists")
 
         # Validate convergence_threshold
         if self.convergence_threshold <= 0:
@@ -952,7 +1005,13 @@ class IntraStudyToReferenceConfig:
             )
 
         # Validate interpolation
-        valid_interpolations = ["Linear", "BSpline", "NearestNeighbor", "MultiLabel", "Gaussian"]
+        valid_interpolations = [
+            "Linear",
+            "BSpline",
+            "NearestNeighbor",
+            "MultiLabel",
+            "Gaussian",
+        ]
         if self.interpolation not in valid_interpolations:
             raise ConfigurationError(
                 f"interpolation must be one of {valid_interpolations}, got {self.interpolation}"
@@ -986,6 +1045,7 @@ class IntraStudyToAtlasConfig:
         validate_registration_quality: Compute and log registration quality metrics
         quality_warning_threshold: Warn if correlation dissimilarity > this threshold
     """
+
     method: Optional[Literal["ants"]] = "ants"
     engine: Optional[Literal["nipype", "antspyx"]] = None
     atlas_path: str = ""
@@ -995,9 +1055,15 @@ class IntraStudyToAtlasConfig:
     metric_bins: int = 32
     sampling_strategy: str = "Random"
     sampling_percentage: float = 0.2
-    number_of_iterations: List[List[int]] = field(default_factory=lambda: [[2000, 1000, 500, 250], [1000, 500, 250, 100]])
-    shrink_factors: List[List[int]] = field(default_factory=lambda: [[8, 4, 2, 1], [4, 2, 1, 1]])
-    smoothing_sigmas: List[List[int]] = field(default_factory=lambda: [[4, 2, 1, 0], [2, 1, 0, 0]])
+    number_of_iterations: List[List[int]] = field(
+        default_factory=lambda: [[2000, 1000, 500, 250], [1000, 500, 250, 100]]
+    )
+    shrink_factors: List[List[int]] = field(
+        default_factory=lambda: [[8, 4, 2, 1], [4, 2, 1, 1]]
+    )
+    smoothing_sigmas: List[List[int]] = field(
+        default_factory=lambda: [[4, 2, 1, 0], [2, 1, 0, 0]]
+    )
     convergence_threshold: float = 1e-6
     convergence_window_size: int = 10
     interpolation: str = "Linear"
@@ -1032,9 +1098,7 @@ class IntraStudyToAtlasConfig:
 
         # Validate transforms
         if not self.transforms:
-            raise ConfigurationError(
-                "transforms list cannot be empty"
-            )
+            raise ConfigurationError("transforms list cannot be empty")
         valid_transforms = ["Rigid", "Affine", "SyN"]
         for t in self.transforms:
             if t not in valid_transforms:
@@ -1097,7 +1161,13 @@ class IntraStudyToAtlasConfig:
             )
 
         # Validate interpolation
-        valid_interpolations = ["Linear", "BSpline", "NearestNeighbor", "MultiLabel", "Gaussian"]
+        valid_interpolations = [
+            "Linear",
+            "BSpline",
+            "NearestNeighbor",
+            "MultiLabel",
+            "Gaussian",
+        ]
         if self.interpolation not in valid_interpolations:
             raise ConfigurationError(
                 f"interpolation must be one of {valid_interpolations}, got {self.interpolation}"
@@ -1117,6 +1187,7 @@ class RegistrationStepConfig:
         intra_study_to_reference: Configuration for intra-study coregistration
         intra_study_to_atlas: Configuration for atlas registration
     """
+
     save_visualization: bool = True
     save_detailed_registration_info: bool = False
     intra_study_to_reference: IntraStudyToReferenceConfig = field(
@@ -1149,6 +1220,8 @@ class SkullStrippingConfig:
     Attributes:
         method: Algorithm to use ("hdbet", "synthstrip", or None to skip)
         fill_value: Value for background voxels (default: 0.0)
+        consensus_masking: Use consensus voting across modalities for brain mask
+        consensus_threshold: Minimum number of modalities that must agree a voxel is brain
 
         # HD-BET parameters
         hdbet_mode: Mode for HD-BET ("fast" or "accurate")
@@ -1159,8 +1232,13 @@ class SkullStrippingConfig:
         synthstrip_border: Border parameter for SynthStrip in mm
         synthstrip_device: Device for SynthStrip (GPU id as int or "cpu")
     """
+
     method: Optional[Literal["hdbet", "synthstrip"]] = "hdbet"
     fill_value: float = 0.0
+
+    # Consensus masking
+    consensus_masking: bool = True
+    consensus_threshold: int = 2
 
     # HD-BET parameters
     hdbet_mode: Literal["fast", "accurate"] = "accurate"
@@ -1186,22 +1264,44 @@ class SkullStrippingConfig:
         # Validate HD-BET parameters
         if self.method == "hdbet":
             if self.hdbet_mode not in ["fast", "accurate"]:
-                raise ConfigurationError(f"hdbet_mode must be 'fast' or 'accurate', got {self.hdbet_mode}")
+                raise ConfigurationError(
+                    f"hdbet_mode must be 'fast' or 'accurate', got {self.hdbet_mode}"
+                )
 
             if isinstance(self.hdbet_device, int) and self.hdbet_device < 0:
-                raise ConfigurationError(f"hdbet_device must be non-negative, got {self.hdbet_device}")
+                raise ConfigurationError(
+                    f"hdbet_device must be non-negative, got {self.hdbet_device}"
+                )
             elif isinstance(self.hdbet_device, str) and self.hdbet_device != "cpu":
-                raise ConfigurationError(f"hdbet_device must be int or 'cpu', got {self.hdbet_device}")
+                raise ConfigurationError(
+                    f"hdbet_device must be int or 'cpu', got {self.hdbet_device}"
+                )
 
         # Validate SynthStrip parameters
         if self.method == "synthstrip":
             if self.synthstrip_border < 0:
-                raise ConfigurationError(f"synthstrip_border must be non-negative, got {self.synthstrip_border}")
+                raise ConfigurationError(
+                    f"synthstrip_border must be non-negative, got {self.synthstrip_border}"
+                )
 
             if isinstance(self.synthstrip_device, int) and self.synthstrip_device < 0:
-                raise ConfigurationError(f"synthstrip_device must be non-negative, got {self.synthstrip_device}")
-            elif isinstance(self.synthstrip_device, str) and self.synthstrip_device != "cpu":
-                raise ConfigurationError(f"synthstrip_device must be int or 'cpu', got {self.synthstrip_device}")
+                raise ConfigurationError(
+                    f"synthstrip_device must be non-negative, got {self.synthstrip_device}"
+                )
+            elif (
+                isinstance(self.synthstrip_device, str)
+                and self.synthstrip_device != "cpu"
+            ):
+                raise ConfigurationError(
+                    f"synthstrip_device must be int or 'cpu', got {self.synthstrip_device}"
+                )
+
+        # Validate consensus masking parameters
+        if self.consensus_masking and self.consensus_threshold < 1:
+            raise ConfigurationError(
+                f"consensus_threshold must be >= 1 when consensus_masking is enabled, "
+                f"got {self.consensus_threshold}"
+            )
 
 
 @dataclass
@@ -1213,6 +1313,7 @@ class SkullStrippingStepConfig:
         save_mask: Whether to save brain mask NIfTI to artifacts directory
         skull_stripping: Configuration for skull stripping algorithm
     """
+
     save_visualization: bool = True
     save_mask: bool = True
     skull_stripping: SkullStrippingConfig = field(default_factory=SkullStrippingConfig)
@@ -1252,7 +1353,10 @@ class IntensityNormalizationConfig:
         error_threshold: Convergence threshold (default=0.005)
         fuzziness: Cluster membership fuzziness parameter (default=2.0)
     """
-    method: Optional[Literal["zscore", "kde", "percentile_minmax", "whitestripe", "fcm", "lsq"]] = None
+
+    method: Optional[
+        Literal["zscore", "kde", "percentile_minmax", "whitestripe", "fcm", "lsq"]
+    ] = None
 
     # Common parameters
     norm_value: float = 1.0
@@ -1260,7 +1364,9 @@ class IntensityNormalizationConfig:
     p2: float = 99.0
 
     # Z-score specific parameters
-    clip_range: Optional[List[float]] = None  # Optional [low, high] clipping after z-score (e.g., [-5.0, 5.0])
+    clip_range: Optional[List[float]] = (
+        None  # Optional [low, high] clipping after z-score (e.g., [-5.0, 5.0])
+    )
 
     # WhiteStripe parameters
     width: float = 0.05
@@ -1277,7 +1383,14 @@ class IntensityNormalizationConfig:
     def __post_init__(self) -> None:
         """Validate configuration values."""
         if self.method is not None:
-            valid_methods = ["zscore", "kde", "percentile_minmax", "whitestripe", "fcm", "lsq"]
+            valid_methods = [
+                "zscore",
+                "kde",
+                "percentile_minmax",
+                "whitestripe",
+                "fcm",
+                "lsq",
+            ]
             if self.method not in valid_methods:
                 raise ConfigurationError(
                     f"method must be None or one of {valid_methods}, got {self.method}"
@@ -1297,7 +1410,10 @@ class IntensityNormalizationConfig:
 
             # Validate clip_range (used by zscore)
             if self.clip_range is not None:
-                if len(self.clip_range) != 2 or self.clip_range[0] >= self.clip_range[1]:
+                if (
+                    len(self.clip_range) != 2
+                    or self.clip_range[0] >= self.clip_range[1]
+                ):
                     raise ConfigurationError(
                         f"clip_range must be [low, high] with low < high, got {self.clip_range}"
                     )
@@ -1349,6 +1465,7 @@ class IntensityNormalizationStepConfig:
         save_visualization: Whether to save visualization PNGs
         intensity_normalization: Configuration for normalization method
     """
+
     save_visualization: bool = True
     intensity_normalization: IntensityNormalizationConfig = field(
         default_factory=IntensityNormalizationConfig
@@ -1408,6 +1525,7 @@ class LongitudinalRegistrationConfig:
         reference_selection_validate_jacobian: Validate registration with Jacobian statistics
         reference_selection_jacobian_threshold: Max allowed |log(det(J))| mean
     """
+
     method: Optional[Literal["ants"]] = "ants"
     engine: Optional[Literal["nipype", "antspyx"]] = None
     reference_modality_priority: str = "t1n > t1c > t2f > t2w"
@@ -1415,15 +1533,21 @@ class LongitudinalRegistrationConfig:
 
     # Reference selection configuration (automatic, used when patient not in YAML)
     reference_selection_method: str = "quality_based"
-    reference_selection_metrics: List[str] = field(default_factory=lambda: [
-        "snr_foreground", "cnr_high_low", "boundary_gradient_score"
-    ])
+    reference_selection_metrics: List[str] = field(
+        default_factory=lambda: [
+            "snr_foreground",
+            "cnr_high_low",
+            "boundary_gradient_score",
+        ]
+    )
     reference_selection_prefer_earlier: bool = True
     reference_selection_validate_jacobian: bool = True
     reference_selection_jacobian_threshold: float = 0.5
 
     # Transform parameters
-    transform_type: Union[str, List[str]] = field(default_factory=lambda: ["Rigid", "Affine"])
+    transform_type: Union[str, List[str]] = field(
+        default_factory=lambda: ["Rigid", "Affine"]
+    )
 
     # Metric parameters
     metric: str = "Mattes"
@@ -1432,9 +1556,15 @@ class LongitudinalRegistrationConfig:
     sampling_percentage: float = 0.5
 
     # Multi-resolution schedule
-    number_of_iterations: List[List[int]] = field(default_factory=lambda: [[1000, 500, 250, 0], [1000, 500, 250, 0]])
-    shrink_factors: List[List[int]] = field(default_factory=lambda: [[8, 4, 2, 1], [8, 4, 2, 1]])
-    smoothing_sigmas: List[List[int]] = field(default_factory=lambda: [[3, 2, 1, 0], [3, 2, 1, 0]])
+    number_of_iterations: List[List[int]] = field(
+        default_factory=lambda: [[1000, 500, 250, 0], [1000, 500, 250, 0]]
+    )
+    shrink_factors: List[List[int]] = field(
+        default_factory=lambda: [[8, 4, 2, 1], [8, 4, 2, 1]]
+    )
+    smoothing_sigmas: List[List[int]] = field(
+        default_factory=lambda: [[3, 2, 1, 0], [3, 2, 1, 0]]
+    )
 
     # Convergence parameters
     convergence_threshold: float = 1.0e-6
@@ -1470,9 +1600,7 @@ class LongitudinalRegistrationConfig:
 
         # Validate reference_modality_priority
         if not self.reference_modality_priority:
-            raise ConfigurationError(
-                "reference_modality_priority cannot be empty"
-            )
+            raise ConfigurationError("reference_modality_priority cannot be empty")
 
         # Validate transform_type (can be string or list of strings)
         valid_transforms = ["Rigid", "Affine", "SyN"]
@@ -1548,7 +1676,13 @@ class LongitudinalRegistrationConfig:
             )
 
         # Validate interpolation
-        valid_interpolations = ["Linear", "BSpline", "NearestNeighbor", "MultiLabel", "Gaussian"]
+        valid_interpolations = [
+            "Linear",
+            "BSpline",
+            "NearestNeighbor",
+            "MultiLabel",
+            "Gaussian",
+        ]
         if self.interpolation not in valid_interpolations:
             raise ConfigurationError(
                 f"interpolation must be one of {valid_interpolations}, got {self.interpolation}"
@@ -1563,6 +1697,7 @@ class LongitudinalRegistrationStepConfig:
         save_visualization: Whether to save visualization outputs
         longitudinal_registration: Configuration for longitudinal registration method
     """
+
     save_visualization: bool = True
     longitudinal_registration: LongitudinalRegistrationConfig = field(
         default_factory=LongitudinalRegistrationConfig
@@ -1580,6 +1715,7 @@ class LongitudinalRegistrationStepConfig:
 # QC Metrics Configuration
 # ============================================================================
 
+
 @dataclass
 class QCGeometryMetricsConfig:
     """Configuration for geometry/header consistency metrics.
@@ -1590,6 +1726,7 @@ class QCGeometryMetricsConfig:
         check_spacing: Validate voxel spacing
         check_affine_det: Check affine determinant sign
     """
+
     enabled: bool = True
     check_orientation: bool = True
     check_spacing: bool = True
@@ -1606,6 +1743,7 @@ class QCRegistrationSimilarityConfig:
         ncc_longitudinal: Compute NCC for longitudinal (same modality) registration
         use_mask: Apply skull-stripped mask when computing similarity
     """
+
     enabled: bool = True
     nmi_multimodal: bool = True
     ncc_longitudinal: bool = True
@@ -1622,6 +1760,7 @@ class QCMaskPlausibilityConfig:
         boundary_gradient_score: Compute gradient score at mask boundary
         longitudinal_dice: Compute Dice coefficient between warped longitudinal masks
     """
+
     enabled: bool = True
     check_volume: bool = True
     boundary_gradient_score: bool = True
@@ -1640,6 +1779,7 @@ class QCIntensityStabilityConfig:
         histogram_bins: Number of bins for histogram computation
         histogram_range_percentiles: Percentile range for clipping intensities (low, high)
     """
+
     enabled: bool = True
     median_iqr: bool = True
     wasserstein_distance: bool = True
@@ -1664,6 +1804,7 @@ class QCSNRCNRConfig:
         intensity_mid_pct: Mid percentile boundary for CNR (default: 50)
         intensity_high_pct: Upper percentile for CNR region 2 (default: 75)
     """
+
     enabled: bool = True
     background_percentile: float = 5.0
     foreground_percentile: float = 75.0
@@ -1686,6 +1827,7 @@ class QCBaselineConfig:
         metrics_to_capture: List of metric families to capture at baseline
             Options: "geometry", "intensity", "snr_cnr"
     """
+
     enabled: bool = True
     capture_before_first_step: bool = True
     metrics_to_capture: List[str] = field(
@@ -1706,6 +1848,7 @@ class QCComparisonConfig:
         compute_ratios: Compute ratios (post / baseline)
         flag_degradation_threshold_pct: Flag if metric degrades by more than this percentage
     """
+
     enabled: bool = True
     compute_deltas: bool = True
     compute_ratios: bool = True
@@ -1722,6 +1865,7 @@ class QCOutlierDetectionConfig:
         mad_threshold: MAD threshold for outlier detection (typically 3.5)
         iqr_multiplier: IQR multiplier for outlier detection (typically 3.0)
     """
+
     enabled: bool = True
     method: Literal["mad", "iqr"] = "mad"
     mad_threshold: float = 3.5
@@ -1738,6 +1882,7 @@ class QCOutputConfig:
         save_summary_csv: Save summary CSV with aggregated stats and outlier flags
         save_metadata_json: Save run metadata JSON with config snapshot
     """
+
     save_long_csv: bool = True
     save_wide_csv: bool = True
     save_summary_csv: bool = True
@@ -1757,6 +1902,7 @@ class QCMetricsConfig:
         baseline: Baseline metrics capture configuration
         comparison: Pre-vs-post comparison configuration
     """
+
     geometry: QCGeometryMetricsConfig = field(default_factory=QCGeometryMetricsConfig)
     registration_similarity: QCRegistrationSimilarityConfig = field(
         default_factory=QCRegistrationSimilarityConfig
@@ -1782,7 +1928,9 @@ class QCMetricsConfig:
         if isinstance(self.mask_plausibility, dict):
             self.mask_plausibility = QCMaskPlausibilityConfig(**self.mask_plausibility)
         if isinstance(self.intensity_stability, dict):
-            self.intensity_stability = QCIntensityStabilityConfig(**self.intensity_stability)
+            self.intensity_stability = QCIntensityStabilityConfig(
+                **self.intensity_stability
+            )
         if isinstance(self.snr_cnr, dict):
             self.snr_cnr = QCSNRCNRConfig(**self.snr_cnr)
         if isinstance(self.baseline, dict):
@@ -1814,6 +1962,7 @@ class QCConfig:
         metrics: Metrics families configuration
         outputs: Output formats configuration
     """
+
     enabled: bool = False
     output_dir: str = ""
     artifacts_dir: str = ""
@@ -1822,12 +1971,14 @@ class QCConfig:
     downsample_to_mm: float = 2.0
     max_voxels: int = 250000
     random_seed: int = 1234
-    mask_source: Literal["skullstrip_else_otsu", "skullstrip_only", "otsu_only", "none"] = (
-        "skullstrip_else_otsu"
-    )
+    mask_source: Literal[
+        "skullstrip_else_otsu", "skullstrip_only", "otsu_only", "none"
+    ] = "skullstrip_else_otsu"
     site_metadata: Optional[str] = None
 
-    outlier_detection: QCOutlierDetectionConfig = field(default_factory=QCOutlierDetectionConfig)
+    outlier_detection: QCOutlierDetectionConfig = field(
+        default_factory=QCOutlierDetectionConfig
+    )
     metrics: QCMetricsConfig = field(default_factory=QCMetricsConfig)
     outputs: QCOutputConfig = field(default_factory=QCOutputConfig)
 
@@ -1836,7 +1987,9 @@ class QCConfig:
         if self.enabled:
             # Validate required directories
             if not self.output_dir:
-                raise ConfigurationError("qc_metrics.output_dir must be specified when enabled=True")
+                raise ConfigurationError(
+                    "qc_metrics.output_dir must be specified when enabled=True"
+                )
             if not self.artifacts_dir:
                 raise ConfigurationError(
                     "qc_metrics.artifacts_dir must be specified when enabled=True"
@@ -1848,7 +2001,9 @@ class QCConfig:
                     f"downsample_to_mm must be positive, got {self.downsample_to_mm}"
                 )
             if self.max_voxels <= 0:
-                raise ConfigurationError(f"max_voxels must be positive, got {self.max_voxels}")
+                raise ConfigurationError(
+                    f"max_voxels must be positive, got {self.max_voxels}"
+                )
 
         # Convert nested configs from dicts if needed
         if isinstance(self.outlier_detection, dict):
@@ -1881,6 +2036,7 @@ class PipelineExecutionConfig:
         step_configs: Dictionary mapping step patterns to their typed configurations
         qc_metrics: QC metrics configuration
     """
+
     enabled: bool = True
     patient_selector: Literal["single", "all"] = "single"
     patient_id: str = "MenGrowth-0001"
@@ -1926,9 +2082,7 @@ class PipelineExecutionConfig:
         # Validate output_root for test mode
         if self.mode == "test":
             if not self.output_root:
-                raise ConfigurationError(
-                    "output_root must be specified in test mode"
-                )
+                raise ConfigurationError("output_root must be specified in test mode")
 
         # Validate viz_root
         if not self.viz_root:
@@ -1948,9 +2102,11 @@ class PipelineExecutionConfig:
         if not self.modalities:
             raise ConfigurationError("At least one modality must be specified")
 
-        logger.info(f"PipelineExecutionConfig validated: mode={self.mode}, "
-                   f"patient_selector={self.patient_selector}, "
-                   f"overwrite={self.overwrite}")
+        logger.info(
+            f"PipelineExecutionConfig validated: mode={self.mode}, "
+            f"patient_selector={self.patient_selector}, "
+            f"overwrite={self.overwrite}"
+        )
 
     def _validate_dynamic_config(self) -> None:
         """Validate dynamic pipeline configuration (steps and step_configs)."""
@@ -1976,9 +2132,7 @@ class PipelineExecutionConfig:
             try:
                 pattern, _ = registry.get_handler(step_name)
             except ValueError as e:
-                raise ConfigurationError(
-                    f"Invalid step name '{step_name}': {e}"
-                ) from e
+                raise ConfigurationError(f"Invalid step name '{step_name}': {e}") from e
 
         # Validate each step has a matching config
         for step_name in self.steps:
@@ -2025,13 +2179,15 @@ class PipelineExecutionConfig:
                         try:
                             self.step_configs[step_name] = config_class(**config_data)
                             matched = True
-                            logger.debug(f"Converted '{step_name}' config to {config_class.__name__}")
+                            logger.debug(
+                                f"Converted '{step_name}' config to {config_class.__name__}"
+                            )
                             break
                         except TypeError as e:
                             raise ConfigurationError(
                                 f"Invalid configuration for step '{step_name}': {e}"
                             ) from e
-                
+
                 if not matched:
                     raise ConfigurationError(
                         f"No config class found for step '{step_name}'. "
@@ -2058,6 +2214,7 @@ class PreprocessingPipelineConfig:
         qc_metrics: Optional per-step QC metrics configuration
         checkpoints: Optional checkpoint system configuration
     """
+
     steps: List[str] = field(default_factory=list)
     general_configuration: PipelineExecutionConfig = field(
         default_factory=PipelineExecutionConfig
@@ -2074,15 +2231,19 @@ class PreprocessingPipelineConfig:
         """Validate and convert configuration."""
         # Ensure general_configuration is a PipelineExecutionConfig instance
         if isinstance(self.general_configuration, dict):
-            self.general_configuration = PipelineExecutionConfig(**self.general_configuration)
+            self.general_configuration = PipelineExecutionConfig(
+                **self.general_configuration
+            )
 
         # Add top-level configs to step_configs if they exist
         if self.skull_stripping:
-            self.step_configs['skull_stripping'] = self.skull_stripping
+            self.step_configs["skull_stripping"] = self.skull_stripping
         if self.intensity_normalization:
-            self.step_configs['intensity_normalization'] = self.intensity_normalization
+            self.step_configs["intensity_normalization"] = self.intensity_normalization
         if self.longitudinal_registration:
-            self.step_configs['longitudinal_registration'] = self.longitudinal_registration
+            self.step_configs["longitudinal_registration"] = (
+                self.longitudinal_registration
+            )
 
         # Add steps and step_configs to general_configuration for orchestrator access
         self.general_configuration.steps = self.steps

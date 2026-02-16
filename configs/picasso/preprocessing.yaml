@@ -4,8 +4,8 @@ preprocessing:
           "bias_field_correction",
           "resampling",
           "cubic_padding",
-          "skull_stripping",
           "registration_static",
+          "skull_stripping",
           "intensity_normalization",
           "longitudinal_registration"
           ]
@@ -277,6 +277,10 @@ preprocessing:
       skull_stripping:
           method: "hdbet"          # "hdbet" | "synthstrip" | null (null to skip)
           fill_value: 0.0          # Value for background voxels
+
+          # Consensus masking: combine per-modality masks via majority voting
+          consensus_masking: true    # Use consensus voting across modalities
+          consensus_threshold: 2     # Min modalities that must agree a voxel is brain
 
           # HD-BET specific parameters (used if method == "hdbet")
           hdbet_mode: "accurate"   # "fast" | "accurate"

@@ -218,6 +218,10 @@ preprocessing:
           method: "hdbet"          # "hdbet" | "synthstrip" | null (null to skip)
           fill_value: 0.0          # Value for background voxels
 
+          # Consensus masking: combine per-modality masks via majority voting
+          consensus_masking: true    # Use consensus voting across modalities
+          consensus_threshold: 2     # Min modalities that must agree a voxel is brain
+
           # HD-BET specific parameters (used if method == "hdbet")
           hdbet_mode: "accurate"   # "fast" | "accurate"
           hdbet_device: 0          # GPU id (int) or "cpu" (str)
@@ -226,7 +230,7 @@ preprocessing:
           # SynthStrip specific parameters (used if method == "synthstrip")
           synthstrip_border: 1     # Border parameter in mm
           synthstrip_device: 0     # GPU id (int) or "cpu" (str)
-          
+
   intensity_normalization:
       save_visualization: true # Save visualization for intensity normalization step
       intensity_normalization:

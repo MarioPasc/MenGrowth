@@ -17,9 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 def execute(
-    context: StepExecutionContext,
-    total_steps: int,
-    current_step_num: int
+    context: StepExecutionContext, total_steps: int, current_step_num: int
 ) -> Dict[str, Any]:
     """Execute registration step (study-level operation).
 
@@ -44,41 +42,62 @@ def execute(
     results = {
         "reference_modality": None,
         "transforms": {},
-        "registered_modalities": []
+        "registered_modalities": [],
     }
 
     # Determine study output directory based on mode
-    study_output_dir = get_output_dir(
-        context=context
+    study_output_dir = get_output_dir(context=context)
+    artifacts_base = (
+        Path(orchestrator.config.preprocessing_artifacts_path)
+        / patient_id
+        / study_dir.name
     )
-    artifacts_base = Path(orchestrator.config.preprocessing_artifacts_path) / patient_id / study_dir.name
     viz_base = Path(orchestrator.config.viz_root) / patient_id / study_dir.name
 
     # Step 3a: Intra-study multi-modal coregistration to reference
     intra_study_transforms = {}
-    intra_study_method = config.intra_study_to_reference.method if hasattr(config, 'intra_study_to_reference') else None
+    intra_study_method = (
+        config.intra_study_to_reference.method
+        if hasattr(config, "intra_study_to_reference")
+        else None
+    )
 
     if intra_study_method is not None:
-        logger.info(f"  [Sub-step 3a] Intra-study multi-modal coregistration ({intra_study_method})")
+        logger.info(
+            f"  [Sub-step 3a] Intra-study multi-modal coregistration ({intra_study_method})"
+        )
 
         # Get or create intra-study registrator
         intra_study_registrator = orchestrator._get_component(
-            f"intra_study_to_ref_{context.step_name}",
-            config
+            f"intra_study_to_ref_{context.step_name}", config
         )
+
+        # Save pre-registration copies for visualization (execute() replaces in-place)
+        pre_reg_copies: Dict[str, Path] = {}
+        if config.save_visualization:
+            for modality in orchestrator.config.modalities:
+                modality_path = study_output_dir / f"{modality}.nii.gz"
+                if modality_path.exists():
+                    pre_reg_path = (
+                        study_output_dir / f"_temp_{modality}_pre_registration.nii.gz"
+                    )
+                    shutil.copy2(str(modality_path), str(pre_reg_path))
+                    pre_reg_copies[modality] = pre_reg_path
 
         try:
             # Execute intra-study to reference registration
             reg_result = intra_study_registrator.execute(
                 study_dir=study_output_dir,
                 artifacts_dir=artifacts_base,
-                modalities=orchestrator.config.modalities
+                modalities=orchestrator.config.modalities,
             )
 
             # Store results
             results["reference_modality"] = reg_result["reference_modality"]
             results["transforms"] = reg_result["transforms"]
-            results["registered_modalities"] = reg_result.get("registered_modalities", [])
+            results["registered_modalities"] = reg_result.get(
+                "registered_modalities", []
+            )
             intra_study_transforms = reg_result["transforms"]
 
             # Update orchestrator state
@@ -88,44 +107,66 @@ def execute(
 
             # Generate visualizations if enabled
             if config.save_visualization:
-                reference_path = study_output_dir / f"{results['reference_modality']}.nii.gz"
+                reference_path = (
+                    study_output_dir / f"{results['reference_modality']}.nii.gz"
+                )
 
                 for modality in reg_result["registered_modalities"]:
-                    moving_path = study_output_dir / f"{modality}.nii.gz"
+                    registered_path = study_output_dir / f"{modality}.nii.gz"
+                    moving_path = pre_reg_copies.get(modality, registered_path)
                     transform_path = reg_result["transforms"].get(modality)
 
-                    viz_output = viz_base / f"{context.step_name}_3a_intra_study_{modality}_to_{results['reference_modality']}.png"
+                    viz_output = (
+                        viz_base
+                        / f"{context.step_name}_3a_intra_study_{modality}_to_{results['reference_modality']}.png"
+                    )
 
                     try:
                         intra_study_registrator.visualize(
                             reference_path=reference_path,
                             moving_path=moving_path,
-                            registered_path=moving_path,  # Already replaced
+                            registered_path=registered_path,
                             output_path=viz_output,
                             modality=modality,
-                            transform_path=transform_path
+                            transform_path=transform_path,
                         )
                     except Exception as viz_error:
-                        logger.warning(f"  Failed to generate visualization for {modality}: {viz_error}")
+                        logger.warning(
+                            f"  Failed to generate visualization for {modality}: {viz_error}"
+                        )
 
-            logger.info(f"  Successfully registered {len(reg_result['registered_modalities'])} modalities to reference")
+            logger.info(
+                f"  Successfully registered {len(reg_result['registered_modalities'])} modalities to reference"
+            )
 
         except Exception as e:
             logger.error(f"  [Error] Intra-study to reference registration failed: {e}")
-            raise RuntimeError(f"Intra-study registration failed") from e
+            raise RuntimeError("Intra-study registration failed") from e
+        finally:
+            # Clean up pre-registration temp copies
+            for temp_path in pre_reg_copies.values():
+                if temp_path.exists():
+                    temp_path.unlink()
     else:
-        logger.info("  [Sub-step 3a] Intra-study to reference registration skipped (method=None)")
+        logger.info(
+            "  [Sub-step 3a] Intra-study to reference registration skipped (method=None)"
+        )
 
     # Step 3b: Intra-study to atlas registration
-    atlas_method = config.intra_study_to_atlas.method if hasattr(config, 'intra_study_to_atlas') else None
+    atlas_method = (
+        config.intra_study_to_atlas.method
+        if hasattr(config, "intra_study_to_atlas")
+        else None
+    )
 
     if atlas_method is not None and results["reference_modality"] is not None:
-        logger.info(f"  [Sub-step 3b] Intra-study to atlas registration ({atlas_method})")
+        logger.info(
+            f"  [Sub-step 3b] Intra-study to atlas registration ({atlas_method})"
+        )
 
         # Get or create atlas registrator
         atlas_registrator = orchestrator._get_component(
-            f"intra_study_to_atlas_{context.step_name}",
-            config
+            f"intra_study_to_atlas_{context.step_name}", config
         )
 
         try:
@@ -134,44 +175,59 @@ def execute(
                 study_dir=study_output_dir,
                 artifacts_dir=artifacts_base,
                 modalities=orchestrator.config.modalities,
-                intra_study_transforms=intra_study_transforms
+                intra_study_transforms=intra_study_transforms,
             )
 
-            logger.info(f"  Reference registered to atlas: {atlas_result['atlas_path']}")
+            logger.info(
+                f"  Reference registered to atlas: {atlas_result['atlas_path']}"
+            )
 
             # Generate visualizations if enabled
             if config.save_visualization:
                 atlas_path = Path(config.intra_study_to_atlas.atlas_path)
-                reference_path = study_output_dir / f"{results['reference_modality']}.nii.gz"
+                reference_path = (
+                    study_output_dir / f"{results['reference_modality']}.nii.gz"
+                )
 
                 # Visualize reference to atlas
-                viz_output_ref = viz_base / f"{context.step_name}_3b_atlas_ref_{results['reference_modality']}.png"
+                viz_output_ref = (
+                    viz_base
+                    / f"{context.step_name}_3b_atlas_ref_{results['reference_modality']}.png"
+                )
                 try:
                     atlas_registrator.visualize(
                         atlas_path=atlas_path,
                         reference_path=reference_path,
                         output_path=viz_output_ref,
-                        ref_to_atlas_transform=atlas_result["ref_to_atlas_transform"]
+                        ref_to_atlas_transform=atlas_result["ref_to_atlas_transform"],
                     )
                 except Exception as viz_error:
-                    logger.warning(f"  Failed to generate reference→atlas visualization: {viz_error}")
+                    logger.warning(
+                        f"  Failed to generate reference→atlas visualization: {viz_error}"
+                    )
 
                 # Visualize each modality in atlas space
                 for modality in atlas_result["registered_modalities"]:
                     modality_path = study_output_dir / f"{modality}.nii.gz"
-                    viz_output = viz_base / f"{context.step_name}_3b_atlas_{modality}.png"
+                    viz_output = (
+                        viz_base / f"{context.step_name}_3b_atlas_{modality}.png"
+                    )
 
                     try:
                         atlas_registrator.visualize(
                             atlas_path=atlas_path,
                             modality_path=modality_path,
                             output_path=viz_output,
-                            modality=modality
+                            modality=modality,
                         )
                     except Exception as viz_error:
-                        logger.warning(f"  Failed to generate atlas visualization for {modality}: {viz_error}")
+                        logger.warning(
+                            f"  Failed to generate atlas visualization for {modality}: {viz_error}"
+                        )
 
-            logger.info(f"  Successfully registered {len(atlas_result['registered_modalities'])} modalities to atlas")
+            logger.info(
+                f"  Successfully registered {len(atlas_result['registered_modalities'])} modalities to atlas"
+            )
 
             # Add quality metrics from atlas registration if available
             if "quality_metrics" in atlas_result:
@@ -181,19 +237,26 @@ def execute(
             logger.error(f"  [Error] Intra-study to atlas registration failed: {e}")
             # Continue anyway - atlas registration is optional
     elif atlas_method is not None and results["reference_modality"] is None:
-        logger.warning("  [Sub-step 3b] Atlas registration skipped - no reference modality from step 3a")
+        logger.warning(
+            "  [Sub-step 3b] Atlas registration skipped - no reference modality from step 3a"
+        )
     else:
-        logger.info("  [Sub-step 3b] Intra-study to atlas registration skipped (method=None)")
+        logger.info(
+            "  [Sub-step 3b] Intra-study to atlas registration skipped (method=None)"
+        )
 
     # Add qc_paths for QC system (study-level step output paths)
     results["qc_paths"] = {
         "study_output_dir": str(study_output_dir),
         "reference_modality": results["reference_modality"],
-        "atlas_path": str(config.intra_study_to_atlas.atlas_path) if hasattr(config, 'intra_study_to_atlas') and config.intra_study_to_atlas.atlas_path else None,
+        "atlas_path": str(config.intra_study_to_atlas.atlas_path)
+        if hasattr(config, "intra_study_to_atlas")
+        and config.intra_study_to_atlas.atlas_path
+        else None,
         "modality_outputs": {
             mod: str(study_output_dir / f"{mod}.nii.gz")
             for mod in results.get("registered_modalities", [])
-        }
+        },
     }
 
     return results
