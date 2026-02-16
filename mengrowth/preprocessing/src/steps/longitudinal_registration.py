@@ -25,16 +25,14 @@ from mengrowth.preprocessing.src.registration.reference_selection import (
     ReferenceSelector,
     ReferenceSelectionConfig,
     compute_jacobian_statistics,
-    validate_registration_quality
+    validate_registration_quality,
 )
 
 logger = logging.getLogger(__name__)
 
 
 def execute(
-    context: StepExecutionContext,
-    total_steps: int,
-    current_step_num: int
+    context: StepExecutionContext, total_steps: int, current_step_num: int
 ) -> Dict[str, Any]:
     """Execute longitudinal registration step (patient-level operation).
 
@@ -54,7 +52,9 @@ def execute(
     patient_id = context.patient_id
     all_study_dirs = context.all_study_dirs
 
-    logger.info(f"  Processing {len(all_study_dirs)} timestamps for patient {patient_id}")
+    logger.info(
+        f"  Processing {len(all_study_dirs)} timestamps for patient {patient_id}"
+    )
 
     results = {
         "reference_timestamp": None,
@@ -69,7 +69,9 @@ def execute(
 
     # Need at least 2 timestamps for longitudinal registration
     if len(all_study_dirs) < 2:
-        logger.warning(f"  Only {len(all_study_dirs)} timestamp(s) found - skipping longitudinal registration")
+        logger.warning(
+            f"  Only {len(all_study_dirs)} timestamp(s) found - skipping longitudinal registration"
+        )
         return results
 
     # Step 1: Determine reference timestamp (YAML override or automatic selection)
@@ -80,12 +82,14 @@ def execute(
         yaml_path=config.reference_timestamp_per_study,
         config=config,
         orchestrator=orchestrator,
-        artifacts_base=artifacts_base
+        artifacts_base=artifacts_base,
     )
     results["reference_timestamp"] = reference_timestamp
     results["reference_selection_info"] = selection_info
 
-    logger.info(f"  Reference timestamp: {reference_timestamp} (source: {selection_info.get('source', 'unknown')})")
+    logger.info(
+        f"  Reference timestamp: {reference_timestamp} (source: {selection_info.get('source', 'unknown')})"
+    )
 
     # Find reference study directory
     reference_study_dir = None
@@ -102,11 +106,13 @@ def execute(
 
     # Step 2: Determine registration mode and reference modality/modalities
     # Need to use output directory where preprocessed files are located
-    reference_output_dir = _get_study_output_dir(orchestrator, patient_id, reference_study_dir)
+    reference_output_dir = _get_study_output_dir(
+        orchestrator, patient_id, reference_study_dir
+    )
     mode, reference_modalities = _determine_registration_mode(
         config=config,
         reference_study_dir=reference_output_dir,
-        modalities=orchestrator.config.modalities
+        modalities=orchestrator.config.modalities,
     )
 
     logger.info(f"  Registration mode: {mode}")
@@ -131,7 +137,7 @@ def execute(
             all_study_dirs=all_study_dirs,
             artifacts_base=artifacts_base,
             viz_base=viz_base,
-            results=results
+            results=results,
         )
     else:
         # Per-modality mode: register each modality type independently
@@ -144,10 +150,12 @@ def execute(
             all_study_dirs=all_study_dirs,
             artifacts_base=artifacts_base,
             viz_base=viz_base,
-            results=results
+            results=results,
         )
 
-    logger.info(f"  Successfully registered {len(results['registered_studies'])} timestamps")
+    logger.info(
+        f"  Successfully registered {len(results['registered_studies'])} timestamps"
+    )
 
     return results
 
@@ -158,7 +166,7 @@ def _get_reference_timestamp(
     yaml_path: Optional[str],
     config: Any = None,
     orchestrator: Any = None,
-    artifacts_base: Optional[Path] = None
+    artifacts_base: Optional[Path] = None,
 ) -> tuple:
     """Get reference timestamp for this patient from YAML override or automatic selection.
 
@@ -182,12 +190,14 @@ def _get_reference_timestamp(
     # Step 1: Try to load from YAML override if provided
     if yaml_path and Path(yaml_path).exists():
         try:
-            with open(yaml_path, 'r') as f:
+            with open(yaml_path, "r") as f:
                 timestamp_map = yaml.safe_load(f)
 
             if timestamp_map and patient_id in timestamp_map:
                 ref_timestamp = str(timestamp_map[patient_id]).zfill(3)
-                logger.info(f"  Reference timestamp from YAML override: {ref_timestamp}")
+                logger.info(
+                    f"  Reference timestamp from YAML override: {ref_timestamp}"
+                )
                 selection_info["source"] = "yaml_override"
                 selection_info["yaml_path"] = str(yaml_path)
                 selection_info["timestamp"] = ref_timestamp
@@ -203,18 +213,24 @@ def _get_reference_timestamp(
         selection_info["timestamp"] = "000"
         return "000", selection_info
 
-    selection_method = getattr(config, 'reference_selection_method', 'quality_based')
+    selection_method = getattr(config, "reference_selection_method", "quality_based")
     logger.info(f"  Automatic reference selection using method: {selection_method}")
 
     # Build ReferenceSelectionConfig from longitudinal registration config
     ref_selection_config = ReferenceSelectionConfig(
         method=selection_method,
-        quality_metrics=getattr(config, 'reference_selection_metrics', [
-            "snr_foreground", "cnr_high_low", "boundary_gradient_score"
-        ]),
-        prefer_earlier=getattr(config, 'reference_selection_prefer_earlier', True),
-        validate_jacobian=getattr(config, 'reference_selection_validate_jacobian', True),
-        jacobian_log_threshold=getattr(config, 'reference_selection_jacobian_threshold', 0.5)
+        quality_metrics=getattr(
+            config,
+            "reference_selection_metrics",
+            ["snr_foreground", "cnr_high_low", "boundary_gradient_score"],
+        ),
+        prefer_earlier=getattr(config, "reference_selection_prefer_earlier", True),
+        validate_jacobian=getattr(
+            config, "reference_selection_validate_jacobian", True
+        ),
+        jacobian_log_threshold=getattr(
+            config, "reference_selection_jacobian_threshold", 0.5
+        ),
     )
 
     # Create selector
@@ -230,11 +246,13 @@ def _get_reference_timestamp(
         study_output_dirs.append(output_dir)
 
     # Get modalities from orchestrator
-    modalities = orchestrator.config.modalities if orchestrator else ["t1n", "t1c", "t2w", "t2f"]
+    modalities = (
+        orchestrator.config.modalities if orchestrator else ["t1n", "t1c", "t2w", "t2f"]
+    )
 
     # Check for QC metrics file
     qc_metrics_path = None
-    if orchestrator and hasattr(orchestrator, 'qc_manager') and orchestrator.qc_manager:
+    if orchestrator and hasattr(orchestrator, "qc_manager") and orchestrator.qc_manager:
         qc_output_dir = Path(orchestrator.qc_manager.config.output_dir)
         potential_qc_path = qc_output_dir / "qc_metrics_wide.csv"
         if potential_qc_path.exists():
@@ -246,7 +264,7 @@ def _get_reference_timestamp(
             patient_id=patient_id,
             modalities=modalities,
             qc_metrics_path=qc_metrics_path,
-            artifacts_base=artifacts_base
+            artifacts_base=artifacts_base,
         )
 
         selection_info["source"] = "automatic"
@@ -266,9 +284,7 @@ def _get_reference_timestamp(
 
 
 def _determine_registration_mode(
-    config: Any,
-    reference_study_dir: Path,
-    modalities: List[str]
+    config: Any, reference_study_dir: Path, modalities: List[str]
 ) -> tuple:
     """Determine registration mode and reference modality/modalities.
 
@@ -328,7 +344,7 @@ def _execute_single_reference_registration(
     all_study_dirs: List[Path],
     artifacts_base: Path,
     viz_base: Path,
-    results: Dict[str, Any]
+    results: Dict[str, Any],
 ) -> None:
     """Execute single-reference mode: register all modalities to one reference.
 
@@ -345,12 +361,13 @@ def _execute_single_reference_registration(
     """
     # Get or create longitudinal registrator
     registrator = orchestrator._get_component(
-        f"longitudinal_reg_{reference_modality}",
-        config
+        f"longitudinal_reg_{reference_modality}", config
     )
 
     # Get output directory where preprocessed files are located
-    reference_output_dir = _get_study_output_dir(orchestrator, patient_id, reference_study_dir)
+    reference_output_dir = _get_study_output_dir(
+        orchestrator, patient_id, reference_study_dir
+    )
     reference_path = reference_output_dir / f"{reference_modality}.nii.gz"
 
     # Register each non-reference study
@@ -372,7 +389,7 @@ def _execute_single_reference_registration(
                 continue
 
             # Define transform path
-            timestamp = study_dir.name.split('-')[-1]
+            timestamp = study_dir.name.split("-")[-1]
             transform_dir = artifacts_base / "longitudinal_registration"
             transform_dir.mkdir(parents=True, exist_ok=True)
             transform_path = transform_dir / f"{timestamp}_{modality}_to_ref.h5"
@@ -391,7 +408,7 @@ def _execute_single_reference_registration(
                     fixed_path=reference_path,
                     moving_path=moving_path,
                     output_path=moving_path,  # Overwrite in-place
-                    transform_path=transform_path
+                    transform_path=transform_path,
                 )
 
                 results["transforms"][f"{timestamp}_{modality}"] = str(transform_path)
@@ -402,51 +419,71 @@ def _execute_single_reference_registration(
                     try:
                         jacobian_stats = compute_jacobian_statistics(
                             transform_path=transform_path,
-                            reference_image_path=reference_path
+                            reference_image_path=reference_path,
                         )
 
                         # Store Jacobian stats
                         if "jacobian_stats" not in results:
                             results["jacobian_stats"] = {}
-                        results["jacobian_stats"][f"{timestamp}_{modality}"] = jacobian_stats
+                        results["jacobian_stats"][f"{timestamp}_{modality}"] = (
+                            jacobian_stats
+                        )
 
                         # Validate
                         ref_config = ReferenceSelectionConfig(
                             validate_jacobian=True,
-                            jacobian_log_threshold=config.reference_selection_jacobian_threshold
+                            jacobian_log_threshold=config.reference_selection_jacobian_threshold,
                         )
                         is_valid, validation_msg = validate_registration_quality(
                             jacobian_stats, ref_config
                         )
 
                         if is_valid:
-                            logger.debug(f"      ✓ Jacobian validation passed: {validation_msg}")
+                            logger.debug(
+                                f"      ✓ Jacobian validation passed: {validation_msg}"
+                            )
                         else:
-                            logger.warning(f"      ! Jacobian validation warning: {validation_msg}")
+                            logger.warning(
+                                f"      ! Jacobian validation warning: {validation_msg}"
+                            )
 
                     except Exception as jac_err:
-                        logger.warning(f"      ! Jacobian computation failed: {jac_err}")
+                        logger.warning(
+                            f"      ! Jacobian computation failed: {jac_err}"
+                        )
 
                 # Warp skull-strip mask if QC enabled and longitudinal Dice requested
-                if (orchestrator.qc_manager and
-                    orchestrator.qc_manager.config.metrics.mask_plausibility.longitudinal_dice):
-
+                if (
+                    orchestrator.qc_manager
+                    and orchestrator.qc_manager.config.metrics.mask_plausibility.longitudinal_dice
+                ):
                     # Determine mask paths
-                    ref_mask_path = artifacts_base.parent / reference_study_dir.name / f"{modality}_brain_mask.nii.gz"
-                    moving_mask_path = artifacts_base.parent / study_dir.name / f"{modality}_brain_mask.nii.gz"
+                    ref_mask_path = (
+                        artifacts_base.parent
+                        / reference_study_dir.name
+                        / f"{modality}_brain_mask.nii.gz"
+                    )
+                    moving_mask_path = (
+                        artifacts_base.parent
+                        / study_dir.name
+                        / f"{modality}_brain_mask.nii.gz"
+                    )
 
                     if ref_mask_path.exists() and moving_mask_path.exists():
                         # Create warped mask directory
                         warped_mask_dir = transform_dir / "warped_masks"
                         warped_mask_dir.mkdir(parents=True, exist_ok=True)
-                        warped_mask_path = warped_mask_dir / f"{timestamp}_{modality}_mask_warped.nii.gz"
+                        warped_mask_path = (
+                            warped_mask_dir
+                            / f"{timestamp}_{modality}_mask_warped.nii.gz"
+                        )
 
                         try:
                             _warp_mask(
                                 mask_path=moving_mask_path,
                                 transform_path=transform_path,
                                 reference_path=reference_path,
-                                output_path=warped_mask_path
+                                output_path=warped_mask_path,
                             )
 
                             # Store warped mask paths for QC
@@ -454,22 +491,28 @@ def _execute_single_reference_registration(
                                 results["warped_masks"] = {}
                             results["warped_masks"][f"{timestamp}_{modality}"] = {
                                 "ref_mask": ref_mask_path,
-                                "warped_mask": warped_mask_path
+                                "warped_mask": warped_mask_path,
                             }
                             logger.info(f"      ✓ {modality} mask warped for QC")
                         except Exception as e:
-                            logger.warning(f"      ! Failed to warp mask for {modality}: {e}")
+                            logger.warning(
+                                f"      ! Failed to warp mask for {modality}: {e}"
+                            )
 
                 # Generate visualization if enabled
                 if config.save_visualization and pre_registration_path:
                     # Save visualization in study-specific directory to match other steps
-                    viz_output = viz_base / study_dir.name / f"longitudinal_registration_{modality}.png"
+                    viz_output = (
+                        viz_base
+                        / study_dir.name
+                        / f"longitudinal_registration_{modality}.png"
+                    )
                     viz_output.parent.mkdir(parents=True, exist_ok=True)
                     registrator.visualize(
                         reference_path=reference_path,
                         pre_registration_path=pre_registration_path,
                         post_registration_path=moving_path,
-                        output_path=viz_output
+                        output_path=viz_output,
                     )
 
             except Exception as e:
@@ -492,7 +535,7 @@ def _execute_per_modality_registration(
     all_study_dirs: List[Path],
     artifacts_base: Path,
     viz_base: Path,
-    results: Dict[str, Any]
+    results: Dict[str, Any],
 ) -> None:
     """Execute per-modality mode: register each modality type independently.
 
@@ -508,13 +551,12 @@ def _execute_per_modality_registration(
         results: Results dictionary to update
     """
     # Get or create longitudinal registrator
-    registrator = orchestrator._get_component(
-        f"longitudinal_reg_{patient_id}",
-        config
-    )
+    registrator = orchestrator._get_component(f"longitudinal_reg_{patient_id}", config)
 
     # Get output directory where preprocessed files are located
-    reference_output_dir = _get_study_output_dir(orchestrator, patient_id, reference_study_dir)
+    reference_output_dir = _get_study_output_dir(
+        orchestrator, patient_id, reference_study_dir
+    )
 
     # Track which studies have been registered (at least one modality succeeded)
     registered_studies_set = set()
@@ -535,7 +577,9 @@ def _execute_per_modality_registration(
                 continue  # Skip reference study
 
             # Get output directory
-            study_output_dir = _get_study_output_dir(orchestrator, patient_id, study_dir)
+            study_output_dir = _get_study_output_dir(
+                orchestrator, patient_id, study_dir
+            )
             moving_path = study_output_dir / f"{modality}.nii.gz"
 
             if not moving_path.exists():
@@ -543,10 +587,12 @@ def _execute_per_modality_registration(
                 continue
 
             # Define transform path
-            timestamp = study_dir.name.split('-')[-1]
+            timestamp = study_dir.name.split("-")[-1]
             transform_dir = artifacts_base / "longitudinal_registration"
             transform_dir.mkdir(parents=True, exist_ok=True)
-            transform_path = transform_dir / f"{timestamp}_{modality}_to_ref_{modality}.h5"
+            transform_path = (
+                transform_dir / f"{timestamp}_{modality}_to_ref_{modality}.h5"
+            )
 
             # Save pre-registration image for visualization
             pre_registration_path = None
@@ -562,7 +608,7 @@ def _execute_per_modality_registration(
                     fixed_path=reference_path,
                     moving_path=moving_path,
                     output_path=moving_path,  # Overwrite in-place
-                    transform_path=transform_path
+                    transform_path=transform_path,
                 )
 
                 results["transforms"][f"{timestamp}_{modality}"] = str(transform_path)
@@ -576,51 +622,71 @@ def _execute_per_modality_registration(
                     try:
                         jacobian_stats = compute_jacobian_statistics(
                             transform_path=transform_path,
-                            reference_image_path=reference_path
+                            reference_image_path=reference_path,
                         )
 
                         # Store Jacobian stats
                         if "jacobian_stats" not in results:
                             results["jacobian_stats"] = {}
-                        results["jacobian_stats"][f"{timestamp}_{modality}"] = jacobian_stats
+                        results["jacobian_stats"][f"{timestamp}_{modality}"] = (
+                            jacobian_stats
+                        )
 
                         # Validate
                         ref_config = ReferenceSelectionConfig(
                             validate_jacobian=True,
-                            jacobian_log_threshold=config.reference_selection_jacobian_threshold
+                            jacobian_log_threshold=config.reference_selection_jacobian_threshold,
                         )
                         is_valid, validation_msg = validate_registration_quality(
                             jacobian_stats, ref_config
                         )
 
                         if is_valid:
-                            logger.debug(f"      ✓ Jacobian validation passed: {validation_msg}")
+                            logger.debug(
+                                f"      ✓ Jacobian validation passed: {validation_msg}"
+                            )
                         else:
-                            logger.warning(f"      ! Jacobian validation warning: {validation_msg}")
+                            logger.warning(
+                                f"      ! Jacobian validation warning: {validation_msg}"
+                            )
 
                     except Exception as jac_err:
-                        logger.warning(f"      ! Jacobian computation failed: {jac_err}")
+                        logger.warning(
+                            f"      ! Jacobian computation failed: {jac_err}"
+                        )
 
                 # Warp skull-strip mask if QC enabled and longitudinal Dice requested
-                if (orchestrator.qc_manager and
-                    orchestrator.qc_manager.config.metrics.mask_plausibility.longitudinal_dice):
-
+                if (
+                    orchestrator.qc_manager
+                    and orchestrator.qc_manager.config.metrics.mask_plausibility.longitudinal_dice
+                ):
                     # Determine mask paths
-                    ref_mask_path = artifacts_base.parent / reference_study_dir.name / f"{modality}_brain_mask.nii.gz"
-                    moving_mask_path = artifacts_base.parent / study_dir.name / f"{modality}_brain_mask.nii.gz"
+                    ref_mask_path = (
+                        artifacts_base.parent
+                        / reference_study_dir.name
+                        / f"{modality}_brain_mask.nii.gz"
+                    )
+                    moving_mask_path = (
+                        artifacts_base.parent
+                        / study_dir.name
+                        / f"{modality}_brain_mask.nii.gz"
+                    )
 
                     if ref_mask_path.exists() and moving_mask_path.exists():
                         # Create warped mask directory
                         warped_mask_dir = transform_dir / "warped_masks"
                         warped_mask_dir.mkdir(parents=True, exist_ok=True)
-                        warped_mask_path = warped_mask_dir / f"{timestamp}_{modality}_mask_warped.nii.gz"
+                        warped_mask_path = (
+                            warped_mask_dir
+                            / f"{timestamp}_{modality}_mask_warped.nii.gz"
+                        )
 
                         try:
                             _warp_mask(
                                 mask_path=moving_mask_path,
                                 transform_path=transform_path,
                                 reference_path=reference_path,
-                                output_path=warped_mask_path
+                                output_path=warped_mask_path,
                             )
 
                             # Store warped mask paths for QC
@@ -628,22 +694,28 @@ def _execute_per_modality_registration(
                                 results["warped_masks"] = {}
                             results["warped_masks"][f"{timestamp}_{modality}"] = {
                                 "ref_mask": ref_mask_path,
-                                "warped_mask": warped_mask_path
+                                "warped_mask": warped_mask_path,
                             }
                             logger.info(f"      ✓ {modality} mask warped for QC")
                         except Exception as e:
-                            logger.warning(f"      ! Failed to warp mask for {modality}: {e}")
+                            logger.warning(
+                                f"      ! Failed to warp mask for {modality}: {e}"
+                            )
 
                 # Generate visualization if enabled
                 if config.save_visualization and pre_registration_path:
                     # Save visualization in study-specific directory to match other steps
-                    viz_output = viz_base / study_dir.name / f"longitudinal_registration_{modality}.png"
+                    viz_output = (
+                        viz_base
+                        / study_dir.name
+                        / f"longitudinal_registration_{modality}.png"
+                    )
                     viz_output.parent.mkdir(parents=True, exist_ok=True)
                     registrator.visualize(
                         reference_path=reference_path,
                         pre_registration_path=pre_registration_path,
                         post_registration_path=moving_path,
-                        output_path=viz_output
+                        output_path=viz_output,
                     )
 
             except Exception as e:
@@ -676,32 +748,30 @@ def _get_study_output_dir(orchestrator: Any, patient_id: str, study_dir: Path) -
 
 
 def _warp_mask(
-    mask_path: Path,
-    transform_path: Path,
-    reference_path: Path,
-    output_path: Path
+    mask_path: Path, transform_path: Path, reference_path: Path, output_path: Path
 ) -> None:
     """Warp binary mask using computed transform.
 
     Uses nearest neighbor interpolation to preserve binary values.
+    Uses ANTsPy for transform application since the transforms are saved
+    in ANTs-native .h5 format (not compatible with SimpleITK).
 
     Args:
         mask_path: Path to moving mask
-        transform_path: Path to transform file (.h5)
+        transform_path: Path to transform file (.h5 or .mat)
         reference_path: Path to reference image
         output_path: Path to save warped mask
     """
-    import SimpleITK as sitk
+    import ants
 
-    mask = sitk.ReadImage(str(mask_path))
-    reference = sitk.ReadImage(str(reference_path))
-    transform = sitk.ReadTransform(str(transform_path))
+    mask = ants.image_read(str(mask_path))
+    reference = ants.image_read(str(reference_path))
 
-    resampler = sitk.ResampleImageFilter()
-    resampler.SetReferenceImage(reference)
-    resampler.SetTransform(transform)
-    resampler.SetInterpolator(sitk.sitkNearestNeighbor)
-    resampler.SetDefaultPixelValue(0)
+    warped = ants.apply_transforms(
+        fixed=reference,
+        moving=mask,
+        transformlist=[str(transform_path)],
+        interpolator="nearestNeighbor",
+    )
 
-    warped_mask = resampler.Execute(mask)
-    sitk.WriteImage(warped_mask, str(output_path))
+    ants.image_write(warped, str(output_path))

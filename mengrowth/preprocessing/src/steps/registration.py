@@ -5,6 +5,7 @@ This is a study-level step that operates on all modalities together:
 2. Intra-study to atlas registration (optional)
 """
 
+import shutil
 from typing import Dict, Any
 from pathlib import Path
 import logging
