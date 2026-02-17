@@ -4,8 +4,8 @@ preprocessing:
           "bias_field_correction",
           "resampling",
           "cubic_padding",
-          "registration_static",
           "skull_stripping",
+          "registration_static",
           "intensity_normalization",
           "longitudinal_registration"
           ]
@@ -19,8 +19,8 @@ preprocessing:
 
     # I/O mode
     mode: "test"                       # "test" | "pipeline"
-    dataset_root: "/mnt/home/users/tic_163_uma/mpascual/fscratch/datasets/meningiomas/MenGrowth-2025"
-    output_root: "/mnt/home/users/tic_163_uma/mpascual/fscratch/datasets/meningiomas/MenGrowth-2025/preprocessed"     # used in test mode
+    dataset_root: "/mnt/home/users/tic_163_uma/mpascual/fscratch/datasets/meningiomas/dataset/MenGrowth-2025"
+    output_root: "/mnt/home/users/tic_163_uma/mpascual/fscratch/datasets/meningiomas/dataset/preprocessed"     # used in test mode
     preprocessing_artifacts_path: "/mnt/home/users/tic_163_uma/mpascual/execs/mengrowth-dataset/artifacts"  # intermediate artifacts
     viz_root: "/mnt/home/users/tic_163_uma/mpascual/execs/mengrowth-dataset/viz"              # quick-looks for both modes
     overwrite: true                                                   # guard rails
@@ -710,7 +710,7 @@ preprocessing:
   quality_analysis:
     # Input directory: Point this to your PREPROCESSED data output
     # If mode="test", use output_root. If mode="pipeline", use dataset_root.
-    input_dir: "/mnt/home/users/tic_163_uma/mpascual/fscratch/datasets/meningiomas/MenGrowth-2025/preprocessed"
+    input_dir: "/mnt/home/users/tic_163_uma/mpascual/fscratch/datasets/meningiomas/dataset/preprocessed"
     
     # Output directory for QA reports and plots
     output_dir: "/mnt/home/users/tic_163_uma/mpascual/execs/mengrowth-dataset/qa_reports"

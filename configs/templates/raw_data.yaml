@@ -188,7 +188,7 @@ raw_data:
 
     # Maximum number of missing sequences allowed per study
     # Example: if 1, studies can be missing at most 1 sequence from the required list
-    allowed_missing_sequences_per_study: 1
+    allowed_missing_sequences_per_study: 0
 
     # Minimum number of longitudinal studies required per patient
     # Patients with fewer studies will be removed entirely
