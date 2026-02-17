@@ -1,0 +1,12 @@
+segmentation:
+  input_root: "/mnt/home/users/tic_163_uma/mpascual/fscratch/datasets/meningiomas/dataset/preprocessed"
+  sif_path: "/mnt/home/users/tic_163_uma/mpascual/fscratch/singularity_images/brats25_men_qing_latest.sif"
+  docker_image: "brainles/brats25_men_qing:latest"
+  modalities: ["t1c", "t1n", "t2w", "t2f"]
+  expected_shape: [240, 240, 155]
+  shape_tolerance: 2
+  skip_incomplete: true
+  output_filename: "seg.nii.gz"
+  work_dir: ""
+  brats_name_schema: "BraTS-MEN-{:05d}-000"
+  log_dir: "/mnt/home/users/tic_163_uma/mpascual/execs/mengrowth-dataset/logs"

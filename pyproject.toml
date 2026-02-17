@@ -72,11 +72,10 @@ mengrowth-analyze-dataset = "mengrowth.cli.analyze_dataset:main"
 mengrowth-visualize-analysis = "mengrowth.cli.visualize_analysis:main"
 mengrowth-curate-dataset = "mengrowth.cli.curate_dataset:main"
 mengrowth-preprocess = "mengrowth.cli.preprocess:main"
+mengrowth-segment = "mengrowth.cli.segment:main"
 
-[tool.setuptools]
-packages = [
-    "mengrowth"
-]
+[tool.setuptools.packages.find]
+include = ["mengrowth*"]
 
 [tool.setuptools.package-data]
 mengrowth = ["py.typed"]
