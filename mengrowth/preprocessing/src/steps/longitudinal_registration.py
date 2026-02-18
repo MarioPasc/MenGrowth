@@ -222,7 +222,14 @@ def _get_reference_timestamp(
         quality_metrics=getattr(
             config,
             "reference_selection_metrics",
-            ["snr_foreground", "cnr_high_low", "boundary_gradient_score"],
+            [
+                "snr_foreground",
+                "cnr_high_low",
+                "boundary_gradient_score",
+                "brain_coverage_fraction",
+                "laplacian_sharpness",
+                "ghosting_score",
+            ],
         ),
         prefer_earlier=getattr(config, "reference_selection_prefer_earlier", True),
         validate_jacobian=getattr(

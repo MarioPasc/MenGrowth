@@ -17,7 +17,9 @@ import logging
 import nibabel as nib
 import numpy as np
 
-from intensity_normalization.normalizers.individual.fcm import FCMNormalizer as FCMNormalize
+from intensity_normalization.normalizers.individual.fcm import (
+    FCMNormalizer as FCMNormalize,
+)
 from intensity_normalization.domain.models import TissueType
 
 from mengrowth.preprocessing.src.normalization.base import BaseNormalizer
@@ -47,8 +49,7 @@ def tissue_type_str_to_enum(tissue_str: str) -> TissueType:
     tissue_lower = tissue_str.lower()
     if tissue_lower not in tissue_map:
         raise ValueError(
-            f"Unsupported tissue type: {tissue_str}. "
-            f"Must be one of: WM, GM, CSF"
+            f"Unsupported tissue type: {tissue_str}. Must be one of: WM, GM, CSF"
         )
 
     return tissue_map[tissue_lower]
@@ -64,11 +65,7 @@ class FCMNormalizer(BaseNormalizer):
     This uses the intensity-normalization package's FCMNormalizer.
     """
 
-    def __init__(
-        self,
-        config: Dict[str, Any],
-        verbose: bool = False
-    ) -> None:
+    def __init__(self, config: Dict[str, Any], verbose: bool = False) -> None:
         """Initialize FCM normalizer.
 
         Args:
@@ -80,10 +77,7 @@ class FCMNormalizer(BaseNormalizer):
                 - fuzziness: Cluster membership fuzziness parameter (default=2.0)
             verbose: Enable verbose logging
         """
-        super().__init__(
-            config=config,
-            verbose=verbose
-        )
+        super().__init__(config=config, verbose=verbose)
 
         # Extract parameters with defaults
         self.n_clusters = config.get("n_clusters", 3)
@@ -109,9 +103,7 @@ class FCMNormalizer(BaseNormalizer):
             )
 
         if not 1.0 < self.fuzziness <= 10.0:
-            raise ValueError(
-                f"fuzziness must be in (1.0, 10.0], got {self.fuzziness}"
-            )
+            raise ValueError(f"fuzziness must be in (1.0, 10.0], got {self.fuzziness}")
 
         self.logger.info(
             f"Initialized FCMNormalizer: n_clusters={self.n_clusters}, "
@@ -120,10 +112,7 @@ class FCMNormalizer(BaseNormalizer):
         )
 
     def execute(
-        self,
-        input_path: Path,
-        output_path: Path,
-        **kwargs: Any
+        self, input_path: Path, output_path: Path, **kwargs: Any
     ) -> Dict[str, Any]:
         """Execute FCM-based normalization using intensity-normalization package.
 
@@ -164,7 +153,9 @@ class FCMNormalizer(BaseNormalizer):
             self.logger.debug(f"Loading image: {input_path}")
             input_img = nib.load(str(input_path))
 
-            input_img.get_data = input_img.get_fdata  # For compatibility with older nibabel versions
+            input_img.get_data = (
+                input_img.get_fdata
+            )  # For compatibility with older nibabel versions
             input_img.with_data = lambda data: nib.Nifti1Image(data, input_img.affine)
 
             input_data = input_img.get_fdata()
@@ -185,7 +176,27 @@ class FCMNormalizer(BaseNormalizer):
                     brain_mask_arr.astype(np.uint8), input_img.affine
                 )
                 mask_source = "nonzero_fallback"
-                self.logger.info("No brain mask provided, using nonzero voxels as fallback")
+                self.logger.info(
+                    "No brain mask provided, using nonzero voxels as fallback"
+                )
+
+            # Defensive shape check: resample mask if shape doesn't match image
+            if brain_mask_arr.shape != input_data.shape:
+                self.logger.warning(
+                    f"Brain mask shape {brain_mask_arr.shape} != image shape {input_data.shape}, resampling mask"
+                )
+                from scipy.ndimage import zoom
+
+                factors = tuple(
+                    s_i / s_m
+                    for s_i, s_m in zip(input_data.shape, brain_mask_arr.shape)
+                )
+                brain_mask_arr = (
+                    zoom(brain_mask_arr.astype(np.float32), factors, order=3) > 0.5
+                )
+                brain_mask_nib = nib.Nifti1Image(
+                    brain_mask_arr.astype(np.uint8), input_img.affine
+                )
 
             # Compatibility shim for older nibabel API used by intensity_normalization package
             brain_mask_nib.get_data = brain_mask_nib.get_fdata
@@ -199,13 +210,15 @@ class FCMNormalizer(BaseNormalizer):
             )
 
             # Apply FCM normalization using intensity-normalization package
-            self.logger.info("Applying FCM normalization using intensity-normalization package...")
+            self.logger.info(
+                "Applying FCM normalization using intensity-normalization package..."
+            )
             normalizer = FCMNormalize(
                 n_clusters=self.n_clusters,
                 tissue_type=self.tissue_type,
                 max_iter=self.max_iter,
                 error_threshold=self.error_threshold,
-                fuzziness=self.fuzziness
+                fuzziness=self.fuzziness,
             )
             modality = infer_modality_from_filename(str(input_path))
             self.logger.info(f"Inferred modality: {modality}, input: {input_path}")
@@ -214,7 +227,7 @@ class FCMNormalizer(BaseNormalizer):
             normalized_result = normalizer(input_img, mask=brain_mask_nib)
 
             # Extract data from result
-            if hasattr(normalized_result, 'get_fdata'):
+            if hasattr(normalized_result, "get_fdata"):
                 normalized_data = normalized_result.get_fdata()
             elif isinstance(normalized_result, np.ndarray):
                 normalized_data = normalized_result
@@ -226,7 +239,10 @@ class FCMNormalizer(BaseNormalizer):
 
             # Store normalized range (brain voxels only)
             brain_normalized = normalized_data[brain_mask_arr]
-            normalized_range = [float(brain_normalized.min()), float(brain_normalized.max())]
+            normalized_range = [
+                float(brain_normalized.min()),
+                float(brain_normalized.max()),
+            ]
 
             self.logger.info(
                 f"Original range: [{original_range[0]:.3f}, {original_range[1]:.3f}]"
@@ -237,7 +253,9 @@ class FCMNormalizer(BaseNormalizer):
 
             # Save normalized image
             self.logger.debug(f"Saving normalized image: {output_path}")
-            nib.Nifti1Image(normalized_data, input_img.affine).to_filename(str(output_path))
+            nib.Nifti1Image(normalized_data, input_img.affine).to_filename(
+                str(output_path)
+            )
 
             self.logger.info("FCM normalization complete")
 
@@ -260,11 +278,7 @@ class FCMNormalizer(BaseNormalizer):
             raise RuntimeError(f"Normalization failed: {e}") from e
 
     def visualize(
-        self,
-        before_path: Path,
-        after_path: Path,
-        output_path: Path,
-        **kwargs: Any
+        self, before_path: Path, after_path: Path, output_path: Path, **kwargs: Any
     ) -> None:
         """Generate visualization comparing before and after normalization.
 
@@ -292,7 +306,8 @@ class FCMNormalizer(BaseNormalizer):
             RuntimeError: If visualization generation fails
         """
         import matplotlib
-        matplotlib.use('Agg')
+
+        matplotlib.use("Agg")
         import matplotlib.pyplot as plt
 
         n_clusters = kwargs.get("n_clusters", self.n_clusters)
@@ -310,13 +325,12 @@ class FCMNormalizer(BaseNormalizer):
             # Load images
             before_img = nib.load(str(before_path))
             after_img = nib.load(str(after_path))
-            
 
             if type(before_img) is not np.ndarray:
                 before_data = before_img.get_fdata()
             else:
                 before_data = before_img
-            
+
             if type(after_img) is not np.ndarray:
                 after_data = after_img.get_fdata()
             else:
@@ -341,9 +355,7 @@ class FCMNormalizer(BaseNormalizer):
             # Create figure: 2 rows x 4 columns (3 views + 1 histogram per row)
             fig, axes = plt.subplots(2, 4, figsize=(20, 10))
             fig.suptitle(
-                f'FCM Normalization: {before_path.stem}',
-                fontsize=16,
-                fontweight='bold'
+                f"FCM Normalization: {before_path.stem}", fontsize=16, fontweight="bold"
             )
 
             # Row 1: Original image
@@ -351,24 +363,49 @@ class FCMNormalizer(BaseNormalizer):
             vmin_before = before_data.min()
             vmax_before = before_data.max()
 
-            axes[0, 0].imshow(axial_before, cmap='gray', origin='lower', vmin=vmin_before, vmax=vmax_before)
-            axes[0, 0].set_title('Original - Axial', fontsize=12)
-            axes[0, 0].axis('off')
+            axes[0, 0].imshow(
+                axial_before,
+                cmap="gray",
+                origin="lower",
+                vmin=vmin_before,
+                vmax=vmax_before,
+            )
+            axes[0, 0].set_title("Original - Axial", fontsize=12)
+            axes[0, 0].axis("off")
 
-            axes[0, 1].imshow(sagittal_before, cmap='gray', origin='lower', vmin=vmin_before, vmax=vmax_before)
-            axes[0, 1].set_title('Original - Sagittal', fontsize=12)
-            axes[0, 1].axis('off')
+            axes[0, 1].imshow(
+                sagittal_before,
+                cmap="gray",
+                origin="lower",
+                vmin=vmin_before,
+                vmax=vmax_before,
+            )
+            axes[0, 1].set_title("Original - Sagittal", fontsize=12)
+            axes[0, 1].axis("off")
 
-            axes[0, 2].imshow(coronal_before, cmap='gray', origin='lower', vmin=vmin_before, vmax=vmax_before)
-            axes[0, 2].set_title('Original - Coronal', fontsize=12)
-            axes[0, 2].axis('off')
+            axes[0, 2].imshow(
+                coronal_before,
+                cmap="gray",
+                origin="lower",
+                vmin=vmin_before,
+                vmax=vmax_before,
+            )
+            axes[0, 2].set_title("Original - Coronal", fontsize=12)
+            axes[0, 2].axis("off")
 
             # Histogram for original
             before_nonzero = before_data[before_data > 0]
-            axes[0, 3].hist(before_nonzero, bins=100, alpha=0.7, color='blue', density=True, label='Histogram')
-            axes[0, 3].set_xlabel('Intensity', fontsize=10)
-            axes[0, 3].set_ylabel('Density', fontsize=10)
-            axes[0, 3].set_title('Original Histogram', fontsize=12)
+            axes[0, 3].hist(
+                before_nonzero,
+                bins=100,
+                alpha=0.7,
+                color="blue",
+                density=True,
+                label="Histogram",
+            )
+            axes[0, 3].set_xlabel("Intensity", fontsize=10)
+            axes[0, 3].set_ylabel("Density", fontsize=10)
+            axes[0, 3].set_title("Original Histogram", fontsize=12)
             axes[0, 3].legend(fontsize=8)
             axes[0, 3].grid(True, alpha=0.3)
 
@@ -377,24 +414,44 @@ class FCMNormalizer(BaseNormalizer):
             vmin_after = after_data.min()
             vmax_after = after_data.max()
 
-            axes[1, 0].imshow(axial_after, cmap='gray', origin='lower', vmin=vmin_after, vmax=vmax_after)
-            axes[1, 0].set_title('Normalized - Axial', fontsize=12)
-            axes[1, 0].axis('off')
+            axes[1, 0].imshow(
+                axial_after,
+                cmap="gray",
+                origin="lower",
+                vmin=vmin_after,
+                vmax=vmax_after,
+            )
+            axes[1, 0].set_title("Normalized - Axial", fontsize=12)
+            axes[1, 0].axis("off")
 
-            axes[1, 1].imshow(sagittal_after, cmap='gray', origin='lower', vmin=vmin_after, vmax=vmax_after)
-            axes[1, 1].set_title('Normalized - Sagittal', fontsize=12)
-            axes[1, 1].axis('off')
+            axes[1, 1].imshow(
+                sagittal_after,
+                cmap="gray",
+                origin="lower",
+                vmin=vmin_after,
+                vmax=vmax_after,
+            )
+            axes[1, 1].set_title("Normalized - Sagittal", fontsize=12)
+            axes[1, 1].axis("off")
 
-            axes[1, 2].imshow(coronal_after, cmap='gray', origin='lower', vmin=vmin_after, vmax=vmax_after)
-            axes[1, 2].set_title('Normalized - Coronal', fontsize=12)
-            axes[1, 2].axis('off')
+            axes[1, 2].imshow(
+                coronal_after,
+                cmap="gray",
+                origin="lower",
+                vmin=vmin_after,
+                vmax=vmax_after,
+            )
+            axes[1, 2].set_title("Normalized - Coronal", fontsize=12)
+            axes[1, 2].axis("off")
 
             # Histogram for normalized
             after_nonzero = after_data[after_data > vmin_after]
-            axes[1, 3].hist(after_nonzero, bins=100, alpha=0.7, color='purple', density=True)
-            axes[1, 3].set_xlabel('Intensity', fontsize=10)
-            axes[1, 3].set_ylabel('Density', fontsize=10)
-            axes[1, 3].set_title('Normalized Histogram', fontsize=12)
+            axes[1, 3].hist(
+                after_nonzero, bins=100, alpha=0.7, color="purple", density=True
+            )
+            axes[1, 3].set_xlabel("Intensity", fontsize=10)
+            axes[1, 3].set_ylabel("Density", fontsize=10)
+            axes[1, 3].set_title("Normalized Histogram", fontsize=12)
             axes[1, 3].grid(True, alpha=0.3)
 
             # Add metadata text
@@ -411,12 +468,13 @@ class FCMNormalizer(BaseNormalizer):
             )
 
             fig.text(
-                0.5, 0.01,
+                0.5,
+                0.01,
                 metadata_text,
-                ha='center',
+                ha="center",
                 fontsize=10,
-                family='monospace',
-                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5)
+                family="monospace",
+                bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5),
             )
 
             plt.tight_layout(rect=[0, 0.08, 1, 0.98])
@@ -425,7 +483,7 @@ class FCMNormalizer(BaseNormalizer):
             output_path.parent.mkdir(parents=True, exist_ok=True)
 
             # Save figure
-            plt.savefig(output_path, dpi=150, bbox_inches='tight')
+            plt.savefig(output_path, dpi=150, bbox_inches="tight")
             plt.close(fig)
 
             self.logger.info(f"Visualization saved to {output_path}")

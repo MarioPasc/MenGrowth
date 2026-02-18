@@ -239,7 +239,7 @@ preprocessing:
           method: "ants"                                # "ants" | null (null to skip atlas registration)
           engine: "antspyx"                           # Optional: "nipype" (default) | "antspyx" - Registration engine to use
           save_detailed_registration_info: true       # Optional: Per-substep override for detailed diagnostics
-          atlas_path: "/media/hddb/mario/data/meningiomas/mengrowth/templates/T1_brain.nii"  # Path to skull-stripped atlas template
+          atlas_path: "/media/mpascual/PortableSSD/Meningiomas/ATLAS/sri24_spm8/templates/T1.nii"  # Path to full-head atlas template (register full-head, skull-strip after)
 
           # Transform parameters (can specify multiple transforms)
           transforms: ["Rigid", "Affine"]               # List of transforms to apply sequentially
@@ -395,6 +395,9 @@ preprocessing:
             - "snr_foreground"
             - "cnr_high_low"
             - "boundary_gradient_score"
+            - "brain_coverage_fraction"
+            - "laplacian_sharpness"
+            - "ghosting_score"
 
           # Tiebreaker: prefer earlier timestamps when quality scores are equal
           # Rationale: Earlier scans may have less disease progression
@@ -711,7 +714,7 @@ preprocessing:
     # Input directory: Point this to your PREPROCESSED data output
     # If mode="test", use output_root. If mode="pipeline", use dataset_root.
     input_dir: "/media/hddb/mario/results/mengrowth/preprocessed/MenGrowth-2025"
-    
+
     # Output directory for QA reports and plots
     output_dir: "/media/hddb/mario/results/mengrowth/preprocessed/qa_reports"
 

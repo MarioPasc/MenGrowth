@@ -28,7 +28,7 @@ def create_skull_stripped_image(temp_dir, filename="t1c.nii.gz", shape=(64, 64, 
     data = np.zeros(shape, dtype=np.float32)
     # Create a spherical brain region in the center (~15% of voxels)
     center = np.array(shape) // 2
-    coords = np.mgrid[0:shape[0], 0:shape[1], 0:shape[2]]
+    coords = np.mgrid[0 : shape[0], 0 : shape[1], 0 : shape[2]]
     dist = np.sqrt(sum((coords[i] - center[i]) ** 2 for i in range(3)))
     radius = min(shape) * 0.33  # ~15% of voxels in sphere
     brain_mask = dist < radius
@@ -63,8 +63,7 @@ class TestZScoreNormalizer:
 
         normalizer = ZScoreNormalizer(config={"norm_value": 1.0})
         result = normalizer.execute(
-            img_path, output_path,
-            allow_overwrite=True, mask_path=mask_path
+            img_path, output_path, allow_overwrite=True, mask_path=mask_path
         )
 
         # Load result
@@ -75,8 +74,12 @@ class TestZScoreNormalizer:
 
         # Brain voxels should have mean~0 and std~1
         brain_voxels = out_data[brain_mask]
-        assert abs(np.mean(brain_voxels)) < 0.05, f"Mean should be ~0, got {np.mean(brain_voxels):.3f}"
-        assert abs(np.std(brain_voxels) - 1.0) < 0.05, f"Std should be ~1, got {np.std(brain_voxels):.3f}"
+        assert abs(np.mean(brain_voxels)) < 0.05, (
+            f"Mean should be ~0, got {np.mean(brain_voxels):.3f}"
+        )
+        assert abs(np.std(brain_voxels) - 1.0) < 0.05, (
+            f"Std should be ~1, got {np.std(brain_voxels):.3f}"
+        )
 
         # Result should contain brain coverage metrics
         assert "mean" in result
@@ -92,17 +95,22 @@ class TestZScoreNormalizer:
         img_path, mask_path, brain_mask, _ = create_skull_stripped_image(temp_dir)
         output_path = temp_dir / "normalized_clipped.nii.gz"
 
-        normalizer = ZScoreNormalizer(config={"norm_value": 1.0, "clip_range": [-2.0, 2.0]})
+        normalizer = ZScoreNormalizer(
+            config={"norm_value": 1.0, "clip_range": [-2.0, 2.0]}
+        )
         result = normalizer.execute(
-            img_path, output_path,
-            allow_overwrite=True, mask_path=mask_path
+            img_path, output_path, allow_overwrite=True, mask_path=mask_path
         )
 
         out_data = nib.load(str(output_path)).get_fdata()
         brain_voxels = out_data[brain_mask]
 
-        assert brain_voxels.min() >= -2.0, f"Min should be >= -2.0, got {brain_voxels.min():.3f}"
-        assert brain_voxels.max() <= 2.0, f"Max should be <= 2.0, got {brain_voxels.max():.3f}"
+        assert brain_voxels.min() >= -2.0, (
+            f"Min should be >= -2.0, got {brain_voxels.min():.3f}"
+        )
+        assert brain_voxels.max() <= 2.0, (
+            f"Max should be <= 2.0, got {brain_voxels.max():.3f}"
+        )
         assert result["clip_range"] == [-2.0, 2.0]
 
     def test_zscore_invalid_clip_range(self):
@@ -121,15 +129,16 @@ class TestPercentileMinMaxNormalizer:
 
     def test_percentile_minmax_uses_brain_mask(self, temp_dir):
         """Percentiles should be computed on brain voxels only, not on zeros."""
-        from mengrowth.preprocessing.src.normalization.percentile_minmax import PercentileMinMaxNormalizer
+        from mengrowth.preprocessing.src.normalization.percentile_minmax import (
+            PercentileMinMaxNormalizer,
+        )
 
         img_path, mask_path, brain_mask, _ = create_skull_stripped_image(temp_dir)
         output_path = temp_dir / "normalized.nii.gz"
 
         normalizer = PercentileMinMaxNormalizer(config={"p1": 1.0, "p2": 99.0})
         result = normalizer.execute(
-            img_path, output_path,
-            allow_overwrite=True, mask_path=mask_path
+            img_path, output_path, allow_overwrite=True, mask_path=mask_path
         )
 
         # P1 should NOT be 0 (the bug was computing percentiles on all voxels including 85% zeros)
@@ -148,15 +157,18 @@ class TestPercentileMinMaxNormalizer:
 
     def test_percentile_minmax_without_mask_uses_nonzero(self, temp_dir):
         """Without mask_path, should use image > 0 as fallback."""
-        from mengrowth.preprocessing.src.normalization.percentile_minmax import PercentileMinMaxNormalizer
+        from mengrowth.preprocessing.src.normalization.percentile_minmax import (
+            PercentileMinMaxNormalizer,
+        )
 
         img_path, _, brain_mask, _ = create_skull_stripped_image(temp_dir)
         output_path = temp_dir / "normalized.nii.gz"
 
         normalizer = PercentileMinMaxNormalizer(config={"p1": 1.0, "p2": 99.0})
         result = normalizer.execute(
-            img_path, output_path,
-            allow_overwrite=True
+            img_path,
+            output_path,
+            allow_overwrite=True,
             # No mask_path
         )
 
@@ -175,16 +187,17 @@ class TestFCMNormalizer:
         img_path, mask_path, brain_mask, _ = create_skull_stripped_image(temp_dir)
         output_path = temp_dir / "normalized.nii.gz"
 
-        normalizer = FCMNormalizer(config={
-            "n_clusters": 3,
-            "tissue_type": "WM",
-            "max_iter": 50,
-            "error_threshold": 0.005,
-            "fuzziness": 2.0,
-        })
+        normalizer = FCMNormalizer(
+            config={
+                "n_clusters": 3,
+                "tissue_type": "WM",
+                "max_iter": 50,
+                "error_threshold": 0.005,
+                "fuzziness": 2.0,
+            }
+        )
         result = normalizer.execute(
-            img_path, output_path,
-            allow_overwrite=True, mask_path=mask_path
+            img_path, output_path, allow_overwrite=True, mask_path=mask_path
         )
 
         # Check background is zero
@@ -207,7 +220,9 @@ class TestNormalizersReturnBrainCoverage:
         output_path = temp_dir / "out.nii.gz"
 
         normalizer = ZScoreNormalizer(config={"norm_value": 1.0})
-        result = normalizer.execute(img_path, output_path, allow_overwrite=True, mask_path=mask_path)
+        result = normalizer.execute(
+            img_path, output_path, allow_overwrite=True, mask_path=mask_path
+        )
 
         assert isinstance(result["brain_voxel_count"], int)
         assert result["brain_voxel_count"] > 0
@@ -215,13 +230,17 @@ class TestNormalizersReturnBrainCoverage:
         assert abs(result["brain_coverage_percent"] - brain_pct) < 1.0
 
     def test_percentile_minmax_returns_brain_coverage(self, temp_dir):
-        from mengrowth.preprocessing.src.normalization.percentile_minmax import PercentileMinMaxNormalizer
+        from mengrowth.preprocessing.src.normalization.percentile_minmax import (
+            PercentileMinMaxNormalizer,
+        )
 
         img_path, mask_path, _, _ = create_skull_stripped_image(temp_dir)
         output_path = temp_dir / "out.nii.gz"
 
         normalizer = PercentileMinMaxNormalizer(config={"p1": 1.0, "p2": 99.0})
-        result = normalizer.execute(img_path, output_path, allow_overwrite=True, mask_path=mask_path)
+        result = normalizer.execute(
+            img_path, output_path, allow_overwrite=True, mask_path=mask_path
+        )
 
         assert isinstance(result["brain_voxel_count"], int)
         assert result["brain_voxel_count"] > 0
@@ -233,7 +252,9 @@ class TestResolveBrainMaskPath:
 
     def test_resolve_finds_existing_mask(self, temp_dir):
         """Should find mask when it exists in artifacts directory."""
-        from mengrowth.preprocessing.src.steps.intensity_normalization import _resolve_brain_mask_path
+        from mengrowth.preprocessing.src.steps.intensity_normalization import (
+            _resolve_brain_mask_path,
+        )
         from unittest.mock import MagicMock
         from mengrowth.preprocessing.src.config import StepExecutionContext
 
@@ -259,7 +280,9 @@ class TestResolveBrainMaskPath:
 
     def test_resolve_returns_none_when_no_mask(self, temp_dir):
         """Should return None when mask file doesn't exist."""
-        from mengrowth.preprocessing.src.steps.intensity_normalization import _resolve_brain_mask_path
+        from mengrowth.preprocessing.src.steps.intensity_normalization import (
+            _resolve_brain_mask_path,
+        )
         from unittest.mock import MagicMock
         from mengrowth.preprocessing.src.config import StepExecutionContext
 
@@ -289,8 +312,9 @@ class TestMaskFallbackToNonzero:
 
         normalizer = ZScoreNormalizer(config={"norm_value": 1.0})
         result = normalizer.execute(
-            img_path, output_path,
-            allow_overwrite=True
+            img_path,
+            output_path,
+            allow_overwrite=True,
             # No mask_path provided
         )
 
@@ -310,9 +334,10 @@ class TestMaskFallbackToNonzero:
 
         normalizer = ZScoreNormalizer(config={"norm_value": 1.0})
         result = normalizer.execute(
-            img_path, output_path,
+            img_path,
+            output_path,
             allow_overwrite=True,
-            mask_path="/nonexistent/mask.nii.gz"
+            mask_path="/nonexistent/mask.nii.gz",
         )
 
         assert result["mask_source"] == "nonzero_fallback"
@@ -334,13 +359,125 @@ class TestConfigClipRange:
         assert config.clip_range is None
 
     def test_invalid_clip_range_reversed(self):
-        from mengrowth.preprocessing.src.config import IntensityNormalizationConfig, ConfigurationError
+        from mengrowth.preprocessing.src.config import (
+            IntensityNormalizationConfig,
+            ConfigurationError,
+        )
 
         with pytest.raises(ConfigurationError, match="clip_range"):
             IntensityNormalizationConfig(method="zscore", clip_range=[5.0, -5.0])
 
     def test_invalid_clip_range_length(self):
-        from mengrowth.preprocessing.src.config import IntensityNormalizationConfig, ConfigurationError
+        from mengrowth.preprocessing.src.config import (
+            IntensityNormalizationConfig,
+            ConfigurationError,
+        )
 
         with pytest.raises(ConfigurationError, match="clip_range"):
             IntensityNormalizationConfig(method="zscore", clip_range=[1.0])
+
+
+class TestMaskShapeMismatchDefense:
+    """Tests that normalizers handle brain mask shape != image shape via BSpline resampling."""
+
+    def _create_mismatched_image_and_mask(
+        self, temp_dir, img_shape, mask_shape, filename="t1c.nii.gz"
+    ):
+        """Create image and mask with different shapes to simulate atlas registration mismatch."""
+        affine = np.eye(4)
+
+        # Create image with brain region
+        data = np.zeros(img_shape, dtype=np.float32)
+        center = np.array(img_shape) // 2
+        coords = np.mgrid[0 : img_shape[0], 0 : img_shape[1], 0 : img_shape[2]]
+        dist = np.sqrt(sum((coords[i] - center[i]) ** 2 for i in range(3)))
+        radius = min(img_shape) * 0.33
+        brain_region = dist < radius
+        rng = np.random.RandomState(42)
+        data[brain_region] = rng.normal(500, 150, size=int(brain_region.sum())).clip(
+            50, 1200
+        )
+
+        img = nib.Nifti1Image(data, affine)
+        img_path = temp_dir / filename
+        nib.save(img, str(img_path))
+
+        # Create mask at different shape
+        mask_data_full = np.zeros(mask_shape, dtype=np.uint8)
+        mask_center = np.array(mask_shape) // 2
+        mask_coords = np.mgrid[0 : mask_shape[0], 0 : mask_shape[1], 0 : mask_shape[2]]
+        mask_dist = np.sqrt(
+            sum((mask_coords[i] - mask_center[i]) ** 2 for i in range(3))
+        )
+        mask_radius = min(mask_shape) * 0.33
+        mask_data_full[mask_dist < mask_radius] = 1
+
+        mask_img = nib.Nifti1Image(mask_data_full, affine)
+        mask_path = temp_dir / f"{Path(filename).stem.split('.')[0]}_brain_mask.nii.gz"
+        nib.save(mask_img, str(mask_path))
+
+        return img_path, mask_path
+
+    def test_zscore_resamples_mask_on_shape_mismatch(self, temp_dir):
+        """Z-score should resample mask when shapes differ, not crash."""
+        from mengrowth.preprocessing.src.normalization.zscore import ZScoreNormalizer
+
+        img_path, mask_path = self._create_mismatched_image_and_mask(
+            temp_dir, img_shape=(64, 64, 64), mask_shape=(48, 48, 48)
+        )
+        output_path = temp_dir / "normalized.nii.gz"
+
+        normalizer = ZScoreNormalizer(config={"norm_value": 1.0})
+        result = normalizer.execute(
+            img_path, output_path, allow_overwrite=True, mask_path=mask_path
+        )
+
+        out_data = nib.load(str(output_path)).get_fdata()
+        assert out_data.shape == (64, 64, 64), "Output shape should match input image"
+        assert result["mask_source"] == "skull_stripping"
+
+    def test_atlas_shape_scenario(self, temp_dir):
+        """Simulate atlas registration scenario: image (240,240,155), mask (225,225,225)."""
+        from mengrowth.preprocessing.src.normalization.zscore import ZScoreNormalizer
+
+        img_path, mask_path = self._create_mismatched_image_and_mask(
+            temp_dir, img_shape=(240, 240, 155), mask_shape=(225, 225, 225)
+        )
+        output_path = temp_dir / "normalized.nii.gz"
+
+        normalizer = ZScoreNormalizer(config={"norm_value": 1.0})
+        result = normalizer.execute(
+            img_path, output_path, allow_overwrite=True, mask_path=mask_path
+        )
+
+        out_data = nib.load(str(output_path)).get_fdata()
+        assert out_data.shape == (240, 240, 155), (
+            "Output should match atlas-space image shape"
+        )
+
+    def test_mask_resampling_preserves_binary(self, temp_dir):
+        """After BSpline zoom + threshold, mask should be strictly binary."""
+        from scipy.ndimage import zoom
+
+        # Create a binary mask
+        mask = np.zeros((48, 48, 48), dtype=np.float32)
+        center = np.array([24, 24, 24])
+        coords = np.mgrid[0:48, 0:48, 0:48]
+        dist = np.sqrt(sum((coords[i] - center[i]) ** 2 for i in range(3)))
+        mask[dist < 15] = 1.0
+
+        # Resample with BSpline order=3 + threshold
+        factors = (64 / 48, 64 / 48, 64 / 48)
+        resampled = zoom(mask, factors, order=3) > 0.5
+
+        # Check binary
+        unique_values = np.unique(resampled)
+        assert set(unique_values).issubset({True, False}), (
+            f"Mask should be binary, got {unique_values}"
+        )
+        assert resampled.shape == (64, 64, 64)
+        # Should have some True values (brain) and some False (background)
+        assert resampled.sum() > 0, "Resampled mask should have some True voxels"
+        assert resampled.sum() < resampled.size, (
+            "Resampled mask should have some False voxels"
+        )

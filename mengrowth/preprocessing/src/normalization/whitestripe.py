@@ -12,14 +12,15 @@ Reference:
 """
 
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 import logging
 
 import nibabel as nib
 import numpy as np
-from scipy import stats
 
-from intensity_normalization.normalizers.individual.whitestripe import WhiteStripeNormalizer as WSNormalize
+from intensity_normalization.normalizers.individual.whitestripe import (
+    WhiteStripeNormalizer as WSNormalize,
+)
 
 from mengrowth.preprocessing.src.normalization.base import BaseNormalizer
 from mengrowth.preprocessing.src.normalization.utils import infer_modality_from_filename
@@ -37,11 +38,7 @@ class WhiteStripeNormalizer(BaseNormalizer):
     This uses the intensity-normalization package's WhiteStripeNormalizer.
     """
 
-    def __init__(
-        self,
-        config: Dict[str, Any],
-        verbose: bool = False
-    ) -> None:
+    def __init__(self, config: Dict[str, Any], verbose: bool = False) -> None:
         """Initialize WhiteStripe normalizer.
 
         Args:
@@ -51,10 +48,7 @@ class WhiteStripeNormalizer(BaseNormalizer):
                 - width_u: Optional upper bound width override (default=None)
             verbose: Enable verbose logging
         """
-        super().__init__(
-            config=config,
-            verbose=verbose
-        )
+        super().__init__(config=config, verbose=verbose)
 
         # Extract parameters with defaults
         self.width = config.get("width", 0.05)
@@ -77,10 +71,7 @@ class WhiteStripeNormalizer(BaseNormalizer):
         )
 
     def execute(
-        self,
-        input_path: Path,
-        output_path: Path,
-        **kwargs: Any
+        self, input_path: Path, output_path: Path, **kwargs: Any
     ) -> Dict[str, Any]:
         """Execute WhiteStripe normalization using intensity-normalization package.
 
@@ -118,7 +109,9 @@ class WhiteStripeNormalizer(BaseNormalizer):
             # Load NIfTI with nibabel
             self.logger.debug(f"Loading image: {input_path}")
             input_img = nib.load(str(input_path))
-            input_img.get_data = input_img.get_fdata  # For compatibility with older nibabel versions
+            input_img.get_data = (
+                input_img.get_fdata
+            )  # For compatibility with older nibabel versions
             input_img.with_data = lambda data: nib.Nifti1Image(data, input_img.affine)
             input_data = input_img.get_fdata()
 
@@ -138,7 +131,27 @@ class WhiteStripeNormalizer(BaseNormalizer):
                     brain_mask_arr.astype(np.uint8), input_img.affine
                 )
                 mask_source = "nonzero_fallback"
-                self.logger.info("No brain mask provided, using nonzero voxels as fallback")
+                self.logger.info(
+                    "No brain mask provided, using nonzero voxels as fallback"
+                )
+
+            # Defensive shape check: resample mask if shape doesn't match image
+            if brain_mask_arr.shape != input_data.shape:
+                self.logger.warning(
+                    f"Brain mask shape {brain_mask_arr.shape} != image shape {input_data.shape}, resampling mask"
+                )
+                from scipy.ndimage import zoom
+
+                factors = tuple(
+                    s_i / s_m
+                    for s_i, s_m in zip(input_data.shape, brain_mask_arr.shape)
+                )
+                brain_mask_arr = (
+                    zoom(brain_mask_arr.astype(np.float32), factors, order=3) > 0.5
+                )
+                brain_mask_nib = nib.Nifti1Image(
+                    brain_mask_arr.astype(np.uint8), input_img.affine
+                )
 
             # Compatibility shim for older nibabel API used by intensity_normalization package
             brain_mask_nib.get_data = brain_mask_nib.get_fdata
@@ -152,7 +165,9 @@ class WhiteStripeNormalizer(BaseNormalizer):
             )
 
             # Apply WhiteStripe normalization using intensity-normalization package
-            self.logger.info("Applying WhiteStripe normalization using intensity-normalization package...")
+            self.logger.info(
+                "Applying WhiteStripe normalization using intensity-normalization package..."
+            )
             modality = infer_modality_from_filename(input_path)
             self.logger.info(f"Inferred modality: {modality}, input: {input_path}")
             normalizer = WSNormalize(
@@ -163,7 +178,7 @@ class WhiteStripeNormalizer(BaseNormalizer):
             normalized_data = normalizer(input_img, mask=brain_mask_nib)
 
             # Extract data from result
-            if hasattr(normalized_data, 'get_fdata'):
+            if hasattr(normalized_data, "get_fdata"):
                 normalized_data = normalized_data.get_fdata()
 
             # Ensure background is zero
@@ -171,7 +186,10 @@ class WhiteStripeNormalizer(BaseNormalizer):
 
             # Store normalized range (brain voxels only)
             brain_normalized = normalized_data[brain_mask_arr]
-            normalized_range = [float(brain_normalized.min()), float(brain_normalized.max())]
+            normalized_range = [
+                float(brain_normalized.min()),
+                float(brain_normalized.max()),
+            ]
 
             self.logger.info(
                 f"Original range: [{original_range[0]:.3f}, {original_range[1]:.3f}]"
@@ -182,7 +200,9 @@ class WhiteStripeNormalizer(BaseNormalizer):
 
             # Save normalized image
             self.logger.debug(f"Saving normalized image: {output_path}")
-            nib.Nifti1Image(normalized_data, input_img.affine).to_filename(str(output_path))
+            nib.Nifti1Image(normalized_data, input_img.affine).to_filename(
+                str(output_path)
+            )
 
             self.logger.info("WhiteStripe normalization complete")
 
@@ -203,11 +223,7 @@ class WhiteStripeNormalizer(BaseNormalizer):
             raise RuntimeError(f"Normalization failed: {e}") from e
 
     def visualize(
-        self,
-        before_path: Path,
-        after_path: Path,
-        output_path: Path,
-        **kwargs: Any
+        self, before_path: Path, after_path: Path, output_path: Path, **kwargs: Any
     ) -> None:
         """Generate visualization comparing before and after normalization.
 
@@ -233,7 +249,8 @@ class WhiteStripeNormalizer(BaseNormalizer):
             RuntimeError: If visualization generation fails
         """
         import matplotlib
-        matplotlib.use('Agg')
+
+        matplotlib.use("Agg")
         import matplotlib.pyplot as plt
 
         width = kwargs.get("width", self.width)
@@ -272,9 +289,9 @@ class WhiteStripeNormalizer(BaseNormalizer):
             # Create figure: 2 rows x 4 columns (3 views + 1 histogram per row)
             fig, axes = plt.subplots(2, 4, figsize=(20, 10))
             fig.suptitle(
-                f'WhiteStripe Normalization: {before_path.stem}',
+                f"WhiteStripe Normalization: {before_path.stem}",
                 fontsize=16,
-                fontweight='bold'
+                fontweight="bold",
             )
 
             # Row 1: Original image
@@ -282,24 +299,49 @@ class WhiteStripeNormalizer(BaseNormalizer):
             vmin_before = before_data.min()
             vmax_before = before_data.max()
 
-            axes[0, 0].imshow(axial_before, cmap='gray', origin='lower', vmin=vmin_before, vmax=vmax_before)
-            axes[0, 0].set_title('Original - Axial', fontsize=12)
-            axes[0, 0].axis('off')
+            axes[0, 0].imshow(
+                axial_before,
+                cmap="gray",
+                origin="lower",
+                vmin=vmin_before,
+                vmax=vmax_before,
+            )
+            axes[0, 0].set_title("Original - Axial", fontsize=12)
+            axes[0, 0].axis("off")
 
-            axes[0, 1].imshow(sagittal_before, cmap='gray', origin='lower', vmin=vmin_before, vmax=vmax_before)
-            axes[0, 1].set_title('Original - Sagittal', fontsize=12)
-            axes[0, 1].axis('off')
+            axes[0, 1].imshow(
+                sagittal_before,
+                cmap="gray",
+                origin="lower",
+                vmin=vmin_before,
+                vmax=vmax_before,
+            )
+            axes[0, 1].set_title("Original - Sagittal", fontsize=12)
+            axes[0, 1].axis("off")
 
-            axes[0, 2].imshow(coronal_before, cmap='gray', origin='lower', vmin=vmin_before, vmax=vmax_before)
-            axes[0, 2].set_title('Original - Coronal', fontsize=12)
-            axes[0, 2].axis('off')
+            axes[0, 2].imshow(
+                coronal_before,
+                cmap="gray",
+                origin="lower",
+                vmin=vmin_before,
+                vmax=vmax_before,
+            )
+            axes[0, 2].set_title("Original - Coronal", fontsize=12)
+            axes[0, 2].axis("off")
 
             # Histogram for original
             before_nonzero = before_data[before_data > 0]
-            axes[0, 3].hist(before_nonzero, bins=100, alpha=0.7, color='blue', density=True, label='Histogram')
-            axes[0, 3].set_xlabel('Intensity', fontsize=10)
-            axes[0, 3].set_ylabel('Density', fontsize=10)
-            axes[0, 3].set_title('Original Histogram', fontsize=12)
+            axes[0, 3].hist(
+                before_nonzero,
+                bins=100,
+                alpha=0.7,
+                color="blue",
+                density=True,
+                label="Histogram",
+            )
+            axes[0, 3].set_xlabel("Intensity", fontsize=10)
+            axes[0, 3].set_ylabel("Density", fontsize=10)
+            axes[0, 3].set_title("Original Histogram", fontsize=12)
             axes[0, 3].legend(fontsize=8)
             axes[0, 3].grid(True, alpha=0.3)
 
@@ -308,25 +350,47 @@ class WhiteStripeNormalizer(BaseNormalizer):
             vmin_after = after_data.min()
             vmax_after = after_data.max()
 
-            axes[1, 0].imshow(axial_after, cmap='gray', origin='lower', vmin=vmin_after, vmax=vmax_after)
-            axes[1, 0].set_title('Normalized - Axial', fontsize=12)
-            axes[1, 0].axis('off')
+            axes[1, 0].imshow(
+                axial_after,
+                cmap="gray",
+                origin="lower",
+                vmin=vmin_after,
+                vmax=vmax_after,
+            )
+            axes[1, 0].set_title("Normalized - Axial", fontsize=12)
+            axes[1, 0].axis("off")
 
-            axes[1, 1].imshow(sagittal_after, cmap='gray', origin='lower', vmin=vmin_after, vmax=vmax_after)
-            axes[1, 1].set_title('Normalized - Sagittal', fontsize=12)
-            axes[1, 1].axis('off')
+            axes[1, 1].imshow(
+                sagittal_after,
+                cmap="gray",
+                origin="lower",
+                vmin=vmin_after,
+                vmax=vmax_after,
+            )
+            axes[1, 1].set_title("Normalized - Sagittal", fontsize=12)
+            axes[1, 1].axis("off")
 
-            axes[1, 2].imshow(coronal_after, cmap='gray', origin='lower', vmin=vmin_after, vmax=vmax_after)
-            axes[1, 2].set_title('Normalized - Coronal', fontsize=12)
-            axes[1, 2].axis('off')
+            axes[1, 2].imshow(
+                coronal_after,
+                cmap="gray",
+                origin="lower",
+                vmin=vmin_after,
+                vmax=vmax_after,
+            )
+            axes[1, 2].set_title("Normalized - Coronal", fontsize=12)
+            axes[1, 2].axis("off")
 
             # Histogram for normalized
             after_nonzero = after_data[after_data > vmin_after]
-            axes[1, 3].hist(after_nonzero, bins=100, alpha=0.7, color='purple', density=True)
-            axes[1, 3].axvline(0, color='green', linestyle='--', linewidth=2, label='Mean=0')
-            axes[1, 3].set_xlabel('Intensity', fontsize=10)
-            axes[1, 3].set_ylabel('Density', fontsize=10)
-            axes[1, 3].set_title('Normalized Histogram', fontsize=12)
+            axes[1, 3].hist(
+                after_nonzero, bins=100, alpha=0.7, color="purple", density=True
+            )
+            axes[1, 3].axvline(
+                0, color="green", linestyle="--", linewidth=2, label="Mean=0"
+            )
+            axes[1, 3].set_xlabel("Intensity", fontsize=10)
+            axes[1, 3].set_ylabel("Density", fontsize=10)
+            axes[1, 3].set_title("Normalized Histogram", fontsize=12)
             axes[1, 3].legend(fontsize=8)
             axes[1, 3].grid(True, alpha=0.3)
 
@@ -342,12 +406,13 @@ class WhiteStripeNormalizer(BaseNormalizer):
             )
 
             fig.text(
-                0.5, 0.01,
+                0.5,
+                0.01,
                 metadata_text,
-                ha='center',
+                ha="center",
                 fontsize=10,
-                family='monospace',
-                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5)
+                family="monospace",
+                bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5),
             )
 
             plt.tight_layout(rect=[0, 0.08, 1, 0.98])
@@ -356,7 +421,7 @@ class WhiteStripeNormalizer(BaseNormalizer):
             output_path.parent.mkdir(parents=True, exist_ok=True)
 
             # Save figure
-            plt.savefig(output_path, dpi=150, bbox_inches='tight')
+            plt.savefig(output_path, dpi=150, bbox_inches="tight")
             plt.close(fig)
 
             self.logger.info(f"Visualization saved to {output_path}")

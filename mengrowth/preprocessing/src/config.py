@@ -1538,6 +1538,9 @@ class LongitudinalRegistrationConfig:
             "snr_foreground",
             "cnr_high_low",
             "boundary_gradient_score",
+            "brain_coverage_fraction",
+            "laplacian_sharpness",
+            "ghosting_score",
         ]
     )
     reference_selection_prefer_earlier: bool = True

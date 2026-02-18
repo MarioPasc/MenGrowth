@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 import logging
 import json
-import yaml
 
 import numpy as np
 import SimpleITK as sitk
@@ -40,12 +39,15 @@ class ReferenceSelectionConfig:
         validate_jacobian: Whether to compute Jacobian statistics for validation
         jacobian_log_threshold: Max allowed |log(det(J))| mean for valid registration
     """
+
     method: str = "quality_based"
-    quality_metrics: List[str] = field(default_factory=lambda: [
-        "snr_foreground",
-        "cnr_high_low",
-        "boundary_gradient_score"
-    ])
+    quality_metrics: List[str] = field(
+        default_factory=lambda: [
+            "snr_foreground",
+            "cnr_high_low",
+            "boundary_gradient_score",
+        ]
+    )
     quality_weights: Optional[Dict[str, float]] = None
     prefer_earlier: bool = True
     min_quality_threshold: float = 0.0
@@ -67,11 +69,7 @@ class ReferenceSelector:
         verbose: Enable verbose logging
     """
 
-    def __init__(
-        self,
-        config: ReferenceSelectionConfig,
-        verbose: bool = False
-    ) -> None:
+    def __init__(self, config: ReferenceSelectionConfig, verbose: bool = False) -> None:
         """Initialize reference selector.
 
         Args:
@@ -88,7 +86,7 @@ class ReferenceSelector:
         patient_id: str,
         modalities: List[str],
         qc_metrics_path: Optional[Path] = None,
-        artifacts_base: Optional[Path] = None
+        artifacts_base: Optional[Path] = None,
     ) -> Tuple[str, Dict[str, Any]]:
         """Select optimal reference timestamp for a patient.
 
@@ -131,7 +129,8 @@ class ReferenceSelector:
                 study_dirs=study_dirs,
                 timestamps=timestamps,
                 modalities=modalities,
-                qc_metrics_path=qc_metrics_path
+                qc_metrics_path=qc_metrics_path,
+                artifacts_base=artifacts_base,
             )
             method = "quality_based"
 
@@ -140,7 +139,7 @@ class ReferenceSelector:
                 self._save_selection_info(
                     selection_info=selection_info,
                     patient_id=patient_id,
-                    artifacts_base=artifacts_base
+                    artifacts_base=artifacts_base,
                 )
 
             return selected, selection_info
@@ -160,7 +159,7 @@ class ReferenceSelector:
         Returns:
             Timestamp string (e.g., "001")
         """
-        return study_dir.name.split('-')[-1]
+        return study_dir.name.split("-")[-1]
 
     def _select_first(self, timestamps: List[str]) -> str:
         """Select the first (earliest) timestamp."""
@@ -181,7 +180,8 @@ class ReferenceSelector:
         study_dirs: List[Path],
         timestamps: List[str],
         modalities: List[str],
-        qc_metrics_path: Optional[Path]
+        qc_metrics_path: Optional[Path],
+        artifacts_base: Optional[Path] = None,
     ) -> Tuple[str, Dict[str, Any]]:
         """Select timestamp based on image quality metrics.
 
@@ -224,7 +224,8 @@ class ReferenceSelector:
                 study_dir=study_dir,
                 modalities=modalities,
                 qc_metrics=qc_metrics,
-                timestamp=timestamp
+                timestamp=timestamp,
+                artifacts_base=artifacts_base,
             )
             metrics_per_ts[timestamp] = metrics
 
@@ -243,16 +244,10 @@ class ReferenceSelector:
         # Rank by quality (descending), then by timestamp (ascending for earlier preference)
         if self.config.prefer_earlier:
             # Sort by score descending, then timestamp ascending
-            ranking = sorted(
-                quality_scores.items(),
-                key=lambda x: (-x[1], x[0])
-            )
+            ranking = sorted(quality_scores.items(), key=lambda x: (-x[1], x[0]))
         else:
             # Sort by score descending only
-            ranking = sorted(
-                quality_scores.items(),
-                key=lambda x: -x[1]
-            )
+            ranking = sorted(quality_scores.items(), key=lambda x: -x[1])
 
         selection_info["ranking"] = [(ts, score) for ts, score in ranking]
 
@@ -301,7 +296,12 @@ class ReferenceSelector:
                 if study_id:
                     metrics_dict[study_id] = {}
                     for col in df.columns:
-                        if col not in ["patient_id", "study_id", "modality", "step_name"]:
+                        if col not in [
+                            "patient_id",
+                            "study_id",
+                            "modality",
+                            "step_name",
+                        ]:
                             try:
                                 val = float(row[col])
                                 if not np.isnan(val):
@@ -316,7 +316,8 @@ class ReferenceSelector:
         study_dir: Path,
         modalities: List[str],
         qc_metrics: Optional[Dict[str, Any]],
-        timestamp: str
+        timestamp: str,
+        artifacts_base: Optional[Path] = None,
     ) -> Dict[str, float]:
         """Compute quality metrics for a study.
 
@@ -328,6 +329,7 @@ class ReferenceSelector:
             modalities: Modalities to evaluate
             qc_metrics: Pre-computed QC metrics dict
             timestamp: Study timestamp
+            artifacts_base: Optional path to artifacts directory for brain masks
 
         Returns:
             Dict of metric_name -> value
@@ -353,14 +355,16 @@ class ReferenceSelector:
                 continue
 
             try:
-                computed = self._compute_metrics_from_image(image_path)
+                computed = self._compute_metrics_from_image(
+                    image_path,
+                    artifacts_base=artifacts_base,
+                    study_dir=study_dir,
+                )
                 for metric_name in self.config.quality_metrics:
                     if metric_name not in metrics and metric_name in computed:
                         metrics[metric_name] = computed[metric_name]
             except Exception as e:
-                self._logger.warning(
-                    f"Failed to compute metrics for {image_path}: {e}"
-                )
+                self._logger.warning(f"Failed to compute metrics for {image_path}: {e}")
                 continue
 
             # Stop if we have all metrics
@@ -369,11 +373,18 @@ class ReferenceSelector:
 
         return metrics
 
-    def _compute_metrics_from_image(self, image_path: Path) -> Dict[str, float]:
+    def _compute_metrics_from_image(
+        self,
+        image_path: Path,
+        artifacts_base: Optional[Path] = None,
+        study_dir: Optional[Path] = None,
+    ) -> Dict[str, float]:
         """Compute quality metrics directly from image.
 
         Args:
             image_path: Path to NIfTI image
+            artifacts_base: Optional path to artifacts directory for brain masks
+            study_dir: Optional study directory path (used to locate artifacts)
 
         Returns:
             Dict of computed metrics
@@ -430,12 +441,41 @@ class ReferenceSelector:
         except Exception:
             pass
 
+        # Load brain mask from artifacts if available
+        brain_mask = None
+        if artifacts_base and study_dir:
+            study_id = study_dir.name
+            mask_path = artifacts_base / study_id / "consensus_brain_mask.nii.gz"
+            if mask_path.exists():
+                brain_mask = sitk.GetArrayFromImage(sitk.ReadImage(str(mask_path))) > 0
+
+        # Brain coverage fraction (FOV adequacy)
+        if "brain_coverage_fraction" in self.config.quality_metrics:
+            if artifacts_base and study_dir:
+                val = self._compute_brain_coverage_fraction(
+                    artifacts_base / study_dir.name
+                )
+                if not np.isnan(val):
+                    metrics["brain_coverage_fraction"] = val
+
+        # Laplacian sharpness (motion/blur proxy)
+        if "laplacian_sharpness" in self.config.quality_metrics:
+            mask = brain_mask if brain_mask is not None else nonzero_mask
+            val = self._compute_laplacian_sharpness(arr, mask)
+            if not np.isnan(val):
+                metrics["laplacian_sharpness"] = val
+
+        # Ghosting score (artifact proxy)
+        if "ghosting_score" in self.config.quality_metrics:
+            mask = brain_mask if brain_mask is not None else nonzero_mask
+            val = self._compute_ghosting_score(arr, mask)
+            if not np.isnan(val):
+                metrics["ghosting_score"] = val
+
         return metrics
 
     def _compute_boundary_gradient_score(
-        self,
-        arr: np.ndarray,
-        foreground_mask: np.ndarray
+        self, arr: np.ndarray, foreground_mask: np.ndarray
     ) -> float:
         """Compute boundary gradient score (edge sharpness).
 
@@ -473,6 +513,71 @@ class ReferenceSelector:
             return 0.0
 
         return float(np.mean(boundary_gradient))
+
+    def _compute_brain_coverage_fraction(self, artifacts_dir: Path) -> float:
+        """Brain voxels / total voxels from consensus brain mask.
+
+        Measures FOV adequacy — higher values indicate more brain
+        content relative to the total image volume.
+
+        Args:
+            artifacts_dir: Path to study-level artifacts directory
+
+        Returns:
+            Fraction of image voxels that are brain (0.0 to 1.0)
+        """
+        mask_path = artifacts_dir / "consensus_brain_mask.nii.gz"
+        if not mask_path.exists():
+            return np.nan
+        mask = sitk.GetArrayFromImage(sitk.ReadImage(str(mask_path)))
+        return float(np.sum(mask > 0) / mask.size)
+
+    def _compute_laplacian_sharpness(
+        self, arr: np.ndarray, brain_mask: np.ndarray
+    ) -> float:
+        """Variance of Laplacian within brain mask — higher means sharper.
+
+        Acts as a motion/blur proxy: blurred images have low Laplacian
+        variance, while sharp images have high variance.
+
+        Args:
+            arr: Image intensity array
+            brain_mask: Boolean brain mask array
+
+        Returns:
+            Variance of Laplacian within the masked region
+        """
+        from scipy.ndimage import laplace
+
+        lap = laplace(arr.astype(np.float64))
+        brain_voxels = lap[brain_mask]
+        if len(brain_voxels) < 100:
+            return np.nan
+        return float(np.var(brain_voxels))
+
+    def _compute_ghosting_score(self, arr: np.ndarray, brain_mask: np.ndarray) -> float:
+        """Ghosting artifact proxy: 1 - (CV_shell / CV_core).
+
+        Compares coefficient of variation between eroded brain core and
+        the outer shell. Ghosting artifacts inflate shell CV relative to
+        core CV, so lower ratios indicate more ghosting.
+
+        Args:
+            arr: Image intensity array
+            brain_mask: Boolean brain mask array
+
+        Returns:
+            Ghosting score (higher = less ghosting, closer to 1.0 is best)
+        """
+        core = binary_erosion(brain_mask, iterations=5)
+        shell = brain_mask & ~core
+        if not np.any(core) or not np.any(shell):
+            return np.nan
+        core_vals = arr[core]
+        shell_vals = arr[shell]
+        cv_core = np.std(core_vals) / (np.mean(core_vals) + 1e-8)
+        cv_shell = np.std(shell_vals) / (np.mean(shell_vals) + 1e-8)
+        return float(1.0 - cv_shell / (cv_core + 1e-8))
 
     def _compute_composite_score(self, metrics: Dict[str, float]) -> float:
         """Compute composite quality score from individual metrics.
@@ -527,10 +632,13 @@ class ReferenceSelector:
         """
         # Typical ranges for brain MRI metrics
         ranges = {
-            "snr_foreground": (5.0, 50.0),      # Typical SNR range
+            "snr_foreground": (5.0, 50.0),  # Typical SNR range
             "snr_background": (5.0, 100.0),
-            "cnr_high_low": (0.5, 5.0),         # Typical CNR range
+            "cnr_high_low": (0.5, 5.0),  # Typical CNR range
             "boundary_gradient_score": (10.0, 500.0),  # Gradient magnitude
+            "brain_coverage_fraction": (0.05, 0.40),  # Typical brain/FOV ratio
+            "laplacian_sharpness": (50.0, 5000.0),  # Calibrate from real data
+            "ghosting_score": (0.0, 1.0),  # Already [0,1]-ish
         }
 
         if metric_name in ranges:
@@ -544,10 +652,7 @@ class ReferenceSelector:
         return float(np.clip(np.log1p(value) / 5.0, 0.0, 1.0))
 
     def _save_selection_info(
-        self,
-        selection_info: Dict[str, Any],
-        patient_id: str,
-        artifacts_base: Path
+        self, selection_info: Dict[str, Any], patient_id: str, artifacts_base: Path
     ) -> None:
         """Save selection information to artifacts directory.
 
@@ -575,20 +680,16 @@ class ReferenceSelector:
                 return [convert_types(v) for v in obj]
             return obj
 
-        info_to_save = {
-            "patient_id": patient_id,
-            **convert_types(selection_info)
-        }
+        info_to_save = {"patient_id": patient_id, **convert_types(selection_info)}
 
-        with open(output_file, 'w') as f:
+        with open(output_file, "w") as f:
             json.dump(info_to_save, f, indent=2)
 
         self._logger.info(f"Saved reference selection info to {output_file}")
 
 
 def compute_jacobian_statistics(
-    transform_path: Path,
-    reference_image_path: Path
+    transform_path: Path, reference_image_path: Path
 ) -> Dict[str, float]:
     """Compute Jacobian determinant statistics for registration validation.
 
@@ -633,7 +734,7 @@ def compute_jacobian_statistics(
             "jacobian_negative_fraction": np.nan,
             "jacobian_min": np.nan,
             "jacobian_max": np.nan,
-            "error": f"Transform file not found: {transform_path}"
+            "error": f"Transform file not found: {transform_path}",
         }
 
     try:
@@ -645,7 +746,11 @@ def compute_jacobian_statistics(
 
         # For affine transforms, compute Jacobian determinant from matrix
         # Affine transforms have constant Jacobian (determinant of linear part)
-        if "Affine" in tx_type or "Rigid" in tx_type or "MatrixOffsetTransformBase" in tx_type:
+        if (
+            "Affine" in tx_type
+            or "Rigid" in tx_type
+            or "MatrixOffsetTransformBase" in tx_type
+        ):
             # Get the affine parameters
             params = tx.parameters
 
@@ -653,26 +758,32 @@ def compute_jacobian_statistics(
             # Matrix is stored row-major: [a00, a01, a02, a10, a11, a12, a20, a21, a22, t0, t1, t2]
             if len(params) >= 9:
                 # Extract 3x3 linear part
-                matrix = np.array([
-                    [params[0], params[1], params[2]],
-                    [params[3], params[4], params[5]],
-                    [params[6], params[7], params[8]]
-                ])
+                matrix = np.array(
+                    [
+                        [params[0], params[1], params[2]],
+                        [params[3], params[4], params[5]],
+                        [params[6], params[7], params[8]],
+                    ]
+                )
 
                 # Compute determinant
                 jacobian_det = np.linalg.det(matrix)
-                jacobian_log_det = np.log(abs(jacobian_det)) if jacobian_det > 0 else np.nan
+                jacobian_log_det = (
+                    np.log(abs(jacobian_det)) if jacobian_det > 0 else np.nan
+                )
 
                 stats = {
                     "jacobian_det_mean": float(jacobian_det),
                     "jacobian_det_std": 0.0,  # Constant for affine
-                    "jacobian_log_det_mean": float(jacobian_log_det) if not np.isnan(jacobian_log_det) else 0.0,
+                    "jacobian_log_det_mean": float(jacobian_log_det)
+                    if not np.isnan(jacobian_log_det)
+                    else 0.0,
                     "jacobian_log_det_std": 0.0,  # Constant for affine
                     "jacobian_negative_fraction": 1.0 if jacobian_det < 0 else 0.0,
                     "jacobian_min": float(jacobian_det),
                     "jacobian_max": float(jacobian_det),
                     "transform_type": "affine",
-                    "matrix_determinant": float(jacobian_det)
+                    "matrix_determinant": float(jacobian_det),
                 }
 
                 logger.debug(f"Affine Jacobian determinant: {jacobian_det:.6f}")
@@ -685,17 +796,13 @@ def compute_jacobian_statistics(
         try:
             # Compute Jacobian image
             jacobian_img = ants.create_jacobian_determinant_image(
-                domain_image=ref_img,
-                tx=[str(transform_path)],
-                do_log=False
+                domain_image=ref_img, tx=[str(transform_path)], do_log=False
             )
             jacobian_arr = jacobian_img.numpy()
 
             # Compute log Jacobian
             jacobian_log_img = ants.create_jacobian_determinant_image(
-                domain_image=ref_img,
-                tx=[str(transform_path)],
-                do_log=True
+                domain_image=ref_img, tx=[str(transform_path)], do_log=True
             )
             jacobian_log_arr = jacobian_log_img.numpy()
 
@@ -717,7 +824,7 @@ def compute_jacobian_statistics(
                 "jacobian_negative_fraction": float(np.mean(jac_valid < 0)),
                 "jacobian_min": float(np.min(jac_valid)),
                 "jacobian_max": float(np.max(jac_valid)),
-                "transform_type": "deformable"
+                "transform_type": "deformable",
             }
 
             return stats
@@ -734,7 +841,7 @@ def compute_jacobian_statistics(
                 "jacobian_min": 1.0,
                 "jacobian_max": 1.0,
                 "transform_type": tx_type,
-                "note": "Jacobian image computation failed, using default values"
+                "note": "Jacobian image computation failed, using default values",
             }
 
     except Exception as e:
@@ -747,13 +854,12 @@ def compute_jacobian_statistics(
             "jacobian_negative_fraction": np.nan,
             "jacobian_min": np.nan,
             "jacobian_max": np.nan,
-            "error": str(e)
+            "error": str(e),
         }
 
 
 def validate_registration_quality(
-    jacobian_stats: Dict[str, float],
-    config: ReferenceSelectionConfig
+    jacobian_stats: Dict[str, float], config: ReferenceSelectionConfig
 ) -> Tuple[bool, str]:
     """Validate registration quality using Jacobian statistics.
 
@@ -774,7 +880,10 @@ def validate_registration_quality(
     # Check for folding (negative determinants)
     neg_frac = jacobian_stats.get("jacobian_negative_fraction", 0.0)
     if neg_frac > 0.01:  # More than 1% folding is problematic
-        return False, f"Excessive folding detected: {neg_frac*100:.2f}% negative Jacobian"
+        return (
+            False,
+            f"Excessive folding detected: {neg_frac * 100:.2f}% negative Jacobian",
+        )
 
     # Check deformation magnitude
     log_mean = abs(jacobian_stats.get("jacobian_log_det_mean", 0.0))

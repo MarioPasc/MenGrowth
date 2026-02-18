@@ -4,8 +4,8 @@ preprocessing:
           "bias_field_correction",
           "resampling",
           "cubic_padding",
-          "skull_stripping",
           "registration_static",
+          "skull_stripping",
           "intensity_normalization",
           "longitudinal_registration"
           ]
@@ -239,7 +239,7 @@ preprocessing:
           method: "ants"                                # "ants" | null (null to skip atlas registration)
           engine: "antspyx"                           # Optional: "nipype" (default) | "antspyx" - Registration engine to use
           save_detailed_registration_info: true       # Optional: Per-substep override for detailed diagnostics
-          atlas_path: "/mnt/home/users/tic_163_uma/mpascual/fscratch/datasets/meningiomas/sri24_atlas/T1_brain.nii"  # Path to skull-stripped atlas template
+          atlas_path: "/mnt/home/users/tic_163_uma/mpascual/fscratch/datasets/meningiomas/sri24_atlas/T1.nii"  # Path to full-head atlas template (register full-head, skull-strip after)
 
           # Transform parameters (can specify multiple transforms)
           transforms: ["Rigid", "Affine"]               # List of transforms to apply sequentially
@@ -395,6 +395,9 @@ preprocessing:
             - "snr_foreground"
             - "cnr_high_low"
             - "boundary_gradient_score"
+            - "brain_coverage_fraction"
+            - "laplacian_sharpness"
+            - "ghosting_score"
 
           # Tiebreaker: prefer earlier timestamps when quality scores are equal
           # Rationale: Earlier scans may have less disease progression

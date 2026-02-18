@@ -109,18 +109,18 @@ class SynthStripSkullStripper(BaseSkullStripper):
                     f"Original error: {e}"
                 ) from e
 
-            # Validate GPU availability if GPU specified
+            # Validate GPU availability — fallback to CPU instead of crashing
             if isinstance(self.device, int):
                 if not torch.cuda.is_available():
-                    raise RuntimeError(
-                        f"GPU {self.device} requested but CUDA is not available. "
-                        f"Either install CUDA-enabled PyTorch or set device='cpu'"
+                    self.logger.warning(
+                        f"GPU {self.device} requested but CUDA not available. Falling back to CPU."
                     )
-                if self.device >= torch.cuda.device_count():
-                    raise RuntimeError(
-                        f"GPU {self.device} requested but only {torch.cuda.device_count()} "
-                        f"GPU(s) available (0-{torch.cuda.device_count() - 1})"
+                    self.device = "cpu"
+                elif self.device >= torch.cuda.device_count():
+                    self.logger.warning(
+                        f"GPU {self.device} not found ({torch.cuda.device_count()} GPUs). Falling back to CPU."
                     )
+                    self.device = "cpu"
 
             # Create temporary output path for SynthStrip
             temp_output = output_path.parent / f"_temp_{output_path.name}"
@@ -141,14 +141,28 @@ class SynthStripSkullStripper(BaseSkullStripper):
             else:
                 device_obj = torch.device("cpu")
 
-            # SynthStrip extract method signature: (input_path, masked_output_path, mask_path, device)
-            # Note: Need to check actual API
-            extractor.extract(
-                input_image_path=input_path,
-                masked_image_path=temp_output,
-                brain_mask_path=mask_path,
-                device=device_obj,
-            )
+            # SynthStrip extract method (with OOM retry on CPU)
+            try:
+                extractor.extract(
+                    input_image_path=input_path,
+                    masked_image_path=temp_output,
+                    brain_mask_path=mask_path,
+                    device=device_obj,
+                )
+            except RuntimeError as e:
+                if "CUDA" in str(e) or "out of memory" in str(e).lower():
+                    self.logger.warning(
+                        f"GPU extraction failed ({e}), retrying on CPU with same settings..."
+                    )
+                    torch.cuda.empty_cache()
+                    extractor.extract(
+                        input_image_path=input_path,
+                        masked_image_path=temp_output,
+                        brain_mask_path=mask_path,
+                        device=torch.device("cpu"),
+                    )
+                else:
+                    raise
 
             # Load images for statistics and custom fill_value application
             self.logger.debug("Loading images for statistics computation")
