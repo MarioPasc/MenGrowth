@@ -132,7 +132,6 @@ singularity run \
 INFER_EXIT=$?
 set -e
 
-INFER_EXIT=$?
 INFER_END=$(date +%s)
 INFER_ELAPSED=$((INFER_END - INFER_START))
 
