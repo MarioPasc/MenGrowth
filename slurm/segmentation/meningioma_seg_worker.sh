@@ -44,7 +44,7 @@ module load singularity 2>/dev/null || true
 # Load conda
 module_loaded=0
 for m in miniconda3 Miniconda3 anaconda3 Anaconda3 miniforge mambaforge; do
-    if module avail 2>/dev/null | grep -qi "^${m}[[:space:]]"; then
+    if module avail "$m" 2>&1 | grep -qi "${m}"; then
         module load "$m" && module_loaded=1 && break
     fi
 done
@@ -119,14 +119,18 @@ echo ""
 
 INFER_START=$(date +%s)
 
+set +e
 singularity run \
     --nv \
     --cleanenv \
     --no-home \
     --writable-tmpfs \
-    --bind "${BRATS_INPUT}:/input:rw" \
+    --bind "${BRATS_INPUT}:/input:ro" \
     --bind "${BRATS_OUTPUT}:/output:rw" \
     "${SIF_PATH}"
+
+INFER_EXIT=$?
+set -e
 
 INFER_EXIT=$?
 INFER_END=$(date +%s)

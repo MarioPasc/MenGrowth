@@ -40,7 +40,6 @@ echo ""
 # CONFIGURATION
 # ========================================================================
 export CONDA_ENV_NAME="mengrowth"
-export REPO_SRC="/mnt/home/users/tic_163_uma/mpascual/fscratch/repos/MenGrowth"
 
 # Defaults
 CONFIG_FILE=""
@@ -93,15 +92,11 @@ fi
 
 export CONFIG_FILE
 
-# Extract SIF path and docker image from config using Python
-eval "$(python3 -c "
-import yaml
-with open('${CONFIG_FILE}') as f:
-    cfg = yaml.safe_load(f)['segmentation']
-print(f'SIF_PATH={cfg[\"sif_path\"]}')
-print(f'DOCKER_IMAGE={cfg[\"docker_image\"]}')
-print(f'LOG_DIR={cfg[\"log_dir\"]}')
-")"
+# Extract SIF path, docker image, and log dir from config
+# Uses grep+awk to avoid depending on Python/pyyaml before conda activation
+SIF_PATH=$(grep 'sif_path:' "${CONFIG_FILE}" | awk '{print $2}' | tr -d '"')
+DOCKER_IMAGE=$(grep 'docker_image:' "${CONFIG_FILE}" | awk '{print $2}' | tr -d '"')
+LOG_DIR=$(grep 'log_dir:' "${CONFIG_FILE}" | awk '{print $2}' | tr -d '"')
 
 export SIF_PATH
 
@@ -161,7 +156,7 @@ echo "================================================="
 # Activate conda for the prepare step
 module_loaded=0
 for m in miniconda3 Miniconda3 anaconda3 Anaconda3 miniforge mambaforge; do
-    if module avail 2>/dev/null | grep -qi "^${m}[[:space:]]"; then
+    if module avail "$m" 2>&1 | grep -qi "${m}"; then
         module load "$m" && module_loaded=1 && break
     fi
 done
@@ -180,8 +175,10 @@ if [ -n "${PATIENT_ARG}" ]; then
 fi
 
 echo "Running: ${PREPARE_CMD}"
+set +e
 PREPARE_OUTPUT=$(${PREPARE_CMD})
 PREPARE_EXIT=$?
+set -e
 
 if [ "${PREPARE_EXIT}" -ne 0 ]; then
     echo "ERROR: Prepare step failed with exit code ${PREPARE_EXIT}"
@@ -189,7 +186,7 @@ if [ "${PREPARE_EXIT}" -ne 0 ]; then
 fi
 
 # Capture WORK_DIR from the last line of prepare output
-WORK_DIR=$(echo "${PREPARE_OUTPUT}" | grep "^WORK_DIR=" | tail -1 | cut -d= -f2)
+WORK_DIR=$(echo "${PREPARE_OUTPUT}" | grep "^WORK_DIR=" | tail -1 | cut -d= -f2-)
 
 if [ -z "${WORK_DIR}" ] || [ ! -d "${WORK_DIR}" ]; then
     echo "ERROR: Failed to capture WORK_DIR from prepare output."
