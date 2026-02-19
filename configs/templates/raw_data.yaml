@@ -266,7 +266,7 @@ raw_data:
     # Filters images based on signal-to-noise ratio
     # Uses corner-based noise estimation with modality-specific thresholds
     snr_filtering:
-      enabled: true
+      enabled: false
       min_snr: 5.0               # Fallback SNR threshold
       method: "corner"           # "corner" or "background_percentile"
       corner_cube_size: 10       # Voxel cube size for corner sampling
@@ -275,7 +275,7 @@ raw_data:
         t1n: 6.0
         t2w: 5.0
         t2f: 4.0
-      action: "block"            # "warn" or "block"
+      action: "warn"            # "warn" or "block"
 
     # B2: Contrast Detection
     # Detects all-black, all-white, or uniform images
@@ -283,7 +283,7 @@ raw_data:
       enabled: true
       min_std_ratio: 0.10        # Minimum std/mean ratio
       max_uniform_fraction: 0.95 # Maximum fraction of voxels with same value
-      action: "block"            # "warn" or "block"
+      action: "warn"            # "warn" or "block"
 
     # B3: Intensity Outlier Detection
     # Detects NaN, Inf, or extreme intensity values
@@ -299,7 +299,7 @@ raw_data:
         t1n: 15.0
         t2w: 12.0
         t2f: 20.0                # Tightened from 30.0 (P95=17.4, catches genuine corruption)
-      action: "block"            # "warn" or "block"
+      action: "warn"            # "warn" or "block"
 
     # B4: Motion Artifact Detection
     # Detects motion/blurring via gradient entropy analysis
@@ -326,7 +326,7 @@ raw_data:
       enabled: true
       max_corner_to_foreground_ratio: 0.15  # Max corner/foreground mean ratio
       corner_cube_size: 10       # Voxel cube size for corner sampling
-      action: "warn"             # "warn" or "block"
+      action: "block"             # "warn" or "block"
 
     # C1: Affine Matrix Validation
     # Validates affine transformation matrix

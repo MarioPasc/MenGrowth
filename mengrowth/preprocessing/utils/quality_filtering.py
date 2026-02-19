@@ -102,7 +102,9 @@ class PatientValidationReport:
     @property
     def has_blocking_issues(self) -> bool:
         """Check if any blocking issues at patient or study level."""
-        if any(not r.passed and r.action == "block" for r in self.patient_level_results):
+        if any(
+            not r.passed and r.action == "block" for r in self.patient_level_results
+        ):
             return True
         return any(s.has_blocking_issues for s in self.study_reports)
 
@@ -134,9 +136,7 @@ class NRRDFileData:
     modality: str
 
 
-def load_nrrd_file(
-    file_path: Path, load_data: bool = True
-) -> Optional[NRRDFileData]:
+def load_nrrd_file(file_path: Path, load_data: bool = True) -> Optional[NRRDFileData]:
     """Load an NRRD file, returning header and optionally data.
 
     Args:
@@ -310,19 +310,13 @@ def check_voxel_spacing(
         issues = []
 
         if min_spacing < cfg.min_spacing_mm:
-            issues.append(
-                f"Min spacing {min_spacing:.3f}mm < {cfg.min_spacing_mm}mm"
-            )
+            issues.append(f"Min spacing {min_spacing:.3f}mm < {cfg.min_spacing_mm}mm")
 
         if max_spacing > cfg.max_spacing_mm:
-            issues.append(
-                f"Max spacing {max_spacing:.3f}mm > {cfg.max_spacing_mm}mm"
-            )
+            issues.append(f"Max spacing {max_spacing:.3f}mm > {cfg.max_spacing_mm}mm")
 
         if anisotropy > cfg.max_anisotropy_ratio:
-            issues.append(
-                f"Anisotropy {anisotropy:.2f} > {cfg.max_anisotropy_ratio}"
-            )
+            issues.append(f"Anisotropy {anisotropy:.2f} > {cfg.max_anisotropy_ratio}")
 
         if issues:
             return ValidationResult(
@@ -418,8 +412,10 @@ def compute_snr_corner(data: np.ndarray, cube_size: int = 10) -> float:
     corner_values = np.concatenate([c.ravel() for c in corners])
     raw_std = np.std(corner_values)
 
-    # Rayleigh correction for magnitude images
-    noise_std = raw_std * np.sqrt(2.0 / np.pi)
+    # Rayleigh correction: recover Gaussian σ from measured Rayleigh std.
+    # For magnitude MRI, background noise follows Rayleigh(σ), with
+    # std_measured = σ * sqrt(2 - π/2), so σ = std / sqrt(2 - π/2).
+    noise_std = raw_std / np.sqrt(2.0 - np.pi / 2.0)
 
     if noise_std == 0:
         return float("inf")
@@ -578,7 +574,7 @@ def check_intensity_outliers(
         return ValidationResult(
             passed=False,
             check_name=check_name,
-            message=f"Extreme outlier: max/99th = {max_val/p99:.1f} > {threshold} ({modality})",
+            message=f"Extreme outlier: max/99th = {max_val / p99:.1f} > {threshold} ({modality})",
             action=cfg.action,
             details={"max": float(max_val), "p99": float(p99), "threshold": threshold},
         )
@@ -645,20 +641,48 @@ def check_motion_artifact(
     modality = file_data.modality
     threshold = cfg.get_threshold(modality)
 
+    # Adjust threshold for anisotropic (2D thick-slice) acquisitions.
+    # Thick slices produce near-zero through-plane gradients, reducing
+    # gradient entropy independently of actual image quality (motion/blur).
+    header = file_data.header
+    space_directions = header.get("space directions", None)
+    anisotropy_ratio = 1.0
+    if space_directions is not None:
+        try:
+            spacings = [np.linalg.norm(d) for d in space_directions if d is not None]
+            if len(spacings) >= 3:
+                min_sp = min(spacings[:3])
+                max_sp = max(spacings[:3])
+                anisotropy_ratio = max_sp / min_sp if min_sp > 0 else 1.0
+                if anisotropy_ratio > 3.0:
+                    # Scale: aniso=3→1.0, aniso=10→0.49, aniso=15→0.40 (capped)
+                    scale = max(0.4, 1.0 / (1.0 + 0.15 * (anisotropy_ratio - 3.0)))
+                    threshold *= scale
+                    logger.debug(
+                        f"Anisotropy {anisotropy_ratio:.1f}x: relaxed motion "
+                        f"threshold to {threshold:.2f} for {modality}"
+                    )
+        except Exception:
+            pass
+
     if grad_entropy < threshold:
         return ValidationResult(
             passed=False,
             check_name=check_name,
             message=f"Low gradient entropy {grad_entropy:.2f} < {threshold} ({modality})",
             action=cfg.action,
-            details={"gradient_entropy": grad_entropy, "threshold": threshold},
+            details={
+                "gradient_entropy": grad_entropy,
+                "threshold": threshold,
+                "anisotropy": anisotropy_ratio,
+            },
         )
 
     return ValidationResult(
         passed=True,
         check_name=check_name,
         message=f"Gradient entropy {grad_entropy:.2f} OK",
-        details={"gradient_entropy": grad_entropy},
+        details={"gradient_entropy": grad_entropy, "anisotropy": anisotropy_ratio},
     )
 
 
@@ -699,7 +723,8 @@ def check_ghosting(
         data[-cs:, -cs:, -cs:],
     ]
 
-    corner_mean = np.mean(np.abs(np.concatenate([c.ravel() for c in corners])))
+    corner_values = np.abs(np.concatenate([c.ravel() for c in corners]))
+    corner_mean = float(np.mean(corner_values))
 
     # Foreground mean (voxels above 10th percentile)
     p10 = np.percentile(data, 10)
@@ -711,8 +736,29 @@ def check_ghosting(
             message="Cannot compute foreground mean",
         )
 
-    foreground_mean = np.mean(foreground)
+    foreground_mean = float(np.mean(foreground))
     ratio = corner_mean / foreground_mean
+
+    # Guard: if corners contain tissue (tight FOV), the corner-based metric
+    # is unreliable — a high ratio reflects scalp/fat anatomy, not ghosts.
+    # True ghosting produces diffuse low-level signal; tissue has structured
+    # high signal. We detect this by checking what fraction of corner voxels
+    # exceed a noise floor (5% of foreground mean).
+    noise_floor = 0.05 * foreground_mean
+    tissue_fraction = float(np.mean(corner_values > noise_floor))
+    if tissue_fraction > 0.5:
+        return ValidationResult(
+            passed=True,
+            check_name=check_name,
+            message=(
+                f"Tight FOV: {tissue_fraction:.0%} of corner voxels contain "
+                f"tissue signal, ghosting metric unreliable"
+            ),
+            details={
+                "corner_foreground_ratio": ratio,
+                "tissue_fraction": tissue_fraction,
+            },
+        )
 
     if ratio > cfg.max_corner_to_foreground_ratio:
         return ValidationResult(
@@ -1214,9 +1260,7 @@ def _validate_patient(
 
     for study_dir in study_dirs:
         study_id = study_dir.name
-        study_report = StudyValidationReport(
-            patient_id=patient_id, study_id=study_id
-        )
+        study_report = StudyValidationReport(patient_id=patient_id, study_id=study_id)
 
         # Find all NRRD files
         nrrd_files = list(study_dir.glob("*.nrrd"))
@@ -1247,9 +1291,7 @@ def _validate_patient(
             study_report.study_level_results.append(orient_result)
 
             # E1: Registration reference
-            ref_result = check_registration_reference(
-                list(study_files.keys()), config
-            )
+            ref_result = check_registration_reference(list(study_files.keys()), config)
             study_report.study_level_results.append(ref_result)
 
         if study_report.has_blocking_issues:
@@ -1275,7 +1317,9 @@ def _validate_patient(
     return patient_report, local_stats
 
 
-def _collect_blocking_reasons(patient_report: PatientValidationReport, study_id: str) -> str:
+def _collect_blocking_reasons(
+    patient_report: PatientValidationReport, study_id: str
+) -> str:
     """Collect blocking check names for a specific study."""
     reasons = set()
     for study_report in patient_report.study_reports:
@@ -1375,8 +1419,10 @@ def run_quality_filtering(
     patient_dirs = sorted([d for d in data_root.iterdir() if d.is_dir()])
     total_patients = len(patient_dirs)
     logger.info(f"Found {total_patients} patients to validate")
-    logger.info(f"Using {n_workers} worker(s) for validation" +
-                (" (GPU accelerated)" if use_gpu else ""))
+    logger.info(
+        f"Using {n_workers} worker(s) for validation"
+        + (" (GPU accelerated)" if use_gpu else "")
+    )
 
     # Count total files for progress estimation
     total_files_estimate = sum(
@@ -1408,7 +1454,9 @@ def run_quality_filtering(
 
         with ProcessPoolExecutor(max_workers=n_workers) as executor:
             future_to_patient = {
-                executor.submit(_validate_patient, patient_dir, config, None): patient_dir.name
+                executor.submit(
+                    _validate_patient, patient_dir, config, None
+                ): patient_dir.name
                 for patient_dir in patient_dirs
             }
 
@@ -1420,7 +1468,9 @@ def run_quality_filtering(
                     patient_report, local_stats = future.result()
                     patient_reports.append(patient_report)
                     _aggregate_patient_stats(stats, patient_report, local_stats)
-                    logger.info(f"Validated patient {completed}/{total_patients}: {patient_id}")
+                    logger.info(
+                        f"Validated patient {completed}/{total_patients}: {patient_id}"
+                    )
                 except Exception:
                     logger.exception(f"Error validating patient {patient_id}")
 
@@ -1428,9 +1478,15 @@ def run_quality_filtering(
         patient_reports.sort(key=lambda r: r.patient_id)
 
     logger.info("Quality filtering validation complete:")
-    logger.info(f"  Files: {stats.files_passed} passed, {stats.files_warned} warned, {stats.files_blocked} blocked")
-    logger.info(f"  Studies: {stats.studies_passed} passed, {stats.studies_blocked} blocked")
-    logger.info(f"  Patients: {stats.patients_passed} passed, {stats.patients_blocked} blocked")
+    logger.info(
+        f"  Files: {stats.files_passed} passed, {stats.files_warned} warned, {stats.files_blocked} blocked"
+    )
+    logger.info(
+        f"  Studies: {stats.studies_passed} passed, {stats.studies_blocked} blocked"
+    )
+    logger.info(
+        f"  Patients: {stats.patients_passed} passed, {stats.patients_blocked} blocked"
+    )
 
     # =========================================================================
     # Phase 2: Actionable Removal
@@ -1573,47 +1629,59 @@ def export_quality_issues(
             for file_report in study_report.file_reports:
                 for result in file_report.results:
                     if not result.passed:
-                        rows.append({
-                            "patient_id": patient_report.patient_id,
-                            "study_id": study_report.study_id,
-                            "modality": file_report.modality,
-                            "file_path": str(file_report.file_path),
-                            "check_name": result.check_name,
-                            "action": result.action,
-                            "message": result.message,
-                            "level": "file",
-                            "details": _json.dumps(result.details) if result.details else "",
-                        })
+                        rows.append(
+                            {
+                                "patient_id": patient_report.patient_id,
+                                "study_id": study_report.study_id,
+                                "modality": file_report.modality,
+                                "file_path": str(file_report.file_path),
+                                "check_name": result.check_name,
+                                "action": result.action,
+                                "message": result.message,
+                                "level": "file",
+                                "details": _json.dumps(result.details)
+                                if result.details
+                                else "",
+                            }
+                        )
 
             # Study-level issues
             for result in study_report.study_level_results:
                 if not result.passed:
-                    rows.append({
+                    rows.append(
+                        {
+                            "patient_id": patient_report.patient_id,
+                            "study_id": study_report.study_id,
+                            "modality": "",
+                            "file_path": "",
+                            "check_name": result.check_name,
+                            "action": result.action,
+                            "message": result.message,
+                            "level": "study",
+                            "details": _json.dumps(result.details)
+                            if result.details
+                            else "",
+                        }
+                    )
+
+        # Patient-level issues
+        for result in patient_report.patient_level_results:
+            if not result.passed:
+                rows.append(
+                    {
                         "patient_id": patient_report.patient_id,
-                        "study_id": study_report.study_id,
+                        "study_id": "",
                         "modality": "",
                         "file_path": "",
                         "check_name": result.check_name,
                         "action": result.action,
                         "message": result.message,
-                        "level": "study",
-                        "details": _json.dumps(result.details) if result.details else "",
-                    })
-
-        # Patient-level issues
-        for result in patient_report.patient_level_results:
-            if not result.passed:
-                rows.append({
-                    "patient_id": patient_report.patient_id,
-                    "study_id": "",
-                    "modality": "",
-                    "file_path": "",
-                    "check_name": result.check_name,
-                    "action": result.action,
-                    "message": result.message,
-                    "level": "patient",
-                    "details": _json.dumps(result.details) if result.details else "",
-                })
+                        "level": "patient",
+                        "details": _json.dumps(result.details)
+                        if result.details
+                        else "",
+                    }
+                )
 
     # Write CSV
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1627,7 +1695,6 @@ def export_quality_issues(
 
 def _serialize_details(details: Dict[str, Any]) -> Dict[str, Any]:
     """Convert numpy types in details dict to JSON-serializable types."""
-    import json as _json
 
     serialized = {}
     for k, v in details.items():
@@ -1639,9 +1706,13 @@ def _serialize_details(details: Dict[str, Any]) -> Dict[str, Any]:
             serialized[k] = v.tolist()
         elif isinstance(v, (list, tuple)):
             serialized[k] = [
-                float(x) if isinstance(x, (np.floating,)) else
-                int(x) if isinstance(x, (np.integer,)) else
-                x.tolist() if isinstance(x, np.ndarray) else x
+                float(x)
+                if isinstance(x, (np.floating,))
+                else int(x)
+                if isinstance(x, (np.integer,))
+                else x.tolist()
+                if isinstance(x, np.ndarray)
+                else x
                 for x in v
             ]
         elif isinstance(v, dict):
@@ -1697,7 +1768,9 @@ def export_quality_metrics(
                     # Update summary counts
                     if result.check_name not in checks_summary:
                         checks_summary[result.check_name] = {
-                            "total": 0, "passed": 0, "failed": 0,
+                            "total": 0,
+                            "passed": 0,
+                            "failed": 0,
                         }
                     checks_summary[result.check_name]["total"] += 1
                     if result.passed:
@@ -1745,9 +1818,7 @@ def export_quality_metrics(
 
     # Build summary
     total_patients = len(patient_reports)
-    patients_passed = sum(
-        1 for r in patient_reports if not r.has_blocking_issues
-    )
+    patients_passed = sum(1 for r in patient_reports if not r.has_blocking_issues)
 
     output = {
         "patients": patients_data,
