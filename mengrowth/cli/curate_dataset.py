@@ -216,6 +216,14 @@ Output structure:
         help="Disable metadata processing entirely.",
     )
 
+    # Manual curation
+    parser.add_argument(
+        "--final-manual-curation",
+        type=Path,
+        default=None,
+        help="Path to manual curation YAML. Removes specified studies, re-runs analysis/visualization.",
+    )
+
     # Common options
     parser.add_argument(
         "--dry-run",
@@ -257,12 +265,20 @@ def main() -> int:
 
     try:
         # Validate arguments
-        if not args.skip_reorganize and args.input_root is None:
+        if (
+            not args.skip_reorganize
+            and args.input_root is None
+            and args.final_manual_curation is None
+        ):
             logger.error("--input-root is required unless --skip-reorganize is set")
             return 1
 
         # Resolve worker count
-        n_workers = args.workers if args.workers is not None else max(1, (os.cpu_count() or 4) // 2)
+        n_workers = (
+            args.workers
+            if args.workers is not None
+            else max(1, (os.cpu_count() or 4) // 2)
+        )
         logger.info(f"Parallel workers: {n_workers} (of {os.cpu_count()} CPUs)")
 
         # Load configurations
@@ -287,7 +303,11 @@ def main() -> int:
 
         # Initialize metadata manager
         metadata_manager: Optional[MetadataManager] = None
-        if not args.no_metadata and preprocessing_config.metadata and preprocessing_config.metadata.enabled:
+        if (
+            not args.no_metadata
+            and preprocessing_config.metadata
+            and preprocessing_config.metadata.enabled
+        ):
             xlsx_path = args.metadata_xlsx or (
                 Path(preprocessing_config.metadata.xlsx_path)
                 if preprocessing_config.metadata.xlsx_path
@@ -301,17 +321,183 @@ def main() -> int:
                 logger.info(f"Metadata file: {xlsx_path}")
                 metadata_manager = MetadataManager()
                 metadata_manager.load_from_xlsx(xlsx_path)
-                logger.info(f"Loaded metadata for {len(metadata_manager.get_patient_ids())} patients")
+                logger.info(
+                    f"Loaded metadata for {len(metadata_manager.get_patient_ids())} patients"
+                )
 
                 # Show clinical summary
                 summary = metadata_manager.get_clinical_summary()
-                logger.info(f"  Age range: {summary['age_stats'].get('min', 'N/A')} - {summary['age_stats'].get('max', 'N/A')}")
+                logger.info(
+                    f"  Age range: {summary['age_stats'].get('min', 'N/A')} - {summary['age_stats'].get('max', 'N/A')}"
+                )
                 logger.info(f"  Sex distribution: {summary['sex_distribution']}")
                 logger.info(f"  Growth: {summary['growth_distribution']}")
             elif xlsx_path:
                 logger.warning(f"Metadata xlsx file not found: {xlsx_path}")
             else:
                 logger.info("Metadata processing disabled (no xlsx_path configured)")
+
+        # ====================================================================
+        # MANUAL CURATION (separate path — skips upstream pipeline steps)
+        # ====================================================================
+        if args.final_manual_curation is not None:
+            from mengrowth.preprocessing.utils.manual_curation import (
+                apply_manual_curation,
+                load_manual_curation_config,
+            )
+
+            logger.info("")
+            logger.info("=" * 60)
+            logger.info("FINAL MANUAL CURATION")
+            logger.info("=" * 60)
+
+            if not mengrowth_dir.exists():
+                logger.error(f"Dataset directory not found: {mengrowth_dir}")
+                return 1
+
+            mc_config = load_manual_curation_config(args.final_manual_curation)
+            step_start = time.monotonic()
+            mc_stats = apply_manual_curation(mc_config, mengrowth_dir, quality_dir)
+            step_durations["manual_curation"] = time.monotonic() - step_start
+
+            logger.info(f"Studies removed: {mc_stats.studies_removed}")
+            logger.info(
+                f"Patients cascade-removed: {mc_stats.patients_cascade_removed}"
+            )
+            logger.info(f"Exclusions skipped: {mc_stats.exclusions_skipped}")
+            logger.info(
+                f"Dataset now: {mc_stats.patients_remaining} patients, {mc_stats.studies_remaining} studies"
+            )
+
+            # Re-ID to close gaps if any patients were removed
+            if mc_stats.patients_cascade_removed > 0:
+                from mengrowth.preprocessing.utils.manual_curation import (
+                    reid_after_manual_curation,
+                )
+
+                logger.info("")
+                logger.info("=" * 60)
+                logger.info("RE-IDENTIFYING PATIENTS (closing ID gaps)")
+                logger.info("=" * 60)
+                id_mapping_path = dataset_dir / "id_mapping.json"
+                step_start = time.monotonic()
+                rename_map = reid_after_manual_curation(mengrowth_dir, id_mapping_path)
+                step_durations["reid"] = time.monotonic() - step_start
+                if rename_map:
+                    logger.info(f"Renumbered {len(rename_map)} patients")
+
+                    # Update metadata manager with new IDs
+                    if metadata_manager and id_mapping_path.exists():
+                        import json as _json
+
+                        with open(id_mapping_path, "r") as _f:
+                            updated_mapping = _json.load(_f)
+                        # Rebuild format for apply_id_mapping
+                        meta_mapping = {}
+                        for orig_id, info in updated_mapping.items():
+                            meta_mapping[info["new_id"]] = {
+                                "original_id": orig_id,
+                                "studies": info.get("studies", {}),
+                            }
+                        metadata_manager.apply_id_mapping(meta_mapping)
+                        logger.info("Updated metadata with new patient IDs")
+                else:
+                    logger.info("IDs already continuous, no renumbering needed")
+
+            # Clean up montages for removed patients
+            montage_output_dir = quality_dir / "patient_montages"
+            if montage_output_dir.exists():
+                remaining_ids = {d.name for d in mengrowth_dir.iterdir() if d.is_dir()}
+                for montage_png in montage_output_dir.glob("MenGrowth-*.png"):
+                    patient_id = montage_png.stem
+                    if patient_id not in remaining_ids:
+                        montage_png.unlink()
+                        logger.info(f"  Removed stale montage: {montage_png.name}")
+
+            # Re-run analysis
+            if qa_config is not None and qa_output_dir.parent.exists():
+                logger.info("")
+                logger.info("=" * 60)
+                logger.info("RE-RUNNING ANALYSIS")
+                logger.info("=" * 60)
+                step_start = time.monotonic()
+                qa_config.input_dir = mengrowth_dir
+                qa_config.output_dir = qa_output_dir
+                analyzer = QualityAnalyzer(config=qa_config)
+                analyzer.run_analysis()
+                analyzer.save_results()
+                step_durations["analyze"] = time.monotonic() - step_start
+                logger.info(
+                    f"Analysis complete ({_format_duration(step_durations['analyze'])})"
+                )
+
+            # Re-run visualization (with attrition diagram)
+            if qa_config is not None and qa_output_dir.exists():
+                logger.info("")
+                logger.info("=" * 60)
+                logger.info("RE-RUNNING VISUALIZATION")
+                logger.info("=" * 60)
+                qa_config.output_dir = qa_output_dir
+                step_start = time.monotonic()
+                visualizer = QualityVisualizer(
+                    config=qa_config,
+                    results_dir=qa_output_dir,
+                )
+                quality_metrics_path = quality_dir / "quality_metrics.json"
+                visualizer.run_visualization(
+                    metadata_manager=metadata_manager,
+                    quality_metrics_path=quality_metrics_path
+                    if quality_metrics_path.exists()
+                    else None,
+                    quality_dir=quality_dir,
+                )
+                step_durations["visualize"] = time.monotonic() - step_start
+                logger.info(
+                    f"Visualization complete ({_format_duration(step_durations['visualize'])})"
+                )
+
+            # Re-generate patient montages for affected patients
+            montage_output_dir = quality_dir / "patient_montages"
+            if montage_output_dir.exists():
+                logger.info("")
+                logger.info("=" * 60)
+                logger.info("RE-GENERATING PATIENT MONTAGES")
+                logger.info("=" * 60)
+
+                try:
+                    sys.path.insert(
+                        0,
+                        str(Path(__file__).resolve().parent.parent.parent / "scripts"),
+                    )
+                    from visualize_curated_dataset import generate_patient_montage
+
+                    remaining_patients = sorted(
+                        [d for d in mengrowth_dir.iterdir() if d.is_dir()],
+                        key=lambda p: p.name,
+                    )
+                    for patient_dir in remaining_patients:
+                        generate_patient_montage(
+                            patient_dir,
+                            montage_output_dir / f"{patient_dir.name}.png",
+                        )
+                    logger.info(
+                        f"Re-generated montages for {len(remaining_patients)} patients"
+                    )
+                except ImportError:
+                    logger.warning(
+                        "Could not import visualize_curated_dataset for montage regeneration"
+                    )
+
+            pipeline_duration = time.monotonic() - pipeline_start
+            logger.info("")
+            logger.info("=" * 60)
+            logger.info("MANUAL CURATION COMPLETE")
+            logger.info("=" * 60)
+            logger.info(f"Total duration: {_format_duration(pipeline_duration)}")
+            if step_durations:
+                for step_name, duration in step_durations.items():
+                    logger.info(f"  {step_name}: {_format_duration(duration)}")
+            return 0
 
         # ====================================================================
         # STEP 1: REORGANIZE
@@ -342,7 +528,9 @@ def main() -> int:
             logger.info(f"Files copied: {reorg_stats['copied']}")
             logger.info(f"Files skipped: {reorg_stats['skipped']}")
             logger.info(f"Errors: {reorg_stats['errors']}")
-            logger.info(f"Step duration: {_format_duration(step_durations['reorganize'])}")
+            logger.info(
+                f"Step duration: {_format_duration(step_durations['reorganize'])}"
+            )
 
         # ====================================================================
         # STEP 2: FILTER (reid deferred to Step 3)
@@ -354,7 +542,9 @@ def main() -> int:
             logger.info("=" * 60)
 
             if preprocessing_config.filtering is None:
-                logger.warning("Filtering configuration not found, skipping filter step")
+                logger.warning(
+                    "Filtering configuration not found, skipping filter step"
+                )
             else:
                 if not mengrowth_dir.exists():
                     logger.error(
@@ -363,9 +553,15 @@ def main() -> int:
                     )
                     return 1
 
-                logger.info(f"Required sequences: {preprocessing_config.filtering.sequences}")
-                logger.info(f"Min studies per patient: {preprocessing_config.filtering.min_studies_per_patient}")
-                logger.info(f"Re-identify patients: {preprocessing_config.filtering.reid_patients} (deferred to after quality filtering)")
+                logger.info(
+                    f"Required sequences: {preprocessing_config.filtering.sequences}"
+                )
+                logger.info(
+                    f"Min studies per patient: {preprocessing_config.filtering.min_studies_per_patient}"
+                )
+                logger.info(
+                    f"Re-identify patients: {preprocessing_config.filtering.reid_patients} (deferred to after quality filtering)"
+                )
 
                 step_start = time.monotonic()
                 filter_stats = filter_raw_data(
@@ -380,7 +576,9 @@ def main() -> int:
 
                 logger.info(f"Patients kept: {filter_stats['patients_kept']}")
                 logger.info(f"Patients removed: {filter_stats['patients_removed']}")
-                logger.info(f"Step duration: {_format_duration(step_durations['filter'])}")
+                logger.info(
+                    f"Step duration: {_format_duration(step_durations['filter'])}"
+                )
 
         # ====================================================================
         # STEP 2.5: QUALITY FILTERING
@@ -395,6 +593,7 @@ def main() -> int:
             if preprocessing_config.quality_filtering is None:
                 logger.info("Quality filtering not configured, using defaults")
                 from mengrowth.preprocessing.config import QualityFilteringConfig
+
                 qf_config = QualityFilteringConfig()
             else:
                 qf_config = preprocessing_config.quality_filtering
@@ -410,8 +609,10 @@ def main() -> int:
                 else:
                     logger.info(f"Input: {mengrowth_dir}")
                     logger.info(f"Remove blocked: {qf_config.remove_blocked}")
-                    logger.info(f"Min studies per patient: {qf_config.min_studies_per_patient}")
-                    logger.info(f"Running quality validation checks...")
+                    logger.info(
+                        f"Min studies per patient: {qf_config.min_studies_per_patient}"
+                    )
+                    logger.info("Running quality validation checks...")
 
                     step_start = time.monotonic()
                     qf_stats, qf_reports = run_quality_filtering(
@@ -425,14 +626,24 @@ def main() -> int:
                     step_durations["quality_filter"] = time.monotonic() - step_start
 
                     # Export quality issues and metrics
-                    export_quality_issues(qf_reports, quality_dir / "quality_issues.csv")
-                    export_quality_metrics(qf_reports, quality_dir / "quality_metrics.json")
+                    export_quality_issues(
+                        qf_reports, quality_dir / "quality_issues.csv"
+                    )
+                    export_quality_metrics(
+                        qf_reports, quality_dir / "quality_metrics.json"
+                    )
 
                     # Log summary
-                    logger.info(f"Quality filtering complete:")
-                    logger.info(f"  Files: {qf_stats.files_passed} passed, {qf_stats.files_warned} warned, {qf_stats.files_blocked} blocked")
-                    logger.info(f"  Studies: {qf_stats.studies_passed} passed, {qf_stats.studies_blocked} blocked")
-                    logger.info(f"  Patients: {qf_stats.patients_passed} passed, {qf_stats.patients_blocked} blocked")
+                    logger.info("Quality filtering complete:")
+                    logger.info(
+                        f"  Files: {qf_stats.files_passed} passed, {qf_stats.files_warned} warned, {qf_stats.files_blocked} blocked"
+                    )
+                    logger.info(
+                        f"  Studies: {qf_stats.studies_passed} passed, {qf_stats.studies_blocked} blocked"
+                    )
+                    logger.info(
+                        f"  Patients: {qf_stats.patients_passed} passed, {qf_stats.patients_blocked} blocked"
+                    )
 
                     if qf_stats.issues_by_type:
                         logger.info(f"  Issues by type: {qf_stats.issues_by_type}")
@@ -441,7 +652,9 @@ def main() -> int:
                         logger.info(f"  Studies removed: {qf_stats.studies_removed}")
                         logger.info(f"  Patients removed: {qf_stats.patients_removed}")
 
-                    logger.info(f"Step duration: {_format_duration(step_durations['quality_filter'])}")
+                    logger.info(
+                        f"Step duration: {_format_duration(step_durations['quality_filter'])}"
+                    )
 
         # ====================================================================
         # ENSURE ALL DATASET PATIENTS HAVE METADATA
@@ -454,7 +667,10 @@ def main() -> int:
         # ====================================================================
         # STEP 3: REID (after quality filtering for continuous IDs)
         # ====================================================================
-        if preprocessing_config.filtering and preprocessing_config.filtering.reid_patients:
+        if (
+            preprocessing_config.filtering
+            and preprocessing_config.filtering.reid_patients
+        ):
             logger.info("")
             logger.info("=" * 60)
             logger.info("STEP 3: REID")
@@ -482,10 +698,14 @@ def main() -> int:
                             "studies": mapping_info.get("studies", {}),
                         }
                     metadata_manager.apply_id_mapping(metadata_mapping)
-                    logger.info(f"Applied ID mapping to metadata for {len(metadata_mapping)} patients")
+                    logger.info(
+                        f"Applied ID mapping to metadata for {len(metadata_mapping)} patients"
+                    )
 
                 logger.info(f"Re-identified {len(id_mapping)} patients")
-                logger.info(f"Step duration: {_format_duration(step_durations['reid'])}")
+                logger.info(
+                    f"Step duration: {_format_duration(step_durations['reid'])}"
+                )
 
         # ====================================================================
         # EXPORT METADATA
@@ -507,7 +727,7 @@ def main() -> int:
             logger.info(f"Total patients in metadata: {summary['total_patients']}")
             logger.info(f"Patients included: {summary['included_patients']}")
             logger.info(f"Patients excluded: {summary['excluded_patients']}")
-            if summary['exclusion_reasons']:
+            if summary["exclusion_reasons"]:
                 logger.info(f"Exclusion reasons: {summary['exclusion_reasons']}")
 
         # ====================================================================
@@ -520,10 +740,14 @@ def main() -> int:
             logger.info("=" * 60)
 
             if qa_config is None:
-                logger.warning(f"QA config not found at {qa_config_path}, skipping analysis")
+                logger.warning(
+                    f"QA config not found at {qa_config_path}, skipping analysis"
+                )
             else:
                 if not mengrowth_dir.exists():
-                    logger.warning(f"Data directory not found: {mengrowth_dir}, skipping analysis")
+                    logger.warning(
+                        f"Data directory not found: {mengrowth_dir}, skipping analysis"
+                    )
                 else:
                     logger.info(f"Input: {mengrowth_dir}")
                     logger.info(f"Output: {qa_output_dir}")
@@ -537,7 +761,9 @@ def main() -> int:
                         analyzer.run_analysis()
                         analyzer.save_results()
                         step_durations["analyze"] = time.monotonic() - step_start
-                        logger.info(f"Quality analysis complete ({_format_duration(step_durations['analyze'])})")
+                        logger.info(
+                            f"Quality analysis complete ({_format_duration(step_durations['analyze'])})"
+                        )
                     else:
                         logger.info("Dry run - skipping actual analysis")
 
@@ -551,9 +777,13 @@ def main() -> int:
             logger.info("=" * 60)
 
             if not qa_output_dir.exists():
-                logger.warning(f"Analysis results not found: {qa_output_dir}, skipping visualization")
+                logger.warning(
+                    f"Analysis results not found: {qa_output_dir}, skipping visualization"
+                )
             elif qa_config is None:
-                logger.warning(f"QA config not found at {qa_config_path}, skipping visualization")
+                logger.warning(
+                    f"QA config not found at {qa_config_path}, skipping visualization"
+                )
             else:
                 # Override output_dir to match the analysis output location
                 qa_config.output_dir = qa_output_dir
@@ -572,10 +802,15 @@ def main() -> int:
                     quality_metrics_path = quality_dir / "quality_metrics.json"
                     visualizer.run_visualization(
                         metadata_manager=metadata_manager,
-                        quality_metrics_path=quality_metrics_path if quality_metrics_path.exists() else None,
+                        quality_metrics_path=quality_metrics_path
+                        if quality_metrics_path.exists()
+                        else None,
+                        quality_dir=quality_dir,
                     )
                     step_durations["visualize"] = time.monotonic() - step_start
-                    logger.info(f"Visualization complete ({_format_duration(step_durations['visualize'])})")
+                    logger.info(
+                        f"Visualization complete ({_format_duration(step_durations['visualize'])})"
+                    )
                 else:
                     logger.info("Dry run - skipping actual visualization")
 
@@ -597,14 +832,23 @@ def main() -> int:
         logger.info("Generated files:")
         logger.info(f"  - {dataset_dir}/MenGrowth-2025/  (reorganized data)")
         logger.info(f"  - {quality_dir}/rejected_files.csv")
-        if preprocessing_config.filtering and preprocessing_config.filtering.reid_patients:
+        if (
+            preprocessing_config.filtering
+            and preprocessing_config.filtering.reid_patients
+        ):
             logger.info(f"  - {dataset_dir}/id_mapping.json")
         if not args.skip_quality_filter:
             logger.info(f"  - {quality_dir}/quality_issues.csv  (quality validation)")
-            logger.info(f"  - {quality_dir}/quality_metrics.json  (all computed metrics)")
+            logger.info(
+                f"  - {quality_dir}/quality_metrics.json  (all computed metrics)"
+            )
         if metadata_manager:
-            logger.info(f"  - {dataset_dir}/{preprocessing_config.metadata.output_csv_name}")
-            logger.info(f"  - {dataset_dir}/{preprocessing_config.metadata.output_json_name}")
+            logger.info(
+                f"  - {dataset_dir}/{preprocessing_config.metadata.output_csv_name}"
+            )
+            logger.info(
+                f"  - {dataset_dir}/{preprocessing_config.metadata.output_json_name}"
+            )
         if not args.skip_analyze:
             logger.info(f"  - {qa_output_dir}/  (analysis results)")
         if not args.skip_visualize:

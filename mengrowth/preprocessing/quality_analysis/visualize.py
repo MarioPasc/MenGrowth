@@ -68,7 +68,9 @@ class QualityVisualizer:
         per_study_csv = self.results_dir / "per_study_metrics.csv"
         if per_study_csv.exists():
             results["per_study"] = pd.read_csv(per_study_csv)
-            self.logger.info(f"Loaded per-study metrics: {len(results['per_study'])} rows")
+            self.logger.info(
+                f"Loaded per-study metrics: {len(results['per_study'])} rows"
+            )
         else:
             self.logger.warning(f"Per-study CSV not found: {per_study_csv}")
             results["per_study"] = None
@@ -77,7 +79,9 @@ class QualityVisualizer:
         per_patient_csv = self.results_dir / "per_patient_summary.csv"
         if per_patient_csv.exists():
             results["per_patient"] = pd.read_csv(per_patient_csv)
-            self.logger.info(f"Loaded per-patient summary: {len(results['per_patient'])} rows")
+            self.logger.info(
+                f"Loaded per-patient summary: {len(results['per_patient'])} rows"
+            )
         else:
             self.logger.warning(f"Per-patient CSV not found: {per_patient_csv}")
             results["per_patient"] = None
@@ -119,7 +123,10 @@ class QualityVisualizer:
         plot_config = self.config.visualization.plots
 
         # Studies per patient histogram
-        if plot_config.studies_per_patient_histogram and results.get("per_patient") is not None:
+        if (
+            plot_config.studies_per_patient_histogram
+            and results.get("per_patient") is not None
+        ):
             plot_path = self.plot_studies_per_patient(results["per_patient"])
             if plot_path:
                 saved_plots["studies_per_patient"] = plot_path
@@ -143,7 +150,10 @@ class QualityVisualizer:
                 saved_plots["intensity_boxplots"] = plot_path
 
         # Dimension consistency scatter
-        if plot_config.dimension_consistency_scatter and results.get("per_study") is not None:
+        if (
+            plot_config.dimension_consistency_scatter
+            and results.get("per_study") is not None
+        ):
             plot_path = self.plot_dimension_consistency(results["per_study"])
             if plot_path:
                 saved_plots["dimension_scatter"] = plot_path
@@ -167,27 +177,51 @@ class QualityVisualizer:
             Path to saved plot file.
         """
         fig, ax = plt.subplots(
-            figsize=(self.config.visualization.figure.width,
-                     self.config.visualization.figure.height)
+            figsize=(
+                self.config.visualization.figure.width,
+                self.config.visualization.figure.height,
+            )
         )
 
         # Histogram
         studies_counts = per_patient_df["num_studies"]
-        ax.hist(studies_counts, bins=range(1, studies_counts.max() + 2), alpha=0.7, edgecolor="black")
+        ax.hist(
+            studies_counts,
+            bins=range(1, studies_counts.max() + 2),
+            alpha=0.7,
+            edgecolor="black",
+        )
 
         # Add statistics overlay
         mean_studies = studies_counts.mean()
         median_studies = studies_counts.median()
-        ax.axvline(mean_studies, color="red", linestyle="--", linewidth=2, label=f"Mean: {mean_studies:.2f}")
-        ax.axvline(median_studies, color="orange", linestyle="--", linewidth=2, label=f"Median: {median_studies:.0f}")
+        ax.axvline(
+            mean_studies,
+            color="red",
+            linestyle="--",
+            linewidth=2,
+            label=f"Mean: {mean_studies:.2f}",
+        )
+        ax.axvline(
+            median_studies,
+            color="orange",
+            linestyle="--",
+            linewidth=2,
+            label=f"Median: {median_studies:.0f}",
+        )
 
         ax.set_xlabel("Number of Studies per Patient", fontsize=12)
         ax.set_ylabel("Number of Patients", fontsize=12)
-        ax.set_title("Distribution of Studies per Patient", fontsize=14, fontweight="bold")
+        ax.set_title(
+            "Distribution of Studies per Patient", fontsize=14, fontweight="bold"
+        )
         ax.legend()
         ax.grid(True, alpha=0.3)
 
-        plot_path = self.figure_dir / f"studies_per_patient.{self.config.visualization.figure.format}"
+        plot_path = (
+            self.figure_dir
+            / f"studies_per_patient.{self.config.visualization.figure.format}"
+        )
         plt.tight_layout()
         plt.savefig(plot_path, dpi=self.config.visualization.figure.dpi)
         plt.close()
@@ -217,34 +251,60 @@ class QualityVisualizer:
 
         # Create grouped bar chart
         fig, ax = plt.subplots(
-            figsize=(self.config.visualization.figure.width,
-                     self.config.visualization.figure.height)
+            figsize=(
+                self.config.visualization.figure.width,
+                self.config.visualization.figure.height,
+            )
         )
 
         x = np.arange(len(sequences))
         width = 0.35
 
-        bars1 = ax.bar(x - width/2, present_counts, width, label="Present", color="green", alpha=0.7)
-        bars2 = ax.bar(x + width/2, missing_counts, width, label="Missing", color="red", alpha=0.7)
+        bars1 = ax.bar(
+            x - width / 2,
+            present_counts,
+            width,
+            label="Present",
+            color="green",
+            alpha=0.7,
+        )
+        bars2 = ax.bar(
+            x + width / 2,
+            missing_counts,
+            width,
+            label="Missing",
+            color="red",
+            alpha=0.7,
+        )
 
         ax.set_xlabel("Sequence Type", fontsize=12)
         ax.set_ylabel("Number of Studies", fontsize=12)
-        ax.set_title("Sequence Availability Across Studies", fontsize=14, fontweight="bold")
+        ax.set_title(
+            "Sequence Availability Across Studies", fontsize=14, fontweight="bold"
+        )
         ax.set_xticks(x)
         ax.set_xticklabels(sequences)
         ax.legend()
-        ax.grid(True, alpha=0.3, axis='y')
+        ax.grid(True, alpha=0.3, axis="y")
 
         # Add value labels on bars
         for bars in [bars1, bars2]:
             for bar in bars:
                 height = bar.get_height()
                 if height > 0:
-                    ax.text(bar.get_x() + bar.get_width()/2., height,
-                           f'{int(height)}',
-                           ha='center', va='bottom', fontsize=9)
+                    ax.text(
+                        bar.get_x() + bar.get_width() / 2.0,
+                        height,
+                        f"{int(height)}",
+                        ha="center",
+                        va="bottom",
+                        fontsize=9,
+                    )
 
-        plot_path = self.figure_dir / f"missing_sequences.{self.config.visualization.figure.format}"
+        plot_path = (
+            self.figure_dir
+            / f"missing_sequences.{self.config.visualization.figure.format}"
+        )
         plt.tight_layout()
         plt.savefig(plot_path, dpi=self.config.visualization.figure.dpi)
         plt.close()
@@ -266,8 +326,14 @@ class QualityVisualizer:
             self.logger.warning("Spacing data not found in per-study metrics")
             return None
 
-        fig, axes = plt.subplots(1, 3, figsize=(self.config.visualization.figure.width * 1.5,
-                                                  self.config.visualization.figure.height))
+        fig, axes = plt.subplots(
+            1,
+            3,
+            figsize=(
+                self.config.visualization.figure.width * 1.5,
+                self.config.visualization.figure.height,
+            ),
+        )
 
         for idx, axis_name in enumerate(["x", "y", "z"]):
             col_name = f"spacing_{axis_name}"
@@ -281,12 +347,19 @@ class QualityVisualizer:
             sns.violinplot(data=df_filtered, x="sequence", y=col_name, ax=axes[idx])
 
             axes[idx].set_xlabel("Sequence Type", fontsize=11)
-            axes[idx].set_ylabel(f"Spacing (mm)", fontsize=11)
-            axes[idx].set_title(f"{axis_name.upper()}-axis Spacing Distribution", fontsize=12, fontweight="bold")
-            axes[idx].grid(True, alpha=0.3, axis='y')
-            axes[idx].tick_params(axis='x', rotation=45)
+            axes[idx].set_ylabel("Spacing (mm)", fontsize=11)
+            axes[idx].set_title(
+                f"{axis_name.upper()}-axis Spacing Distribution",
+                fontsize=12,
+                fontweight="bold",
+            )
+            axes[idx].grid(True, alpha=0.3, axis="y")
+            axes[idx].tick_params(axis="x", rotation=45)
 
-        plot_path = self.figure_dir / f"spacing_distributions.{self.config.visualization.figure.format}"
+        plot_path = (
+            self.figure_dir
+            / f"spacing_distributions.{self.config.visualization.figure.format}"
+        )
         plt.tight_layout()
         plt.savefig(plot_path, dpi=self.config.visualization.figure.dpi)
         plt.close()
@@ -294,7 +367,9 @@ class QualityVisualizer:
         self.logger.info(f"Saved spacing distributions plot: {plot_path}")
         return plot_path
 
-    def plot_intensity_distributions(self, per_study_df: pd.DataFrame) -> Optional[Path]:
+    def plot_intensity_distributions(
+        self, per_study_df: pd.DataFrame
+    ) -> Optional[Path]:
         """Plot box plots of intensity value distributions per sequence.
 
         Args:
@@ -307,8 +382,14 @@ class QualityVisualizer:
             self.logger.warning("Intensity data not found in per-study metrics")
             return None
 
-        fig, axes = plt.subplots(2, 2, figsize=(self.config.visualization.figure.width * 1.2,
-                                                  self.config.visualization.figure.height * 1.5))
+        fig, axes = plt.subplots(
+            2,
+            2,
+            figsize=(
+                self.config.visualization.figure.width * 1.2,
+                self.config.visualization.figure.height * 1.5,
+            ),
+        )
         axes = axes.flatten()
 
         metrics = ["mean", "std", "min", "max"]
@@ -326,11 +407,18 @@ class QualityVisualizer:
 
             axes[idx].set_xlabel("Sequence Type", fontsize=11)
             axes[idx].set_ylabel(f"Intensity {metric.capitalize()}", fontsize=11)
-            axes[idx].set_title(f"Intensity {metric.capitalize()} Distribution", fontsize=12, fontweight="bold")
-            axes[idx].grid(True, alpha=0.3, axis='y')
-            axes[idx].tick_params(axis='x', rotation=45)
+            axes[idx].set_title(
+                f"Intensity {metric.capitalize()} Distribution",
+                fontsize=12,
+                fontweight="bold",
+            )
+            axes[idx].grid(True, alpha=0.3, axis="y")
+            axes[idx].tick_params(axis="x", rotation=45)
 
-        plot_path = self.figure_dir / f"intensity_distributions.{self.config.visualization.figure.format}"
+        plot_path = (
+            self.figure_dir
+            / f"intensity_distributions.{self.config.visualization.figure.format}"
+        )
         plt.tight_layout()
         plt.savefig(plot_path, dpi=self.config.visualization.figure.dpi)
         plt.close()
@@ -351,8 +439,14 @@ class QualityVisualizer:
             self.logger.warning("Dimension data not found in per-study metrics")
             return None
 
-        fig, axes = plt.subplots(1, 3, figsize=(self.config.visualization.figure.width * 1.5,
-                                                  self.config.visualization.figure.height))
+        fig, axes = plt.subplots(
+            1,
+            3,
+            figsize=(
+                self.config.visualization.figure.width * 1.5,
+                self.config.visualization.figure.height,
+            ),
+        )
 
         dimension_pairs = [("width", "height"), ("width", "depth"), ("height", "depth")]
 
@@ -366,15 +460,24 @@ class QualityVisualizer:
 
             for sequence in df_filtered["sequence"].unique():
                 seq_data = df_filtered[df_filtered["sequence"] == sequence]
-                axes[idx].scatter(seq_data[dim1], seq_data[dim2], label=sequence, alpha=0.6, s=50)
+                axes[idx].scatter(
+                    seq_data[dim1], seq_data[dim2], label=sequence, alpha=0.6, s=50
+                )
 
             axes[idx].set_xlabel(f"{dim1.capitalize()} (voxels)", fontsize=11)
             axes[idx].set_ylabel(f"{dim2.capitalize()} (voxels)", fontsize=11)
-            axes[idx].set_title(f"{dim1.capitalize()} vs {dim2.capitalize()}", fontsize=12, fontweight="bold")
+            axes[idx].set_title(
+                f"{dim1.capitalize()} vs {dim2.capitalize()}",
+                fontsize=12,
+                fontweight="bold",
+            )
             axes[idx].legend(fontsize=9)
             axes[idx].grid(True, alpha=0.3)
 
-        plot_path = self.figure_dir / f"dimension_consistency.{self.config.visualization.figure.format}"
+        plot_path = (
+            self.figure_dir
+            / f"dimension_consistency.{self.config.visualization.figure.format}"
+        )
         plt.tight_layout()
         plt.savefig(plot_path, dpi=self.config.visualization.figure.dpi)
         plt.close()
@@ -396,8 +499,10 @@ class QualityVisualizer:
             return None
 
         fig, ax = plt.subplots(
-            figsize=(self.config.visualization.figure.width,
-                     self.config.visualization.figure.height)
+            figsize=(
+                self.config.visualization.figure.width,
+                self.config.visualization.figure.height,
+            )
         )
 
         # Filter out infinite and NaN values
@@ -414,11 +519,16 @@ class QualityVisualizer:
 
         ax.set_xlabel("Sequence Type", fontsize=12)
         ax.set_ylabel("SNR", fontsize=12)
-        ax.set_title("Signal-to-Noise Ratio Distribution", fontsize=14, fontweight="bold")
-        ax.grid(True, alpha=0.3, axis='y')
-        ax.tick_params(axis='x', rotation=45)
+        ax.set_title(
+            "Signal-to-Noise Ratio Distribution", fontsize=14, fontweight="bold"
+        )
+        ax.grid(True, alpha=0.3, axis="y")
+        ax.tick_params(axis="x", rotation=45)
 
-        plot_path = self.figure_dir / f"snr_distribution.{self.config.visualization.figure.format}"
+        plot_path = (
+            self.figure_dir
+            / f"snr_distribution.{self.config.visualization.figure.format}"
+        )
         plt.tight_layout()
         plt.savefig(plot_path, dpi=self.config.visualization.figure.dpi)
         plt.close()
@@ -459,8 +569,10 @@ class QualityVisualizer:
             return None
 
         fig, ax = plt.subplots(
-            figsize=(self.config.visualization.figure.width,
-                     self.config.visualization.figure.height)
+            figsize=(
+                self.config.visualization.figure.width,
+                self.config.visualization.figure.height,
+            )
         )
 
         # Histogram
@@ -469,8 +581,20 @@ class QualityVisualizer:
         # Add statistics overlay
         mean_age = age_stats.get("mean", np.mean(ages))
         median_age = age_stats.get("median", np.median(ages))
-        ax.axvline(mean_age, color="red", linestyle="--", linewidth=2, label=f"Mean: {mean_age:.1f}")
-        ax.axvline(median_age, color="orange", linestyle="--", linewidth=2, label=f"Median: {median_age:.1f}")
+        ax.axvline(
+            mean_age,
+            color="red",
+            linestyle="--",
+            linewidth=2,
+            label=f"Mean: {mean_age:.1f}",
+        )
+        ax.axvline(
+            median_age,
+            color="orange",
+            linestyle="--",
+            linewidth=2,
+            label=f"Median: {median_age:.1f}",
+        )
 
         ax.set_xlabel("Age (years)", fontsize=12)
         ax.set_ylabel("Number of Patients", fontsize=12)
@@ -478,7 +602,10 @@ class QualityVisualizer:
         ax.legend()
         ax.grid(True, alpha=0.3)
 
-        plot_path = self.figure_dir / f"age_distribution.{self.config.visualization.figure.format}"
+        plot_path = (
+            self.figure_dir
+            / f"age_distribution.{self.config.visualization.figure.format}"
+        )
         plt.tight_layout()
         plt.savefig(plot_path, dpi=self.config.visualization.figure.dpi)
         plt.close()
@@ -500,13 +627,17 @@ class QualityVisualizer:
         summary = metadata_manager.get_clinical_summary()
         sex_dist = summary.get("sex_distribution", {})
 
-        if not sex_dist or (sex_dist.get("male", 0) == 0 and sex_dist.get("female", 0) == 0):
+        if not sex_dist or (
+            sex_dist.get("male", 0) == 0 and sex_dist.get("female", 0) == 0
+        ):
             self.logger.warning("No sex distribution data available")
             return None
 
         fig, ax = plt.subplots(
-            figsize=(self.config.visualization.figure.width,
-                     self.config.visualization.figure.height)
+            figsize=(
+                self.config.visualization.figure.width,
+                self.config.visualization.figure.height,
+            )
         )
 
         labels = []
@@ -520,11 +651,20 @@ class QualityVisualizer:
                 sizes.append(count)
                 colors.append(color_map.get(sex, "#95a5a6"))
 
-        ax.pie(sizes, labels=labels, colors=colors, autopct='%1.1f%%',
-               startangle=90, explode=[0.02] * len(sizes))
+        ax.pie(
+            sizes,
+            labels=labels,
+            colors=colors,
+            autopct="%1.1f%%",
+            startangle=90,
+            explode=[0.02] * len(sizes),
+        )
         ax.set_title("Patient Sex Distribution", fontsize=14, fontweight="bold")
 
-        plot_path = self.figure_dir / f"sex_distribution.{self.config.visualization.figure.format}"
+        plot_path = (
+            self.figure_dir
+            / f"sex_distribution.{self.config.visualization.figure.format}"
+        )
         plt.tight_layout()
         plt.savefig(plot_path, dpi=self.config.visualization.figure.dpi)
         plt.close()
@@ -551,8 +691,10 @@ class QualityVisualizer:
             return None
 
         fig, ax = plt.subplots(
-            figsize=(self.config.visualization.figure.width,
-                     self.config.visualization.figure.height)
+            figsize=(
+                self.config.visualization.figure.width,
+                self.config.visualization.figure.height,
+            )
         )
 
         categories = []
@@ -570,15 +712,25 @@ class QualityVisualizer:
 
         # Add value labels on bars
         for bar, count in zip(bars, counts):
-            ax.text(bar.get_x() + bar.get_width()/2., bar.get_height(),
-                   f'{count}', ha='center', va='bottom', fontsize=11, fontweight="bold")
+            ax.text(
+                bar.get_x() + bar.get_width() / 2.0,
+                bar.get_height(),
+                f"{count}",
+                ha="center",
+                va="bottom",
+                fontsize=11,
+                fontweight="bold",
+            )
 
         ax.set_xlabel("Growth Category", fontsize=12)
         ax.set_ylabel("Number of Patients", fontsize=12)
         ax.set_title("Tumor Growth Distribution", fontsize=14, fontweight="bold")
-        ax.grid(True, alpha=0.3, axis='y')
+        ax.grid(True, alpha=0.3, axis="y")
 
-        plot_path = self.figure_dir / f"growth_category.{self.config.visualization.figure.format}"
+        plot_path = (
+            self.figure_dir
+            / f"growth_category.{self.config.visualization.figure.format}"
+        )
         plt.tight_layout()
         plt.savefig(plot_path, dpi=self.config.visualization.figure.dpi)
         plt.close()
@@ -604,8 +756,10 @@ class QualityVisualizer:
             return None
 
         fig, ax = plt.subplots(
-            figsize=(self.config.visualization.figure.width * 1.2,
-                     self.config.visualization.figure.height)
+            figsize=(
+                self.config.visualization.figure.width * 1.2,
+                self.config.visualization.figure.height,
+            )
         )
 
         # Plot each patient's progression
@@ -614,26 +768,40 @@ class QualityVisualizer:
             volumes = [v["volume"] for v in prog["volumes"]]
             growth_status = prog.get("growth_status")
 
-            color = "#e74c3c" if growth_status else "#27ae60" if growth_status is False else "#95a5a6"
+            color = (
+                "#e74c3c"
+                if growth_status
+                else "#27ae60"
+                if growth_status is False
+                else "#95a5a6"
+            )
             alpha = 0.7 if growth_status else 0.5
 
-            ax.plot(timepoints, volumes, marker='o', color=color, alpha=alpha, linewidth=1.5)
+            ax.plot(
+                timepoints, volumes, marker="o", color=color, alpha=alpha, linewidth=1.5
+            )
 
         # Add legend
         from matplotlib.lines import Line2D
+
         legend_elements = [
-            Line2D([0], [0], color="#e74c3c", marker='o', label="Growing"),
-            Line2D([0], [0], color="#27ae60", marker='o', label="Stable"),
-            Line2D([0], [0], color="#95a5a6", marker='o', label="Unknown"),
+            Line2D([0], [0], color="#e74c3c", marker="o", label="Growing"),
+            Line2D([0], [0], color="#27ae60", marker="o", label="Stable"),
+            Line2D([0], [0], color="#95a5a6", marker="o", label="Unknown"),
         ]
-        ax.legend(handles=legend_elements, loc='upper left')
+        ax.legend(handles=legend_elements, loc="upper left")
 
         ax.set_xlabel("Timepoint (0=baseline, 1-5=controls)", fontsize=12)
         ax.set_ylabel("Tumor Volume (mm³)", fontsize=12)
-        ax.set_title("Tumor Volume Progression Over Time", fontsize=14, fontweight="bold")
+        ax.set_title(
+            "Tumor Volume Progression Over Time", fontsize=14, fontweight="bold"
+        )
         ax.grid(True, alpha=0.3)
 
-        plot_path = self.figure_dir / f"tumor_volume_progression.{self.config.visualization.figure.format}"
+        plot_path = (
+            self.figure_dir
+            / f"tumor_volume_progression.{self.config.visualization.figure.format}"
+        )
         plt.tight_layout()
         plt.savefig(plot_path, dpi=self.config.visualization.figure.dpi)
         plt.close()
@@ -662,20 +830,38 @@ class QualityVisualizer:
             self.logger.warning("No inclusion data available")
             return None
 
-        fig, axes = plt.subplots(1, 2, figsize=(self.config.visualization.figure.width * 1.3,
-                                                  self.config.visualization.figure.height))
+        fig, axes = plt.subplots(
+            1,
+            2,
+            figsize=(
+                self.config.visualization.figure.width * 1.3,
+                self.config.visualization.figure.height,
+            ),
+        )
 
         # Left plot: Included vs Excluded
-        bars = axes[0].bar(["Included", "Excluded"], [included, excluded],
-                          color=["#27ae60", "#e74c3c"], alpha=0.8, edgecolor="black")
+        bars = axes[0].bar(
+            ["Included", "Excluded"],
+            [included, excluded],
+            color=["#27ae60", "#e74c3c"],
+            alpha=0.8,
+            edgecolor="black",
+        )
 
         for bar, count in zip(bars, [included, excluded]):
-            axes[0].text(bar.get_x() + bar.get_width()/2., bar.get_height(),
-                        f'{count}', ha='center', va='bottom', fontsize=12, fontweight="bold")
+            axes[0].text(
+                bar.get_x() + bar.get_width() / 2.0,
+                bar.get_height(),
+                f"{count}",
+                ha="center",
+                va="bottom",
+                fontsize=12,
+                fontweight="bold",
+            )
 
         axes[0].set_ylabel("Number of Patients", fontsize=12)
         axes[0].set_title("Patient Inclusion Status", fontsize=12, fontweight="bold")
-        axes[0].grid(True, alpha=0.3, axis='y')
+        axes[0].grid(True, alpha=0.3, axis="y")
 
         # Right plot: Exclusion reasons (if any)
         if exclusion_reasons:
@@ -691,12 +877,17 @@ class QualityVisualizer:
             axes[1].set_yticklabels(reasons_short, fontsize=9)
             axes[1].set_xlabel("Count", fontsize=12)
             axes[1].set_title("Exclusion Reasons", fontsize=12, fontweight="bold")
-            axes[1].grid(True, alpha=0.3, axis='x')
+            axes[1].grid(True, alpha=0.3, axis="x")
         else:
-            axes[1].text(0.5, 0.5, "No exclusions", ha='center', va='center', fontsize=14)
+            axes[1].text(
+                0.5, 0.5, "No exclusions", ha="center", va="center", fontsize=14
+            )
             axes[1].set_title("Exclusion Reasons", fontsize=12, fontweight="bold")
 
-        plot_path = self.figure_dir / f"inclusion_summary.{self.config.visualization.figure.format}"
+        plot_path = (
+            self.figure_dir
+            / f"inclusion_summary.{self.config.visualization.figure.format}"
+        )
         plt.tight_layout()
         plt.savefig(plot_path, dpi=self.config.visualization.figure.dpi)
         plt.close()
@@ -751,7 +942,8 @@ class QualityVisualizer:
     # =========================================================================
 
     def plot_quality_filter_summary(
-        self, quality_metrics: Dict,
+        self,
+        quality_metrics: Dict,
     ) -> Optional[Path]:
         """Plot stacked bar chart of pass/warn/block counts per check type.
 
@@ -763,7 +955,9 @@ class QualityVisualizer:
         """
         checks_summary = quality_metrics.get("summary", {}).get("checks_summary", {})
         if not checks_summary:
-            self.logger.warning("No checks summary data for quality filter summary plot")
+            self.logger.warning(
+                "No checks summary data for quality filter summary plot"
+            )
             return None
 
         check_names = list(checks_summary.keys())
@@ -771,25 +965,34 @@ class QualityVisualizer:
         failed = [checks_summary[c].get("failed", 0) for c in check_names]
 
         fig, ax = plt.subplots(
-            figsize=(self.config.visualization.figure.width * 1.2,
-                     self.config.visualization.figure.height)
+            figsize=(
+                self.config.visualization.figure.width * 1.2,
+                self.config.visualization.figure.height,
+            )
         )
 
         x = np.arange(len(check_names))
         width = 0.5
 
         ax.bar(x, passed, width, label="Passed", color="#27ae60", alpha=0.8)
-        ax.bar(x, failed, width, bottom=passed, label="Failed", color="#e74c3c", alpha=0.8)
+        ax.bar(
+            x, failed, width, bottom=passed, label="Failed", color="#e74c3c", alpha=0.8
+        )
 
         ax.set_xlabel("Check Type", fontsize=12)
         ax.set_ylabel("Number of Files", fontsize=12)
-        ax.set_title("Quality Filtering Results by Check Type", fontsize=14, fontweight="bold")
+        ax.set_title(
+            "Quality Filtering Results by Check Type", fontsize=14, fontweight="bold"
+        )
         ax.set_xticks(x)
         ax.set_xticklabels(check_names, rotation=45, ha="right", fontsize=9)
         ax.legend()
         ax.grid(True, alpha=0.3, axis="y")
 
-        plot_path = self.figure_dir / f"quality_filter_summary.{self.config.visualization.figure.format}"
+        plot_path = (
+            self.figure_dir
+            / f"quality_filter_summary.{self.config.visualization.figure.format}"
+        )
         plt.tight_layout()
         plt.savefig(plot_path, dpi=self.config.visualization.figure.dpi)
         plt.close()
@@ -798,7 +1001,8 @@ class QualityVisualizer:
         return plot_path
 
     def plot_snr_by_modality(
-        self, quality_metrics: Dict,
+        self,
+        quality_metrics: Dict,
     ) -> Optional[Path]:
         """Plot violin/box plots of SNR values from quality filtering, per modality.
 
@@ -829,14 +1033,21 @@ class QualityVisualizer:
             return None
 
         fig, ax = plt.subplots(
-            figsize=(self.config.visualization.figure.width,
-                     self.config.visualization.figure.height)
+            figsize=(
+                self.config.visualization.figure.width,
+                self.config.visualization.figure.height,
+            )
         )
 
         modalities = sorted(snr_data.keys())
         data_lists = [snr_data[m] for m in modalities]
 
-        parts = ax.violinplot(data_lists, positions=range(len(modalities)), showmeans=True, showmedians=True)
+        parts = ax.violinplot(
+            data_lists,
+            positions=range(len(modalities)),
+            showmeans=True,
+            showmedians=True,
+        )
 
         # Color the violins
         for pc in parts["bodies"]:
@@ -847,10 +1058,21 @@ class QualityVisualizer:
         for patient_data in patients.values():
             for study_data in patient_data.get("studies", {}).values():
                 for modality, file_data in study_data.get("files", {}).items():
-                    threshold = file_data.get("checks", {}).get("snr_filtering", {}).get("details", {}).get("threshold")
+                    threshold = (
+                        file_data.get("checks", {})
+                        .get("snr_filtering", {})
+                        .get("details", {})
+                        .get("threshold")
+                    )
                     if threshold is not None:
-                        ax.axhline(y=threshold, color="#e74c3c", linestyle="--", linewidth=1.5,
-                                  label=f"Threshold ({threshold})", alpha=0.7)
+                        ax.axhline(
+                            y=threshold,
+                            color="#e74c3c",
+                            linestyle="--",
+                            linewidth=1.5,
+                            label=f"Threshold ({threshold})",
+                            alpha=0.7,
+                        )
                         break
                 else:
                     continue
@@ -863,11 +1085,18 @@ class QualityVisualizer:
         ax.set_xticklabels(modalities)
         ax.set_xlabel("Modality", fontsize=12)
         ax.set_ylabel("SNR", fontsize=12)
-        ax.set_title("SNR Distribution by Modality (Quality Filtering)", fontsize=14, fontweight="bold")
+        ax.set_title(
+            "SNR Distribution by Modality (Quality Filtering)",
+            fontsize=14,
+            fontweight="bold",
+        )
         ax.legend()
         ax.grid(True, alpha=0.3, axis="y")
 
-        plot_path = self.figure_dir / f"qf_snr_by_modality.{self.config.visualization.figure.format}"
+        plot_path = (
+            self.figure_dir
+            / f"qf_snr_by_modality.{self.config.visualization.figure.format}"
+        )
         plt.tight_layout()
         plt.savefig(plot_path, dpi=self.config.visualization.figure.dpi)
         plt.close()
@@ -876,7 +1105,8 @@ class QualityVisualizer:
         return plot_path
 
     def plot_quality_metrics_heatmap(
-        self, quality_metrics: Dict,
+        self,
+        quality_metrics: Dict,
     ) -> Optional[Path]:
         """Plot patient x check heatmap showing pass/warn/block status.
 
@@ -924,11 +1154,14 @@ class QualityVisualizer:
                         break
 
         fig, ax = plt.subplots(
-            figsize=(max(self.config.visualization.figure.width, len(check_names) * 0.8),
-                     max(self.config.visualization.figure.height, len(patient_ids) * 0.3))
+            figsize=(
+                max(self.config.visualization.figure.width, len(check_names) * 0.8),
+                max(self.config.visualization.figure.height, len(patient_ids) * 0.3),
+            )
         )
 
         from matplotlib.colors import ListedColormap
+
         cmap = ListedColormap(["#27ae60", "#f39c12", "#e74c3c"])
 
         im = ax.imshow(matrix, cmap=cmap, aspect="auto", vmin=0, vmax=1)
@@ -939,10 +1172,13 @@ class QualityVisualizer:
         ax.set_yticklabels(patient_ids, fontsize=7)
         ax.set_xlabel("Quality Check", fontsize=12)
         ax.set_ylabel("Patient", fontsize=12)
-        ax.set_title("Quality Check Results per Patient", fontsize=14, fontweight="bold")
+        ax.set_title(
+            "Quality Check Results per Patient", fontsize=14, fontweight="bold"
+        )
 
         # Legend
         from matplotlib.patches import Patch
+
         legend_elements = [
             Patch(facecolor="#27ae60", label="Passed"),
             Patch(facecolor="#f39c12", label="Warning"),
@@ -950,7 +1186,10 @@ class QualityVisualizer:
         ]
         ax.legend(handles=legend_elements, loc="upper right", fontsize=9)
 
-        plot_path = self.figure_dir / f"quality_metrics_heatmap.{self.config.visualization.figure.format}"
+        plot_path = (
+            self.figure_dir
+            / f"quality_metrics_heatmap.{self.config.visualization.figure.format}"
+        )
         plt.tight_layout()
         plt.savefig(plot_path, dpi=self.config.visualization.figure.dpi)
         plt.close()
@@ -959,7 +1198,8 @@ class QualityVisualizer:
         return plot_path
 
     def generate_quality_filtering_plots(
-        self, quality_metrics: Dict,
+        self,
+        quality_metrics: Dict,
     ) -> Dict[str, Path]:
         """Generate all quality filtering plots.
 
@@ -993,6 +1233,7 @@ class QualityVisualizer:
         plot_paths: Dict[str, Path],
         metadata_manager: Optional["MetadataManager"] = None,
         quality_metrics: Optional[Dict] = None,
+        quality_dir: Optional[Path] = None,
     ) -> Path:
         """Generate comprehensive HTML report with plots and tables.
 
@@ -1089,13 +1330,87 @@ class QualityVisualizer:
             font-size: 14px;
             margin-top: 20px;
         }}
+        .attrition-flow {{
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-wrap: wrap;
+            gap: 4px;
+            margin: 20px 0 30px 0;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 8px;
+            border: 1px solid #e0e0e0;
+        }}
+        .attrition-box {{
+            padding: 12px 16px;
+            border-radius: 6px;
+            text-align: center;
+            min-width: 120px;
+            border: 2px solid;
+        }}
+        .attrition-start {{
+            background-color: #e8f5e9;
+            border-color: #4caf50;
+        }}
+        .attrition-intermediate {{
+            background-color: #e3f2fd;
+            border-color: #2196f3;
+        }}
+        .attrition-final {{
+            background-color: #e0f2f1;
+            border-color: #009688;
+        }}
+        .attrition-label {{
+            font-weight: bold;
+            font-size: 13px;
+            margin-bottom: 6px;
+            color: #2c3e50;
+        }}
+        .attrition-counts {{
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            font-size: 12px;
+            color: #555;
+        }}
+        .attrition-arrow {{
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-width: 80px;
+        }}
+        .arrow-line {{
+            font-size: 24px;
+            color: #999;
+            line-height: 1;
+        }}
+        .arrow-removed {{
+            font-size: 10px;
+            color: #e74c3c;
+            font-weight: bold;
+            white-space: nowrap;
+        }}
     </style>
 </head>
 <body>
     <div class="container">
         <h1>{html_config.title}</h1>
-        <p class="timestamp">Generated on: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+        <p class="timestamp">Generated on: {pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")}</p>
 """)
+
+            # Pipeline attrition diagram
+            if quality_dir is not None:
+                from mengrowth.preprocessing.quality_analysis.attrition import (
+                    compute_attrition_data,
+                    generate_attrition_html,
+                )
+
+                # Derive mengrowth_dir from quality_dir (sibling: dataset/MenGrowth-2025)
+                mengrowth_dir = quality_dir.parent / "dataset" / "MenGrowth-2025"
+                attrition_data = compute_attrition_data(quality_dir, mengrowth_dir)
+                if attrition_data:
+                    f.write(generate_attrition_html(attrition_data))
 
             # Summary statistics
             if html_config.include_summary_tables and results.get("summary"):
@@ -1106,21 +1421,33 @@ class QualityVisualizer:
                     patient_stats = results["summary"]["patient_statistics"]
                     f.write("<h3>Patient and Study Overview</h3>\n")
                     f.write('<div class="metrics">\n')
-                    f.write(f'<div class="metric"><span class="metric-label">Total Patients:</span><br/><span class="metric-value">{patient_stats["total_patients"]}</span></div>\n')
-                    f.write(f'<div class="metric"><span class="metric-label">Total Studies:</span><br/><span class="metric-value">{patient_stats["total_studies"]}</span></div>\n')
-                    f.write(f'<div class="metric"><span class="metric-label">Mean Studies/Patient:</span><br/><span class="metric-value">{patient_stats["mean_studies"]:.2f}</span></div>\n')
-                    f.write(f'<div class="metric"><span class="metric-label">Std Studies/Patient:</span><br/><span class="metric-value">{patient_stats["std_studies"]:.2f}</span></div>\n')
-                    f.write('</div>\n')
+                    f.write(
+                        f'<div class="metric"><span class="metric-label">Total Patients:</span><br/><span class="metric-value">{patient_stats["total_patients"]}</span></div>\n'
+                    )
+                    f.write(
+                        f'<div class="metric"><span class="metric-label">Total Studies:</span><br/><span class="metric-value">{patient_stats["total_studies"]}</span></div>\n'
+                    )
+                    f.write(
+                        f'<div class="metric"><span class="metric-label">Mean Studies/Patient:</span><br/><span class="metric-value">{patient_stats["mean_studies"]:.2f}</span></div>\n'
+                    )
+                    f.write(
+                        f'<div class="metric"><span class="metric-label">Std Studies/Patient:</span><br/><span class="metric-value">{patient_stats["std_studies"]:.2f}</span></div>\n'
+                    )
+                    f.write("</div>\n")
 
                 # Missing sequences
                 if "missing_sequences" in results["summary"]:
                     missing_stats = results["summary"]["missing_sequences"]
                     f.write("<h3>Missing Sequence Analysis</h3>\n")
                     f.write("<table>\n")
-                    f.write("<tr><th>Sequence</th><th>Present Count</th><th>Missing Count</th><th>Missing Fraction</th></tr>\n")
+                    f.write(
+                        "<tr><th>Sequence</th><th>Present Count</th><th>Missing Count</th><th>Missing Fraction</th></tr>\n"
+                    )
                     for seq, stats in missing_stats.items():
                         if seq != "overall":
-                            f.write(f'<tr><td>{seq}</td><td>{stats["present_count"]}</td><td>{stats["missing_count"]}</td><td>{stats["missing_fraction"]:.2%}</td></tr>\n')
+                            f.write(
+                                f"<tr><td>{seq}</td><td>{stats['present_count']}</td><td>{stats['missing_count']}</td><td>{stats['missing_fraction']:.2%}</td></tr>\n"
+                            )
                     f.write("</table>\n")
 
             # Quality filtering section
@@ -1130,36 +1457,52 @@ class QualityVisualizer:
 
                 # Overview metrics
                 f.write('<div class="metrics">\n')
-                f.write(f'<div class="metric"><span class="metric-label">Total Patients:</span><br/><span class="metric-value">{qf_summary.get("total_patients", "N/A")}</span></div>\n')
-                f.write(f'<div class="metric"><span class="metric-label">Patients Passed:</span><br/><span class="metric-value">{qf_summary.get("patients_passed", "N/A")}</span></div>\n')
-                f.write(f'<div class="metric"><span class="metric-label">Patients Blocked:</span><br/><span class="metric-value">{qf_summary.get("patients_blocked", "N/A")}</span></div>\n')
-                f.write('</div>\n')
+                f.write(
+                    f'<div class="metric"><span class="metric-label">Total Patients:</span><br/><span class="metric-value">{qf_summary.get("total_patients", "N/A")}</span></div>\n'
+                )
+                f.write(
+                    f'<div class="metric"><span class="metric-label">Patients Passed:</span><br/><span class="metric-value">{qf_summary.get("patients_passed", "N/A")}</span></div>\n'
+                )
+                f.write(
+                    f'<div class="metric"><span class="metric-label">Patients Blocked:</span><br/><span class="metric-value">{qf_summary.get("patients_blocked", "N/A")}</span></div>\n'
+                )
+                f.write("</div>\n")
 
                 # Per-check summary table
                 checks_summary = qf_summary.get("checks_summary", {})
                 if checks_summary:
                     f.write("<h3>Per-Check Summary</h3>\n")
                     f.write("<table>\n")
-                    f.write("<tr><th>Check</th><th>Total</th><th>Passed</th><th>Failed</th><th>Pass Rate</th></tr>\n")
+                    f.write(
+                        "<tr><th>Check</th><th>Total</th><th>Passed</th><th>Failed</th><th>Pass Rate</th></tr>\n"
+                    )
                     for check_name, counts in sorted(checks_summary.items()):
                         total = counts.get("total", 0)
                         passed = counts.get("passed", 0)
                         failed = counts.get("failed", 0)
-                        rate = f"{passed/total:.1%}" if total > 0 else "N/A"
-                        f.write(f'<tr><td>{check_name}</td><td>{total}</td><td>{passed}</td><td>{failed}</td><td>{rate}</td></tr>\n')
+                        rate = f"{passed / total:.1%}" if total > 0 else "N/A"
+                        f.write(
+                            f"<tr><td>{check_name}</td><td>{total}</td><td>{passed}</td><td>{failed}</td><td>{rate}</td></tr>\n"
+                        )
                     f.write("</table>\n")
 
                 # Quality filtering plots
-                qf_plot_names = ["quality_filter_summary", "qf_snr_by_modality", "quality_metrics_heatmap"]
-                qf_plots_in_report = {k: v for k, v in plot_paths.items() if k in qf_plot_names}
+                qf_plot_names = [
+                    "quality_filter_summary",
+                    "qf_snr_by_modality",
+                    "quality_metrics_heatmap",
+                ]
+                qf_plots_in_report = {
+                    k: v for k, v in plot_paths.items() if k in qf_plot_names
+                }
                 if qf_plots_in_report:
                     f.write("<h3>Quality Filtering Visualizations</h3>\n")
                     for plot_name, plot_path in qf_plots_in_report.items():
                         rel_path = plot_path.relative_to(self.output_dir)
-                        f.write(f'<div class="plot">\n')
-                        f.write(f'<h4>{plot_name.replace("_", " ").title()}</h4>\n')
+                        f.write('<div class="plot">\n')
+                        f.write(f"<h4>{plot_name.replace('_', ' ').title()}</h4>\n")
                         f.write(f'<img src="{rel_path}" alt="{plot_name}">\n')
-                        f.write('</div>\n')
+                        f.write("</div>\n")
 
             # Clinical metadata section
             if metadata_manager:
@@ -1169,21 +1512,35 @@ class QualityVisualizer:
                 # Demographics
                 f.write("<h3>Patient Demographics</h3>\n")
                 f.write('<div class="metrics">\n')
-                f.write(f'<div class="metric"><span class="metric-label">Total in Metadata:</span><br/><span class="metric-value">{clinical_summary["total_patients"]}</span></div>\n')
-                f.write(f'<div class="metric"><span class="metric-label">Included:</span><br/><span class="metric-value">{clinical_summary["included_patients"]}</span></div>\n')
-                f.write(f'<div class="metric"><span class="metric-label">Excluded:</span><br/><span class="metric-value">{clinical_summary["excluded_patients"]}</span></div>\n')
-                f.write('</div>\n')
+                f.write(
+                    f'<div class="metric"><span class="metric-label">Total in Metadata:</span><br/><span class="metric-value">{clinical_summary["total_patients"]}</span></div>\n'
+                )
+                f.write(
+                    f'<div class="metric"><span class="metric-label">Included:</span><br/><span class="metric-value">{clinical_summary["included_patients"]}</span></div>\n'
+                )
+                f.write(
+                    f'<div class="metric"><span class="metric-label">Excluded:</span><br/><span class="metric-value">{clinical_summary["excluded_patients"]}</span></div>\n'
+                )
+                f.write("</div>\n")
 
                 # Age statistics
                 age_stats = clinical_summary.get("age_stats", {})
                 if age_stats:
                     f.write("<h3>Age Distribution (Included Patients)</h3>\n")
                     f.write('<div class="metrics">\n')
-                    f.write(f'<div class="metric"><span class="metric-label">Min Age:</span><br/><span class="metric-value">{age_stats.get("min", "N/A")}</span></div>\n')
-                    f.write(f'<div class="metric"><span class="metric-label">Max Age:</span><br/><span class="metric-value">{age_stats.get("max", "N/A")}</span></div>\n')
-                    f.write(f'<div class="metric"><span class="metric-label">Mean Age:</span><br/><span class="metric-value">{age_stats.get("mean", 0):.1f}</span></div>\n')
-                    f.write(f'<div class="metric"><span class="metric-label">Median Age:</span><br/><span class="metric-value">{age_stats.get("median", 0):.1f}</span></div>\n')
-                    f.write('</div>\n')
+                    f.write(
+                        f'<div class="metric"><span class="metric-label">Min Age:</span><br/><span class="metric-value">{age_stats.get("min", "N/A")}</span></div>\n'
+                    )
+                    f.write(
+                        f'<div class="metric"><span class="metric-label">Max Age:</span><br/><span class="metric-value">{age_stats.get("max", "N/A")}</span></div>\n'
+                    )
+                    f.write(
+                        f'<div class="metric"><span class="metric-label">Mean Age:</span><br/><span class="metric-value">{age_stats.get("mean", 0):.1f}</span></div>\n'
+                    )
+                    f.write(
+                        f'<div class="metric"><span class="metric-label">Median Age:</span><br/><span class="metric-value">{age_stats.get("median", 0):.1f}</span></div>\n'
+                    )
+                    f.write("</div>\n")
 
                 # Sex distribution
                 sex_dist = clinical_summary.get("sex_distribution", {})
@@ -1192,7 +1549,9 @@ class QualityVisualizer:
                     f.write("<table>\n")
                     f.write("<tr><th>Sex</th><th>Count</th></tr>\n")
                     for sex, count in sex_dist.items():
-                        f.write(f'<tr><td>{sex.capitalize()}</td><td>{count}</td></tr>\n')
+                        f.write(
+                            f"<tr><td>{sex.capitalize()}</td><td>{count}</td></tr>\n"
+                        )
                     f.write("</table>\n")
 
                 # Growth distribution
@@ -1202,7 +1561,9 @@ class QualityVisualizer:
                     f.write("<table>\n")
                     f.write("<tr><th>Status</th><th>Count</th></tr>\n")
                     for status, count in growth_dist.items():
-                        f.write(f'<tr><td>{status.capitalize()}</td><td>{count}</td></tr>\n')
+                        f.write(
+                            f"<tr><td>{status.capitalize()}</td><td>{count}</td></tr>\n"
+                        )
                     f.write("</table>\n")
 
                 # Exclusion reasons
@@ -1212,7 +1573,7 @@ class QualityVisualizer:
                     f.write("<table>\n")
                     f.write("<tr><th>Reason</th><th>Count</th></tr>\n")
                     for reason, count in exclusion_reasons.items():
-                        f.write(f'<tr><td>{reason}</td><td>{count}</td></tr>\n')
+                        f.write(f"<tr><td>{reason}</td><td>{count}</td></tr>\n")
                     f.write("</table>\n")
 
             # Plots
@@ -1222,10 +1583,10 @@ class QualityVisualizer:
                 for plot_name, plot_path in plot_paths.items():
                     # Make path relative to HTML file
                     rel_path = plot_path.relative_to(self.output_dir)
-                    f.write(f'<div class="plot">\n')
-                    f.write(f'<h3>{plot_name.replace("_", " ").title()}</h3>\n')
+                    f.write('<div class="plot">\n')
+                    f.write(f"<h3>{plot_name.replace('_', ' ').title()}</h3>\n")
                     f.write(f'<img src="{rel_path}" alt="{plot_name}">\n')
-                    f.write('</div>\n')
+                    f.write("</div>\n")
 
             # Footer
             f.write("""
@@ -1241,6 +1602,7 @@ class QualityVisualizer:
         self,
         metadata_manager: Optional["MetadataManager"] = None,
         quality_metrics_path: Optional[Path] = None,
+        quality_dir: Optional[Path] = None,
     ) -> Dict[str, Path]:
         """Run complete visualization pipeline.
 
@@ -1248,6 +1610,8 @@ class QualityVisualizer:
             metadata_manager: Optional metadata manager for clinical plots.
             quality_metrics_path: Optional path to quality_metrics.json for
                 quality filtering plots and enhanced HTML report.
+            quality_dir: Optional path to quality output directory (for
+                attrition diagram from rejected_files.csv).
 
         Returns:
             Dictionary of saved file paths.
@@ -1283,9 +1647,11 @@ class QualityVisualizer:
 
         if self.config.visualization.html_report.enabled:
             html_path = self.generate_html_report(
-                results, plot_paths,
+                results,
+                plot_paths,
                 metadata_manager=metadata_manager,
                 quality_metrics=quality_metrics,
+                quality_dir=quality_dir,
             )
             output_paths["html_report"] = html_path
 
