@@ -144,10 +144,98 @@ def load_manual_curation_config(yaml_path: Path) -> ManualCurationConfig:
     )
 
 
+def _build_reverse_id_mapping(
+    id_mapping_path: Path,
+    mengrowth_dir: Path,
+) -> tuple[Dict[str, str], Dict[str, tuple[str, str]]]:
+    """Build reverse lookups from id_mapping.json.
+
+    Args:
+        id_mapping_path: Path to id_mapping.json.
+        mengrowth_dir: Path to MenGrowth-2025 dataset directory (for path reconstruction).
+
+    Returns:
+        Tuple of (patient_reverse, study_reverse) where:
+            patient_reverse: MenGrowth-XXXX → P{N}
+            study_reverse: MenGrowth-XXXX-YYY → (P{N}, original_study_num)
+    """
+    import json
+
+    with open(id_mapping_path, "r", encoding="utf-8") as f:
+        mapping = json.load(f)
+
+    patient_reverse: Dict[str, str] = {}
+    study_reverse: Dict[str, tuple[str, str]] = {}
+
+    for original_id, info in mapping.items():
+        mengrowth_id = info["new_id"]
+        patient_reverse[mengrowth_id] = original_id
+        for orig_study_num, mengrowth_study_id in info.get("studies", {}).items():
+            study_reverse[mengrowth_study_id] = (original_id, orig_study_num)
+
+    return patient_reverse, study_reverse
+
+
+def _make_rejection_record(
+    file_path: Path,
+    patient_id: str,
+    study_name: str,
+    rejection_reason: str,
+    mengrowth_dir: Path,
+    patient_reverse: Dict[str, str],
+    study_reverse: Dict[str, tuple[str, str]],
+) -> RejectedFile:
+    """Build a RejectedFile with the original pre-reID source path.
+
+    If reverse mapping is available, traces MenGrowth-XXXX/MenGrowth-XXXX-YYY
+    back to P{N}/{study_num} so that source_path matches stages 0–2 format.
+
+    Args:
+        file_path: Current filesystem path to the file.
+        patient_id: MenGrowth patient ID (e.g., "MenGrowth-0034").
+        study_name: MenGrowth study ID (e.g., "MenGrowth-0034-000").
+        rejection_reason: Human-readable rejection reason.
+        mengrowth_dir: Path to MenGrowth-2025 dataset directory.
+        patient_reverse: MenGrowth-XXXX → P{N} mapping (empty if unavailable).
+        study_reverse: MenGrowth-XXXX-YYY → (P{N}, study_num) mapping.
+
+    Returns:
+        RejectedFile with original source_path if traceable, current path otherwise.
+    """
+    original_patient = patient_reverse.get(patient_id)
+    original_study_info = study_reverse.get(study_name)
+
+    if original_patient and original_study_info:
+        orig_pid, orig_study_num = original_study_info
+        original_source_path = (
+            mengrowth_dir / original_patient / orig_study_num / file_path.name
+        )
+        return RejectedFile(
+            source_path=str(original_source_path),
+            filename=file_path.name,
+            patient_id=original_patient,
+            study_name=orig_study_num,
+            rejection_reason=rejection_reason,
+            source_type="manual_curation",
+            stage=MANUAL_CURATION_STAGE,
+        )
+
+    return RejectedFile(
+        source_path=str(file_path),
+        filename=file_path.name,
+        patient_id=patient_id,
+        study_name=study_name,
+        rejection_reason=rejection_reason,
+        source_type="manual_curation",
+        stage=MANUAL_CURATION_STAGE,
+    )
+
+
 def apply_manual_curation(
     config: ManualCurationConfig,
     mengrowth_dir: Path,
     quality_dir: Path,
+    id_mapping_path: Path | None = None,
 ) -> ManualCurationStats:
     """Apply manual curation exclusions to the curated dataset.
 
@@ -159,6 +247,9 @@ def apply_manual_curation(
         config: Manual curation configuration with exclusions.
         mengrowth_dir: Path to MenGrowth-2025 dataset directory.
         quality_dir: Path to quality output directory (for rejected_files.csv).
+        id_mapping_path: Optional path to id_mapping.json. When provided,
+            rejected_files.csv entries trace back to original P{N}/study{N}
+            paths (matching stages 0–2 format).
 
     Returns:
         ManualCurationStats with removal counts.
@@ -166,6 +257,22 @@ def apply_manual_curation(
     stats = ManualCurationStats()
     rejected_files: List[RejectedFile] = []
     affected_patients: Dict[str, List[str]] = {}  # patient_id -> [removed study_ids]
+
+    # Build reverse ID mapping for original source paths
+    patient_reverse: Dict[str, str] = {}
+    study_reverse: Dict[str, tuple[str, str]] = {}
+    if id_mapping_path and id_mapping_path.exists():
+        patient_reverse, study_reverse = _build_reverse_id_mapping(
+            id_mapping_path, mengrowth_dir
+        )
+        logger.info(
+            f"Loaded ID mapping: {len(patient_reverse)} patients, "
+            f"{len(study_reverse)} studies (will trace source paths)"
+        )
+    else:
+        logger.info(
+            "No id_mapping.json — rejection paths will use current MenGrowth IDs"
+        )
 
     # ── Phase 1: Apply explicit study exclusions ──
     logger.info(f"Applying {len(config.exclusions)} manual exclusions ...")
@@ -192,14 +299,14 @@ def apply_manual_curation(
 
         for file_path in all_files:
             rejected_files.append(
-                RejectedFile(
-                    source_path=str(file_path),
-                    filename=file_path.name,
+                _make_rejection_record(
+                    file_path=file_path,
                     patient_id=exclusion.patient_id,
                     study_name=exclusion.study_id,
                     rejection_reason=rejection_reason,
-                    source_type="manual_curation",
-                    stage=MANUAL_CURATION_STAGE,
+                    mengrowth_dir=mengrowth_dir,
+                    patient_reverse=patient_reverse,
+                    study_reverse=study_reverse,
                 )
             )
 
@@ -245,19 +352,20 @@ def apply_manual_curation(
                 nifti_files = sorted(study_dir.glob("*.nii.gz"))
                 all_files = nrrd_files + nifti_files
 
+                cascade_reason = (
+                    f"Insufficient studies after manual curation "
+                    f"({n_remaining} remaining, min={config.min_studies_per_patient})"
+                )
                 for file_path in all_files:
                     rejected_files.append(
-                        RejectedFile(
-                            source_path=str(file_path),
-                            filename=file_path.name,
+                        _make_rejection_record(
+                            file_path=file_path,
                             patient_id=patient_id,
                             study_name=study_dir.name,
-                            rejection_reason=(
-                                f"Insufficient studies after manual curation "
-                                f"({n_remaining} remaining, min={config.min_studies_per_patient})"
-                            ),
-                            source_type="manual_curation",
-                            stage=MANUAL_CURATION_STAGE,
+                            rejection_reason=cascade_reason,
+                            mengrowth_dir=mengrowth_dir,
+                            patient_reverse=patient_reverse,
+                            study_reverse=study_reverse,
                         )
                     )
 

@@ -356,8 +356,11 @@ def main() -> int:
                 return 1
 
             mc_config = load_manual_curation_config(args.final_manual_curation)
+            id_mapping_path = dataset_dir / "id_mapping.json"
             step_start = time.monotonic()
-            mc_stats = apply_manual_curation(mc_config, mengrowth_dir, quality_dir)
+            mc_stats = apply_manual_curation(
+                mc_config, mengrowth_dir, quality_dir, id_mapping_path=id_mapping_path
+            )
             step_durations["manual_curation"] = time.monotonic() - step_start
 
             logger.info(f"Studies removed: {mc_stats.studies_removed}")
@@ -379,7 +382,6 @@ def main() -> int:
                 logger.info("=" * 60)
                 logger.info("RE-IDENTIFYING PATIENTS (closing ID gaps)")
                 logger.info("=" * 60)
-                id_mapping_path = dataset_dir / "id_mapping.json"
                 step_start = time.monotonic()
                 rename_map = reid_after_manual_curation(mengrowth_dir, id_mapping_path)
                 step_durations["reid"] = time.monotonic() - step_start

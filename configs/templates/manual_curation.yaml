@@ -12,57 +12,21 @@
 #   sequence   (optional): Modalities where the issue was observed, e.g. [t1c] or [t1c, t2w]
 
 exclusions:
-  - patient_id: "MenGrowth-0004"
-    study_id: "MenGrowth-0004-001"
-    reason: "Poor axial resolution"
-    sequence: [t1c]
-  - patient_id: "MenGrowth-0005"
-    study_id: "MenGrowth-0005-000"
-    reason: "Poor axial resolution"
-    sequence: [t1c, t2f]
-  - patient_id: "MenGrowth-0009"
-    study_id: "MenGrowth-0009-000"
-    reason: "Poor axial resolution"
-    sequence: [t1c]
-  - patient_id: "MenGrowth-0011"
-    study_id: "MenGrowth-0011-001"
-    reason: "Poor axial resolution"
-    sequence: [t1w]
-  - patient_id: "MenGrowth-0012"
-    study_id: "MenGrowth-0012-001"
-    reason: "Ghosting artifact"
-    sequence: [t1c]
-  - patient_id: "MenGrowth-0012"
-    study_id: "MenGrowth-0012-002"
-    reason: "Poor axial resolution"
-    sequence: [t1w]
-  - patient_id: "MenGrowth-0016"
-    study_id: "MenGrowth-0016-003"
-    reason: "FOV too small"
-    sequence: [t1c]
-  - patient_id: "MenGrowth-0020"
-    study_id: "MenGrowth-0020-000"
-    reason: "Poor axial resolution"
-    sequence: [t1w]
-  - patient_id: "MenGrowth-0022"
-    study_id: "MenGrowth-0022-000"
-    reason: "Poor axial resolution"
-    sequence: [t1w]
   - patient_id: "MenGrowth-0022"
     study_id: "MenGrowth-0022-001"
-    reason: "Poor axial resolution"
-    sequence: [t1w, t1c]
+    reason: "Out-of-FOV brain"
+    sequence: [t1c, t1w]
   - patient_id: "MenGrowth-0024"
-    study_id: "MenGrowth-0024-000"
-    reason: "Poor axial resolution"
-    sequence: [t1w]
-  - patient_id: "MenGrowth-0025"
-    study_id: "MenGrowth-0025-001"
-    reason: "Poor axial resolution"
+    study_id: "MenGrowth-0024-001"
+    reason: "Out-of-FOV brain"
     sequence: [t1w]
   - patient_id: "MenGrowth-0034"
     study_id: "MenGrowth-0034-000"
-    reason: "Poor axial resolution"
+    reason: "Out-of-FOV brain"
+    sequence: [t2f]
+  - patient_id: "MenGrowth-0005"
+    study_id: "MenGrowth-0005-000"
+    reason: "Out-of-FOV brain"
     sequence: [t2f]
 # Minimum longitudinal studies required to keep a patient (default: 2)
 min_studies_per_patient: 2

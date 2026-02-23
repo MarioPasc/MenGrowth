@@ -397,6 +397,154 @@ class TestApplyManualCuration:
         assert stats.patients_cascade_removed == 0
         assert stats.patients_remaining == 3
 
+    def test_source_path_traces_back_to_original_id(
+        self, sample_dataset: Path, quality_dir: Path, tmp_path: Path
+    ) -> None:
+        """When id_mapping_path is given, source_path uses pre-reID P{N} paths."""
+        import json
+
+        # Write an id_mapping.json that maps P10 → MenGrowth-0001
+        id_mapping = {
+            "P10": {
+                "new_id": "MenGrowth-0001",
+                "studies": {
+                    "0": "MenGrowth-0001-000",
+                    "3": "MenGrowth-0001-001",
+                    "5": "MenGrowth-0001-002",
+                },
+            },
+            "P20": {
+                "new_id": "MenGrowth-0002",
+                "studies": {
+                    "0": "MenGrowth-0002-000",
+                    "1": "MenGrowth-0002-001",
+                },
+            },
+            "P30": {
+                "new_id": "MenGrowth-0003",
+                "studies": {
+                    "0": "MenGrowth-0003-000",
+                    "2": "MenGrowth-0003-001",
+                },
+            },
+        }
+        id_mapping_path = tmp_path / "dataset" / "id_mapping.json"
+        id_mapping_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(id_mapping_path, "w") as f:
+            json.dump(id_mapping, f)
+
+        config = ManualCurationConfig(
+            exclusions=[
+                ManualExclusion(
+                    patient_id="MenGrowth-0001",
+                    study_id="MenGrowth-0001-000",
+                    reason="Bad quality",
+                )
+            ],
+            min_studies_per_patient=2,
+        )
+
+        apply_manual_curation(
+            config, sample_dataset, quality_dir, id_mapping_path=id_mapping_path
+        )
+
+        rejected_csv = quality_dir / "rejected_files.csv"
+        with open(rejected_csv, "r") as f:
+            rows = list(csv.DictReader(f))
+
+        # source_path should reference P10/0/ (the original IDs)
+        for row in rows:
+            assert "P10" in row["source_path"]
+            assert "/0/" in row["source_path"]
+            assert row["patient_id"] == "P10"
+            assert row["study_name"] == "0"
+
+    def test_source_path_uses_mengrowth_id_without_mapping(
+        self, sample_dataset: Path, quality_dir: Path
+    ) -> None:
+        """Without id_mapping_path, source_path uses current MenGrowth IDs."""
+        config = ManualCurationConfig(
+            exclusions=[
+                ManualExclusion(
+                    patient_id="MenGrowth-0001",
+                    study_id="MenGrowth-0001-000",
+                    reason="Bad quality",
+                )
+            ],
+            min_studies_per_patient=2,
+        )
+
+        apply_manual_curation(config, sample_dataset, quality_dir)
+
+        rejected_csv = quality_dir / "rejected_files.csv"
+        with open(rejected_csv, "r") as f:
+            rows = list(csv.DictReader(f))
+
+        for row in rows:
+            assert "MenGrowth-0001" in row["source_path"]
+            assert row["patient_id"] == "MenGrowth-0001"
+            assert row["study_name"] == "MenGrowth-0001-000"
+
+    def test_cascade_removal_traces_back_to_original_id(
+        self, sample_dataset: Path, quality_dir: Path, tmp_path: Path
+    ) -> None:
+        """Cascade-removed patient files also trace back to original IDs."""
+        import json
+
+        id_mapping = {
+            "P10": {
+                "new_id": "MenGrowth-0001",
+                "studies": {
+                    "0": "MenGrowth-0001-000",
+                    "3": "MenGrowth-0001-001",
+                    "5": "MenGrowth-0001-002",
+                },
+            },
+            "P20": {
+                "new_id": "MenGrowth-0002",
+                "studies": {
+                    "0": "MenGrowth-0002-000",
+                    "1": "MenGrowth-0002-001",
+                },
+            },
+            "P30": {
+                "new_id": "MenGrowth-0003",
+                "studies": {
+                    "0": "MenGrowth-0003-000",
+                    "2": "MenGrowth-0003-001",
+                },
+            },
+        }
+        id_mapping_path = tmp_path / "dataset" / "id_mapping.json"
+        id_mapping_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(id_mapping_path, "w") as f:
+            json.dump(id_mapping, f)
+
+        # Remove one study from MenGrowth-0002 (has only 2) → cascade removal
+        config = ManualCurationConfig(
+            exclusions=[
+                ManualExclusion(
+                    patient_id="MenGrowth-0002",
+                    study_id="MenGrowth-0002-000",
+                    reason="Bad quality",
+                )
+            ],
+            min_studies_per_patient=2,
+        )
+
+        apply_manual_curation(
+            config, sample_dataset, quality_dir, id_mapping_path=id_mapping_path
+        )
+
+        rejected_csv = quality_dir / "rejected_files.csv"
+        with open(rejected_csv, "r") as f:
+            rows = list(csv.DictReader(f))
+
+        # Both the explicit removal and cascade should trace to P20
+        for row in rows:
+            assert row["patient_id"] == "P20"
+            assert "P20" in row["source_path"]
+
 
 # ── Re-ID After Manual Curation Tests ────────────────────────────────────────
 
