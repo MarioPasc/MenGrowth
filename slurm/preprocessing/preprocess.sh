@@ -164,7 +164,7 @@ ARRAY_MAX=$((NUM_PATIENTS - 1))
 
 JOB_ID=$(sbatch --parsable \
     --job-name="mgpp" \
-    --time=0-00:59:00 \
+    --time=0-03:00:00 \
     --ntasks=1 \
     --cpus-per-task=16 \
     --mem=4G \

@@ -51,6 +51,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+deep-learning-interpolation = [
+    "eclare"
+]
 preprocessing = [
     "brats==0.1.6",
     "brats[preprocessing]",
