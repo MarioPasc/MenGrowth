@@ -12,7 +12,7 @@ Reference:
 """
 
 from pathlib import Path
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Optional, Union
 import logging
 import subprocess
 import os
@@ -115,27 +115,34 @@ class EclareResampler(BaseResampler):
 
     def _compute_relative_slice_thickness(self, input_path: Path) -> float:
         """Compute relative slice thickness for ECLARE's Gaussian blur kernel.
-        
+
         This represents the FWHM of the slice profile relative to the minimum
-        in-plane resolution.
+        in-plane resolution.  The through-plane axis is identified dynamically
+        as the dimension with the largest spacing — this handles axial, sagittal,
+        and coronal acquisitions without assuming Z is always through-plane.
         """
         try:
             image_sitk = sitk.ReadImage(str(input_path))
             spacing = np.array(image_sitk.GetSpacing())
-            
-            through_plane = spacing[2]  # Z-axis
-            min_in_plane = min(spacing[0], spacing[1])  # Use minimum
-            
+
+            # Identify worst (largest spacing) dimension — orientation-agnostic
+            worst_dim = int(np.argmax(spacing))
+            through_plane = spacing[worst_dim]
+            in_plane_dims = [i for i in range(3) if i != worst_dim]
+            min_in_plane = min(spacing[in_plane_dims[0]], spacing[in_plane_dims[1]])
+
             # This is the FWHM for the Gaussian kernel
             relative_thickness = through_plane / min_in_plane
-            
+
+            dim_labels = ['X', 'Y', 'Z']
             self.logger.info(
                 f"Computed relative slice thickness: {relative_thickness:.3f} "
-                f"(through-plane={through_plane:.3f}mm / min_in_plane={min_in_plane:.3f}mm)"
+                f"(through-plane={dim_labels[worst_dim]}={through_plane:.3f}mm / "
+                f"min_in_plane={min_in_plane:.3f}mm)"
             )
-            
+
             return relative_thickness  # Return as float, not rounded int
-            
+
         except Exception as e:
             self.logger.error(f"Failed to compute relative slice thickness: {e}")
             raise RuntimeError(f"Slice thickness computation failed: {e}") from e
@@ -145,20 +152,28 @@ class EclareResampler(BaseResampler):
         input_path: Path,
         output_dir: Path,
         relative_slice_thickness: float,
-        gpu_id: int
+        gpu_id: int,
+        inplane_acq_res: Optional[List[float]] = None
     ) -> None:
         """Run ECLARE as a subprocess via conda run.
 
         Args:
             input_path: Path to input NIfTI file
             output_dir: Directory for ECLARE output
-            inplane_acq_res: In-plane acquisition resolution [x, y] in mm
-            relative_slice_thickness: Relative slice thickness (integer)
+            relative_slice_thickness: Relative slice thickness (float)
             gpu_id: GPU ID to use (single integer)
+            inplane_acq_res: In-plane acquisition resolution [dim_a, dim_b] in mm.
+                These are the target resolutions for the two non-worst dimensions,
+                identified dynamically from the input spacing (orientation-agnostic).
+                If None, falls back to target_voxel_size[0:2] (legacy behavior).
 
         Raises:
             RuntimeError: If ECLARE subprocess fails
         """
+        # Determine in-plane acquisition resolution
+        if inplane_acq_res is None:
+            inplane_acq_res = [self.target_voxel_size[0], self.target_voxel_size[1]]
+
         # Build ECLARE command
         cmd = [
             "conda", "run", "-n", self.conda_env,
@@ -167,7 +182,7 @@ class EclareResampler(BaseResampler):
             "--out-dir", str(output_dir),
             "--batch-size", str(self.batch_size),
             "--n-patches", str(self.n_patches),
-            "--inplane-acq-res", f"{self.target_voxel_size[0]}", f"{self.target_voxel_size[1]}",
+            "--inplane-acq-res", f"{inplane_acq_res[0]}", f"{inplane_acq_res[1]}",
             "--patch-sampling", self.patch_sampling,
             #"--relative-slice-thickness", str(relative_slice_thickness),
             "--gpu-id", str(gpu_id)
@@ -270,6 +285,37 @@ class EclareResampler(BaseResampler):
                 f"Original spacing: {original_spacing}, shape: {original_size}"
             )
 
+            # Pre-flight: identify through-plane axis (orientation-agnostic).
+            # ECLARE requires a unique worst-resolution axis.  Sagittal and
+            # coronal acquisitions may have the worst axis on X or Y, not Z.
+            worst_dim = int(np.argmax(original_spacing))
+            in_plane_dims = [i for i in range(3) if i != worst_dim]
+            sorted_spacing = np.sort(original_spacing)
+            dim_labels = ['X', 'Y', 'Z']
+
+            if (sorted_spacing[-1] - sorted_spacing[-2]) < 1e-3:
+                raise RuntimeError(
+                    f"ECLARE requires anisotropic input but spacing "
+                    f"{original_spacing.tolist()} has no unique worst-resolution "
+                    f"axis (sorted: {sorted_spacing.tolist()}).  Consider using "
+                    f"BSpline resampling or the composite method instead."
+                )
+
+            self.logger.info(
+                f"Through-plane axis: {dim_labels[worst_dim]} "
+                f"({original_spacing[worst_dim]:.3f}mm), "
+                f"in-plane: {dim_labels[in_plane_dims[0]]}="
+                f"{original_spacing[in_plane_dims[0]]:.3f}mm, "
+                f"{dim_labels[in_plane_dims[1]]}="
+                f"{original_spacing[in_plane_dims[1]]:.3f}mm"
+            )
+
+            # Compute in-plane target resolution from the non-worst dimensions
+            inplane_acq_res = [
+                self.target_voxel_size[in_plane_dims[0]],
+                self.target_voxel_size[in_plane_dims[1]]
+            ]
+
             # Compute relative slice thickness
             relative_slice_thickness = self._compute_relative_slice_thickness(input_path)
 
@@ -299,7 +345,8 @@ class EclareResampler(BaseResampler):
                     input_path=input_path,
                     output_dir=tmp_output_dir,
                     relative_slice_thickness=relative_slice_thickness,
-                    gpu_id=selected_gpu
+                    gpu_id=selected_gpu,
+                    inplane_acq_res=inplane_acq_res
                 )
 
                 # Find ECLARE output file

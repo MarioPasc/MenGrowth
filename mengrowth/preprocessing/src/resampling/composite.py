@@ -160,12 +160,19 @@ class CompositeResampler(BaseResampler):
             dim_name = ['X', 'Y', 'Z'][i]
 
             if d < t:
-                # Rule 1: DL only (upsampling from better resolution)
-                strategy = "dl_only"
-                needs_dl = True
-                intermediate_spacing[i] = d  # No interpolation change
+                # Rule 1: Dimension is finer than target → downsample via
+                # interpolation. ECLARE is a super-resolution (upsampling) tool
+                # and cannot downsample. BSpline downsampling ensures that the
+                # in-plane resolution matches --inplane-acq-res passed to ECLARE
+                # and prevents ECLARE's anisotropy assertion from failing when
+                # a fine dimension equals the coarse one after rounding (e.g.,
+                # spacing [0.7, 1.0, 3.0] → ECLARE needs [1.0, 1.0, 3.0], not
+                # [0.7, 1.0, 3.0] where 0.7 and 1.0 are both "in-plane").
+                strategy = "interp_to_target"
+                needs_interpolation = True
+                intermediate_spacing[i] = t
                 self.logger.info(
-                    f"  {dim_name}: {d:.3f}mm < {t:.3f}mm → DL only (Rule 1)"
+                    f"  {dim_name}: {d:.3f}mm < {t:.3f}mm → Interp to {t:.3f}mm (Rule 1: downsample to target)"
                 )
 
             elif d <= self.max_mm_interpolator:
@@ -332,37 +339,70 @@ class CompositeResampler(BaseResampler):
             if strategy["needs_dl"]:
                 self.logger.info("Stage 2: Applying DL method...")
 
-                # Create ECLARE resampler with final target spacing
-                eclare_config = {
-                    "conda_environment_eclare": self.full_config.get(
-                        "conda_environment_eclare", "eclare_env"
-                    ),
-                    "batch_size": self.full_config.get("batch_size", 128),
-                    "n_patches": self.full_config.get("n_patches", 50000),
-                    "patch_sampling": self.full_config.get("patch_sampling", "gradient"),
-                    "suffix": self.full_config.get("suffix", ""),
-                    "gpu_id": self.full_config.get("gpu_id", 0)
-                }
-                eclare_resampler = EclareResampler(
-                    target_voxel_size=self.target_voxel_size,
-                    config=eclare_config,
-                    verbose=self.verbose
-                )
+                # ECLARE compatibility check: the through-plane axis must be
+                # clearly distinguishable (unique worst resolution).  This is
+                # orientation-agnostic — works for axial, sagittal, and coronal
+                # acquisitions alike.  When two or three dimensions share the
+                # worst resolution, ECLARE cannot determine which axis to
+                # super-resolve and will fail with an assertion error.
+                dl_input_spacing = np.array(strategy["intermediate_spacing"])
+                sorted_sp = np.sort(dl_input_spacing)
+                eclare_compatible = (sorted_sp[-1] - sorted_sp[-2]) >= 0.1
 
-                # Execute DL resampling
-                dl_result = eclare_resampler.execute(
-                    input_path=current_input,
-                    output_path=output_path,
-                    allow_overwrite=True
-                )
+                if eclare_compatible:
+                    # Normal ECLARE path
+                    eclare_config = {
+                        "conda_environment_eclare": self.full_config.get(
+                            "conda_environment_eclare", "eclare_env"
+                        ),
+                        "batch_size": self.full_config.get("batch_size", 128),
+                        "n_patches": self.full_config.get("n_patches", 50000),
+                        "patch_sampling": self.full_config.get("patch_sampling", "gradient"),
+                        "suffix": self.full_config.get("suffix", ""),
+                        "gpu_id": self.full_config.get("gpu_id", 0)
+                    }
+                    eclare_resampler = EclareResampler(
+                        target_voxel_size=self.target_voxel_size,
+                        config=eclare_config,
+                        verbose=self.verbose
+                    )
+
+                    dl_result = eclare_resampler.execute(
+                        input_path=current_input,
+                        output_path=output_path,
+                        allow_overwrite=True
+                    )
+                    stages_applied.append("dl")
+                else:
+                    # Fallback: spacing is near-isotropic (no unique worst axis)
+                    # so ECLARE cannot determine the through-plane direction.
+                    # Use BSpline interpolation for the remaining resolution gap.
+                    self.logger.warning(
+                        f"DL input spacing {dl_input_spacing.tolist()} has no unique "
+                        f"worst-resolution axis (sorted: {sorted_sp.tolist()}). "
+                        f"Falling back to BSpline interpolation instead of ECLARE."
+                    )
+                    bspline_config = {
+                        "bspline_order": self.full_config.get("bspline_order", 3)
+                    }
+                    fallback_resampler = BSplineResampler(
+                        target_voxel_size=self.target_voxel_size,
+                        config=bspline_config,
+                        verbose=self.verbose
+                    )
+                    dl_result = fallback_resampler.execute(
+                        input_path=current_input,
+                        output_path=output_path,
+                        allow_overwrite=True
+                    )
+                    stages_applied.append("bspline_fallback")
 
                 final_spacing = dl_result["target_spacing"]
                 final_shape = dl_result["resampled_shape"]
-                stages_applied.append("dl")
 
                 self.logger.info(
-                    f"DL method complete: spacing={final_spacing}, "
-                    f"shape={final_shape}"
+                    f"Stage 2 complete ({stages_applied[-1]}): "
+                    f"spacing={final_spacing}, shape={final_shape}"
                 )
 
             else:
