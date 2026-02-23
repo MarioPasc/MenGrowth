@@ -162,7 +162,7 @@ preprocessing:
         bspline_order: 3               # 3 = cubic (recommended). 0=NN, 1=linear, 5=quintic.
 
         # ── ECLARE parameters (used by composite's DL stage) ──
-        conda_environment_eclare: "eclare"   # Conda env with ECLARE installed
+        conda_environment_eclare: "mengrowth"  # ECLARE is in the same env as the pipeline
         batch_size: 128                      # GPU memory vs speed. 128 = good default for A100.
         n_patches: 80000                     # Patches sampled from volume. 80k = good for single volume.
         patch_sampling: "gradient"           # "gradient" = preferentially sample edges (better structure preservation)
