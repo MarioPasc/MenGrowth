@@ -5,12 +5,12 @@ Removes intensity non-uniformity artifacts from MRI images.
 
 from typing import Dict, Any
 from pathlib import Path
-import tempfile
 import logging
 from mengrowth.preprocessing.src.config import StepExecutionContext
 from mengrowth.preprocessing.src.steps.utils import (
     get_artifact_path,
     get_temp_path,
+    get_visualization_path,
     log_step_start,
 )
 
@@ -73,10 +73,11 @@ def execute(
 
     # Visualization if enabled
     if config.save_visualization:
+        viz_path = get_visualization_path(context)
         bias_corrector.visualize(
             paths["nifti"],
             temp_corrected,
-            paths["viz_bias_field"],
+            viz_path,
             bias_field_path=result["bias_field_path"],
             convergence_data=result["convergence_data"]
         )

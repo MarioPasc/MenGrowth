@@ -8,7 +8,9 @@ ECLARE must be installed in a separate conda environment specified in the config
 The method is particularly useful for high-quality super-resolution of anisotropic MRI scans.
 
 Reference:
-    Sanchez, I., et al. "ECLARE: Extreme Classification with Label Graph Correlations" (2023).
+    Iglesias, J.E., et al. "Joint super-resolution and synthesis of 1 mm isotropic MP-RAGE
+    volumes from clinical MRI exams with scans of different orientation, resolution and contrast."
+    NeuroImage (2021).
 """
 
 from pathlib import Path
@@ -73,7 +75,6 @@ class EclareResampler(BaseResampler):
         self.patch_sampling = config.get("patch_sampling", "gradient")
         self.suffix = config.get("suffix", "")
         self.gpu_id = config.get("gpu_id", 0)
-        self.eclare_verbose = config.get("verbose", verbose)
 
         # Validate parameters
         if not isinstance(self.conda_env, str) or not self.conda_env:

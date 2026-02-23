@@ -11,6 +11,7 @@ import logging
 from mengrowth.preprocessing.src.config import StepExecutionContext
 from mengrowth.preprocessing.src.steps.utils import (
     get_temp_path,
+    get_visualization_path,
     log_step_start,
 )
 
@@ -60,7 +61,8 @@ def execute(
     )
 
     if config.save_visualization:
-        converter.visualize(input_file, paths["nifti"], paths["viz_convert"])
+        viz_path = get_visualization_path(context, suffix="_convert")
+        converter.visualize(input_file, paths["nifti"], viz_path)
 
     # Sub-step 2: Reorientation
     logger.info(f"        - Reorienting to {config.reorient_to}...")
@@ -70,7 +72,8 @@ def execute(
     reorienter.execute(paths["nifti"], temp_reoriented, allow_overwrite=True)
 
     if config.save_visualization:
-        reorienter.visualize(paths["nifti"], temp_reoriented, paths["viz_reorient"])
+        viz_path = get_visualization_path(context, suffix="_reorient")
+        reorienter.visualize(paths["nifti"], temp_reoriented, viz_path)
 
     # Replace original with reoriented
     temp_reoriented.replace(paths["nifti"])
@@ -85,7 +88,8 @@ def execute(
         bg_remover.execute(paths["nifti"], temp_masked, allow_overwrite=True)
 
         if config.save_visualization:
-            bg_remover.visualize(paths["nifti"], temp_masked, paths["viz_background"])
+            viz_path = get_visualization_path(context, suffix="_background")
+            bg_remover.visualize(paths["nifti"], temp_masked, viz_path)
 
         # Replace with masked version
         temp_masked.replace(paths["nifti"])

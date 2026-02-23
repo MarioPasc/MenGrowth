@@ -11,6 +11,8 @@ import time
 import shutil
 import tempfile
 
+import numpy as np
+
 from mengrowth.preprocessing.src.registration.base import BaseRegistrator
 
 logger = logging.getLogger(__name__)
@@ -55,6 +57,12 @@ class LongitudinalRegistration(BaseRegistrator):
     ) -> None:
         """Register a moving image to a fixed image.
 
+        Handles z-scored images (intensity-normalized with mean=0) by shifting
+        values to the positive range before registration. ANTs uses center-of-mass
+        initialization internally, which fails when total image mass is near zero
+        (sum of z-scored voxels ≈ 0). The shift makes COM work; the transform is
+        then applied to the original unshifted image so output values are preserved.
+
         Args:
             fixed_path: Path to fixed (reference) image
             moving_path: Path to moving image to register
@@ -71,29 +79,84 @@ class LongitudinalRegistration(BaseRegistrator):
             fixed = self.ants.image_read(str(fixed_path))
             moving = self.ants.image_read(str(moving_path))
 
+            # ----------------------------------------------------------
+            # Pre-flight: validate images have non-zero content
+            # ----------------------------------------------------------
+            fixed_data = fixed.numpy()
+            moving_data = moving.numpy()
+
+            fixed_nonzero = np.count_nonzero(fixed_data)
+            moving_nonzero = np.count_nonzero(moving_data)
+
+            if fixed_nonzero == 0:
+                raise RuntimeError(
+                    f"Fixed (reference) image is all zeros: {fixed_path}. "
+                    "Check upstream steps (skull stripping, atlas registration, "
+                    "intensity normalization)."
+                )
+            if moving_nonzero == 0:
+                raise RuntimeError(
+                    f"Moving image is all zeros: {moving_path}. "
+                    "Check upstream steps (skull stripping, atlas registration, "
+                    "intensity normalization)."
+                )
+
+            # ----------------------------------------------------------
+            # Handle z-scored images: shift to positive range for COM
+            # ----------------------------------------------------------
+            # After z-score normalization, brain voxels have mean≈0 and
+            # background=0. ANTs' ImageMomentsCalculator sums raw voxel
+            # values for center-of-mass → total mass ≈ 0 → assertion
+            # failure. Shifting to positive range fixes COM while the
+            # resulting transform is identical (MI is shift-invariant for
+            # the same uniform offset on both images).
+            needs_shift = float(fixed_data.min()) < 0 or float(moving_data.min()) < 0
+
+            if needs_shift:
+                shift = max(abs(float(fixed_data.min())),
+                            abs(float(moving_data.min()))) + 1.0
+                logger.debug(
+                    f"      Z-scored images detected (min fixed={fixed_data.min():.2f}, "
+                    f"min moving={moving_data.min():.2f}). "
+                    f"Shifting by +{shift:.1f} for center-of-mass stability."
+                )
+                fixed_reg = self.ants.from_numpy(
+                    fixed_data + shift,
+                    origin=fixed.origin,
+                    spacing=fixed.spacing,
+                    direction=fixed.direction
+                )
+                moving_reg = self.ants.from_numpy(
+                    moving_data + shift,
+                    origin=moving.origin,
+                    spacing=moving.spacing,
+                    direction=moving.direction
+                )
+            else:
+                fixed_reg = fixed
+                moving_reg = moving
+
+            # ----------------------------------------------------------
             # Prepare registration parameters
+            # ----------------------------------------------------------
             transform_type = self.config.get("transform_type", ["Rigid", "Affine"])
             if isinstance(transform_type, str):
                 transform_type = [transform_type]
 
-            # Convert transform types to ANTsPy format
-            # ANTsPy expects a string like: "Rigid", "Affine", "SyN"
-            # Transform types in ANTs are hierarchical (Affine includes Rigid, SyN includes both)
-            # So if multiple transforms are specified, use the last (most comprehensive) one
+            # ANTsPy expects a single string. When multiple transforms are
+            # specified, use the last (most comprehensive) one — e.g.,
+            # ["Rigid", "Affine"] → "Affine" which subsumes Rigid.
             if len(transform_type) == 1:
                 type_of_transform = transform_type[0]
             else:
-                # Use the last transform type as it's the most comprehensive
-                # (e.g., ["Rigid", "Affine"] -> "Affine" which includes Rigid)
                 type_of_transform = transform_type[-1]
 
-            # Build registration parameters
             reg_params = {
-                "fixed": fixed,
-                "moving": moving,
+                "fixed": fixed_reg,
+                "moving": moving_reg,
                 "type_of_transform": type_of_transform,
                 "aff_metric": self.config.get("metric", "Mattes"),
-                "aff_sampling": int(self.config.get("sampling_percentage", 0.5) * 32),  # ANTs uses sampling value
+                "aff_sampling": int(self.config.get("sampling_percentage", 0.5) * 32),
                 "syn_metric": self.config.get("metric", "Mattes"),
                 "syn_sampling": int(self.config.get("sampling_percentage", 0.5) * 32),
                 "verbose": self.verbose,
@@ -101,54 +164,58 @@ class LongitudinalRegistration(BaseRegistrator):
 
             # Add multi-resolution parameters if available
             if "number_of_iterations" in self.config:
-                # ANTsPy expects a flat list for rigid/affine, or list of lists for multi-stage
                 iterations = self.config["number_of_iterations"]
                 if isinstance(transform_type, list) and len(transform_type) > 1:
-                    # Multi-stage registration
-                    # For now, use the first transform's iterations
-                    # ANTsPy will handle multi-stage automatically
                     reg_params["aff_iterations"] = iterations[0] if iterations else [1000, 500, 250, 0]
                 else:
                     reg_params["aff_iterations"] = iterations[0] if iterations else [1000, 500, 250, 0]
 
-            # Perform registration
+            # ----------------------------------------------------------
+            # Run registration
+            # ----------------------------------------------------------
             start_time = time.time()
             registration_result = self.ants.registration(**reg_params)
             elapsed_time = time.time() - start_time
 
             logger.debug(f"      Registration completed in {elapsed_time:.2f}s")
 
-            # Save registered image (use temp file to avoid corrupting original on failure)
+            # ----------------------------------------------------------
+            # Save registered image
+            # ----------------------------------------------------------
+            # When images were shifted, apply the transform to the ORIGINAL
+            # (unshifted) moving image so output intensities are preserved.
+            if needs_shift:
+                warped = self.ants.apply_transforms(
+                    fixed=fixed,
+                    moving=moving,
+                    transformlist=registration_result['fwdtransforms'],
+                    interpolator='linear'
+                )
+            else:
+                warped = registration_result['warpedmovout']
+
             temp_output = tempfile.NamedTemporaryFile(suffix=".nii.gz", delete=False)
             temp_output.close()
             temp_output_path = Path(temp_output.name)
 
             try:
-                self.ants.image_write(registration_result['warpedmovout'], str(temp_output_path))
-
-                # If successful, move to final location
+                self.ants.image_write(warped, str(temp_output_path))
                 shutil.move(str(temp_output_path), str(output_path))
             except Exception as e:
-                # Clean up temp file on error
                 if temp_output_path.exists():
                     temp_output_path.unlink()
                 raise e
 
+            # ----------------------------------------------------------
             # Save transform
-            # ANTs returns transforms in registration_result['fwdtransforms']
-            # This is a list of transform files
+            # ----------------------------------------------------------
             if registration_result.get('fwdtransforms'):
-                # For composite transform, we want to save the combined transform
                 if self.config.get("write_composite_transform", True):
-                    # If there's only one transform file, just copy it
                     if len(registration_result['fwdtransforms']) == 1:
                         shutil.copy(registration_result['fwdtransforms'][0], str(transform_path))
                     else:
-                        # ANTsPy composite transforms are typically .h5 or .mat files
-                        # Copy the first (composite) transform
                         shutil.copy(registration_result['fwdtransforms'][0], str(transform_path))
                 else:
-                    # Save individual transforms
                     for i, tx_file in enumerate(registration_result['fwdtransforms']):
                         tx_out_path = transform_path.parent / f"{transform_path.stem}_{i}{transform_path.suffix}"
                         shutil.copy(tx_file, str(tx_out_path))

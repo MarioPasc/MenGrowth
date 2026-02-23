@@ -6,7 +6,6 @@ majority voting to produce a single brain mask applied uniformly.
 """
 
 import shutil
-import tempfile
 from typing import Dict, Any
 from pathlib import Path
 import logging
@@ -118,8 +117,7 @@ def execute(
         if config.save_mask:
             mask_path = get_artifact_path(context, f"{modality}_brain_mask")
         else:
-            temp_dir = Path(tempfile.gettempdir())
-            mask_path = temp_dir / f"_temp_{modality}_brain_mask.nii.gz"
+            mask_path = get_temp_path(context, modality, "brain_mask")
 
         # Execute skull stripping (produces mask + stripped image)
         result = skull_stripper.execute(
@@ -230,9 +228,9 @@ def execute(
                 original_nii.header,
             )
 
-            temp_out = modality_path.with_suffix(".tmp.nii.gz")
+            temp_out = get_temp_path(context, modality, "consensus_stripped")
             nib.save(stripped_nii, str(temp_out))
-            temp_out.rename(modality_path)
+            temp_out.replace(modality_path)
 
             # Clean up the Phase 1 temp stripped file (not needed)
             temp_sp = temp_stripped_paths.get(modality)

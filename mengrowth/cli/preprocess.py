@@ -121,7 +121,7 @@ def main() -> int:
         config = load_preprocessing_pipeline_config(args.config)
 
         # Display configuration summary
-        dh_config = config  # loader now returns DataHarmonizationConfig directly
+        dh_config = config  # PipelineExecutionConfig from loader
         logger.info("")
         logger.info("="*80)
         logger.info("PREPROCESSING CONFIGURATION")

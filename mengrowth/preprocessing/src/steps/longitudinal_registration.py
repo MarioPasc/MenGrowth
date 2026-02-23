@@ -342,6 +342,210 @@ def _determine_registration_mode(
         )
 
 
+def _validate_jacobian(
+    config: Any,
+    transform_path: Path,
+    reference_path: Path,
+    timestamp: str,
+    modality: str,
+    results: Dict[str, Any],
+) -> None:
+    """Validate registration quality using Jacobian determinant statistics.
+
+    Args:
+        config: Longitudinal registration config
+        transform_path: Path to computed transform
+        reference_path: Path to reference image
+        timestamp: Timestamp identifier for results key
+        modality: Modality name for results key
+        results: Results dict to store Jacobian stats into
+    """
+    try:
+        jacobian_stats = compute_jacobian_statistics(
+            transform_path=transform_path,
+            reference_image_path=reference_path,
+        )
+
+        if "jacobian_stats" not in results:
+            results["jacobian_stats"] = {}
+        results["jacobian_stats"][f"{timestamp}_{modality}"] = jacobian_stats
+
+        ref_config = ReferenceSelectionConfig(
+            validate_jacobian=True,
+            jacobian_log_threshold=config.reference_selection_jacobian_threshold,
+        )
+        is_valid, validation_msg = validate_registration_quality(
+            jacobian_stats, ref_config
+        )
+
+        if is_valid:
+            logger.debug(f"      ✓ Jacobian validation passed: {validation_msg}")
+        else:
+            logger.warning(f"      ! Jacobian validation warning: {validation_msg}")
+
+    except Exception as jac_err:
+        logger.warning(f"      ! Jacobian computation failed: {jac_err}")
+
+
+def _warp_mask_for_qc(
+    orchestrator: Any,
+    artifacts_base: Path,
+    reference_study_dir: Path,
+    study_dir: Path,
+    modality: str,
+    timestamp: str,
+    transform_dir: Path,
+    transform_path: Path,
+    reference_path: Path,
+    results: Dict[str, Any],
+) -> None:
+    """Warp skull-strip mask for QC longitudinal Dice computation.
+
+    Args:
+        orchestrator: PreprocessingOrchestrator instance
+        artifacts_base: Base artifacts directory for this patient
+        reference_study_dir: Reference study directory
+        study_dir: Moving study directory
+        modality: Modality name
+        timestamp: Timestamp identifier
+        transform_dir: Directory containing transforms
+        transform_path: Path to transform file
+        reference_path: Path to reference image
+        results: Results dict to store warped mask paths into
+    """
+    if not (
+        orchestrator.qc_manager
+        and orchestrator.qc_manager.config.metrics.mask_plausibility.longitudinal_dice
+    ):
+        return
+
+    ref_mask_path = (
+        artifacts_base.parent
+        / reference_study_dir.name
+        / f"{modality}_brain_mask.nii.gz"
+    )
+    moving_mask_path = (
+        artifacts_base.parent / study_dir.name / f"{modality}_brain_mask.nii.gz"
+    )
+
+    if not (ref_mask_path.exists() and moving_mask_path.exists()):
+        return
+
+    warped_mask_dir = transform_dir / "warped_masks"
+    warped_mask_dir.mkdir(parents=True, exist_ok=True)
+    warped_mask_path = warped_mask_dir / f"{timestamp}_{modality}_mask_warped.nii.gz"
+
+    try:
+        _warp_mask(
+            mask_path=moving_mask_path,
+            transform_path=transform_path,
+            reference_path=reference_path,
+            output_path=warped_mask_path,
+        )
+
+        if "warped_masks" not in results:
+            results["warped_masks"] = {}
+        results["warped_masks"][f"{timestamp}_{modality}"] = {
+            "ref_mask": ref_mask_path,
+            "warped_mask": warped_mask_path,
+        }
+        logger.info(f"      ✓ {modality} mask warped for QC")
+    except Exception as e:
+        logger.warning(f"      ! Failed to warp mask for {modality}: {e}")
+
+
+def _register_modality_pair(
+    registrator: Any,
+    config: Any,
+    orchestrator: Any,
+    reference_path: Path,
+    moving_path: Path,
+    transform_path: Path,
+    transform_dir: Path,
+    timestamp: str,
+    modality: str,
+    artifacts_base: Path,
+    reference_study_dir: Path,
+    study_dir: Path,
+    viz_base: Path,
+    results: Dict[str, Any],
+) -> bool:
+    """Register a single modality pair and perform post-registration QC.
+
+    Handles: registration, Jacobian validation, mask warping, and visualization.
+
+    Args:
+        registrator: LongitudinalRegistration instance
+        config: Longitudinal registration config
+        orchestrator: PreprocessingOrchestrator instance
+        reference_path: Path to fixed (reference) image
+        moving_path: Path to moving image (overwritten in-place)
+        transform_path: Path to save transform
+        transform_dir: Directory containing transforms
+        timestamp: Timestamp identifier
+        modality: Modality name
+        artifacts_base: Base artifacts directory
+        reference_study_dir: Reference study directory
+        study_dir: Moving study directory
+        viz_base: Base visualization directory
+        results: Results dict to update
+
+    Returns:
+        True if registration succeeded, False otherwise
+    """
+    # Save pre-registration image for visualization
+    pre_registration_path = None
+    if config.save_visualization:
+        temp_file = tempfile.NamedTemporaryFile(suffix=".nii.gz", delete=False)
+        temp_file.close()
+        pre_registration_path = Path(temp_file.name)
+        shutil.copy(moving_path, pre_registration_path)
+
+    try:
+        registrator.register_pair(
+            fixed_path=reference_path,
+            moving_path=moving_path,
+            output_path=moving_path,
+            transform_path=transform_path,
+        )
+
+        results["transforms"][f"{timestamp}_{modality}"] = str(transform_path)
+
+        # Jacobian validation
+        if config.reference_selection_validate_jacobian:
+            _validate_jacobian(
+                config, transform_path, reference_path, timestamp, modality, results
+            )
+
+        # Warp mask for QC
+        _warp_mask_for_qc(
+            orchestrator, artifacts_base, reference_study_dir, study_dir,
+            modality, timestamp, transform_dir, transform_path, reference_path, results,
+        )
+
+        # Visualization
+        if config.save_visualization and pre_registration_path:
+            viz_output = (
+                viz_base / study_dir.name / f"longitudinal_registration_{modality}.png"
+            )
+            viz_output.parent.mkdir(parents=True, exist_ok=True)
+            registrator.visualize(
+                reference_path=reference_path,
+                pre_registration_path=pre_registration_path,
+                post_registration_path=moving_path,
+                output_path=viz_output,
+            )
+
+        return True
+
+    except Exception as e:
+        logger.error(f"      ✗ Failed to register {modality}: {e}")
+        return False
+    finally:
+        if pre_registration_path and pre_registration_path.exists():
+            pre_registration_path.unlink()
+
+
 def _execute_single_reference_registration(
     config: Any,
     orchestrator: Any,
@@ -366,169 +570,52 @@ def _execute_single_reference_registration(
         viz_base: Base visualization directory
         results: Results dictionary to update
     """
-    # Get or create longitudinal registrator
     registrator = orchestrator._get_component(
         f"longitudinal_reg_{reference_modality}", config
     )
 
-    # Get output directory where preprocessed files are located
     reference_output_dir = _get_study_output_dir(
         orchestrator, patient_id, reference_study_dir
     )
     reference_path = reference_output_dir / f"{reference_modality}.nii.gz"
 
-    # Register each non-reference study
     for study_dir in all_study_dirs:
         if study_dir == reference_study_dir:
-            continue  # Skip reference study
+            continue
 
         logger.info(f"    Registering study {study_dir.name}...")
-
-        # Get output directory (depends on mode: test vs pipeline)
         study_output_dir = _get_study_output_dir(orchestrator, patient_id, study_dir)
 
-        # Register all modalities in this study to reference
         for modality in orchestrator.config.modalities:
             moving_path = study_output_dir / f"{modality}.nii.gz"
-
             if not moving_path.exists():
                 logger.debug(f"      Modality {modality} not found in {study_dir.name}")
                 continue
 
-            # Define transform path
             timestamp = study_dir.name.split("-")[-1]
             transform_dir = artifacts_base / "longitudinal_registration"
             transform_dir.mkdir(parents=True, exist_ok=True)
             transform_path = transform_dir / f"{timestamp}_{modality}_to_ref.h5"
 
-            # Save pre-registration image for visualization
-            pre_registration_path = None
-            if config.save_visualization:
-                temp_file = tempfile.NamedTemporaryFile(suffix=".nii.gz", delete=False)
-                temp_file.close()
-                pre_registration_path = Path(temp_file.name)
-                shutil.copy(moving_path, pre_registration_path)
+            success = _register_modality_pair(
+                registrator=registrator,
+                config=config,
+                orchestrator=orchestrator,
+                reference_path=reference_path,
+                moving_path=moving_path,
+                transform_path=transform_path,
+                transform_dir=transform_dir,
+                timestamp=timestamp,
+                modality=modality,
+                artifacts_base=artifacts_base,
+                reference_study_dir=reference_study_dir,
+                study_dir=study_dir,
+                viz_base=viz_base,
+                results=results,
+            )
 
-            try:
-                # Perform registration (implementation depends on registrator)
-                registrator.register_pair(
-                    fixed_path=reference_path,
-                    moving_path=moving_path,
-                    output_path=moving_path,  # Overwrite in-place
-                    transform_path=transform_path,
-                )
-
-                results["transforms"][f"{timestamp}_{modality}"] = str(transform_path)
+            if success:
                 logger.info(f"      ✓ {modality} registered")
-
-                # Validate registration quality with Jacobian determinant statistics
-                if config.reference_selection_validate_jacobian:
-                    try:
-                        jacobian_stats = compute_jacobian_statistics(
-                            transform_path=transform_path,
-                            reference_image_path=reference_path,
-                        )
-
-                        # Store Jacobian stats
-                        if "jacobian_stats" not in results:
-                            results["jacobian_stats"] = {}
-                        results["jacobian_stats"][f"{timestamp}_{modality}"] = (
-                            jacobian_stats
-                        )
-
-                        # Validate
-                        ref_config = ReferenceSelectionConfig(
-                            validate_jacobian=True,
-                            jacobian_log_threshold=config.reference_selection_jacobian_threshold,
-                        )
-                        is_valid, validation_msg = validate_registration_quality(
-                            jacobian_stats, ref_config
-                        )
-
-                        if is_valid:
-                            logger.debug(
-                                f"      ✓ Jacobian validation passed: {validation_msg}"
-                            )
-                        else:
-                            logger.warning(
-                                f"      ! Jacobian validation warning: {validation_msg}"
-                            )
-
-                    except Exception as jac_err:
-                        logger.warning(
-                            f"      ! Jacobian computation failed: {jac_err}"
-                        )
-
-                # Warp skull-strip mask if QC enabled and longitudinal Dice requested
-                if (
-                    orchestrator.qc_manager
-                    and orchestrator.qc_manager.config.metrics.mask_plausibility.longitudinal_dice
-                ):
-                    # Determine mask paths
-                    ref_mask_path = (
-                        artifacts_base.parent
-                        / reference_study_dir.name
-                        / f"{modality}_brain_mask.nii.gz"
-                    )
-                    moving_mask_path = (
-                        artifacts_base.parent
-                        / study_dir.name
-                        / f"{modality}_brain_mask.nii.gz"
-                    )
-
-                    if ref_mask_path.exists() and moving_mask_path.exists():
-                        # Create warped mask directory
-                        warped_mask_dir = transform_dir / "warped_masks"
-                        warped_mask_dir.mkdir(parents=True, exist_ok=True)
-                        warped_mask_path = (
-                            warped_mask_dir
-                            / f"{timestamp}_{modality}_mask_warped.nii.gz"
-                        )
-
-                        try:
-                            _warp_mask(
-                                mask_path=moving_mask_path,
-                                transform_path=transform_path,
-                                reference_path=reference_path,
-                                output_path=warped_mask_path,
-                            )
-
-                            # Store warped mask paths for QC
-                            if "warped_masks" not in results:
-                                results["warped_masks"] = {}
-                            results["warped_masks"][f"{timestamp}_{modality}"] = {
-                                "ref_mask": ref_mask_path,
-                                "warped_mask": warped_mask_path,
-                            }
-                            logger.info(f"      ✓ {modality} mask warped for QC")
-                        except Exception as e:
-                            logger.warning(
-                                f"      ! Failed to warp mask for {modality}: {e}"
-                            )
-
-                # Generate visualization if enabled
-                if config.save_visualization and pre_registration_path:
-                    # Save visualization in study-specific directory to match other steps
-                    viz_output = (
-                        viz_base
-                        / study_dir.name
-                        / f"longitudinal_registration_{modality}.png"
-                    )
-                    viz_output.parent.mkdir(parents=True, exist_ok=True)
-                    registrator.visualize(
-                        reference_path=reference_path,
-                        pre_registration_path=pre_registration_path,
-                        post_registration_path=moving_path,
-                        output_path=viz_output,
-                    )
-
-            except Exception as e:
-                logger.error(f"      ✗ Failed to register {modality}: {e}")
-                continue
-            finally:
-                # Clean up temporary pre-registration file
-                if pre_registration_path and pre_registration_path.exists():
-                    pre_registration_path.unlink()
 
         results["registered_studies"].append(study_dir.name)
 
@@ -557,43 +644,34 @@ def _execute_per_modality_registration(
         viz_base: Base visualization directory
         results: Results dictionary to update
     """
-    # Get or create longitudinal registrator
     registrator = orchestrator._get_component(f"longitudinal_reg_{patient_id}", config)
 
-    # Get output directory where preprocessed files are located
     reference_output_dir = _get_study_output_dir(
         orchestrator, patient_id, reference_study_dir
     )
 
-    # Track which studies have been registered (at least one modality succeeded)
     registered_studies_set = set()
 
-    # For each modality type, register across timestamps
     for modality in reference_modalities:
         logger.info(f"    Processing modality: {modality}")
 
         reference_path = reference_output_dir / f"{modality}.nii.gz"
-
         if not reference_path.exists():
             logger.warning(f"      Reference {modality} not found - skipping")
             continue
 
-        # Register this modality from each non-reference study
         for study_dir in all_study_dirs:
             if study_dir == reference_study_dir:
-                continue  # Skip reference study
+                continue
 
-            # Get output directory
             study_output_dir = _get_study_output_dir(
                 orchestrator, patient_id, study_dir
             )
             moving_path = study_output_dir / f"{modality}.nii.gz"
-
             if not moving_path.exists():
                 logger.debug(f"      {modality} not found in {study_dir.name}")
                 continue
 
-            # Define transform path
             timestamp = study_dir.name.split("-")[-1]
             transform_dir = artifacts_base / "longitudinal_registration"
             transform_dir.mkdir(parents=True, exist_ok=True)
@@ -601,139 +679,27 @@ def _execute_per_modality_registration(
                 transform_dir / f"{timestamp}_{modality}_to_ref_{modality}.h5"
             )
 
-            # Save pre-registration image for visualization
-            pre_registration_path = None
-            if config.save_visualization:
-                temp_file = tempfile.NamedTemporaryFile(suffix=".nii.gz", delete=False)
-                temp_file.close()
-                pre_registration_path = Path(temp_file.name)
-                shutil.copy(moving_path, pre_registration_path)
+            success = _register_modality_pair(
+                registrator=registrator,
+                config=config,
+                orchestrator=orchestrator,
+                reference_path=reference_path,
+                moving_path=moving_path,
+                transform_path=transform_path,
+                transform_dir=transform_dir,
+                timestamp=timestamp,
+                modality=modality,
+                artifacts_base=artifacts_base,
+                reference_study_dir=reference_study_dir,
+                study_dir=study_dir,
+                viz_base=viz_base,
+                results=results,
+            )
 
-            try:
-                # Perform registration
-                registrator.register_pair(
-                    fixed_path=reference_path,
-                    moving_path=moving_path,
-                    output_path=moving_path,  # Overwrite in-place
-                    transform_path=transform_path,
-                )
-
-                results["transforms"][f"{timestamp}_{modality}"] = str(transform_path)
+            if success:
                 logger.info(f"      ✓ {study_dir.name}/{modality} → ref/{modality}")
-
-                # Mark this study as having at least one successful registration
                 registered_studies_set.add(study_dir.name)
 
-                # Validate registration quality with Jacobian determinant statistics
-                if config.reference_selection_validate_jacobian:
-                    try:
-                        jacobian_stats = compute_jacobian_statistics(
-                            transform_path=transform_path,
-                            reference_image_path=reference_path,
-                        )
-
-                        # Store Jacobian stats
-                        if "jacobian_stats" not in results:
-                            results["jacobian_stats"] = {}
-                        results["jacobian_stats"][f"{timestamp}_{modality}"] = (
-                            jacobian_stats
-                        )
-
-                        # Validate
-                        ref_config = ReferenceSelectionConfig(
-                            validate_jacobian=True,
-                            jacobian_log_threshold=config.reference_selection_jacobian_threshold,
-                        )
-                        is_valid, validation_msg = validate_registration_quality(
-                            jacobian_stats, ref_config
-                        )
-
-                        if is_valid:
-                            logger.debug(
-                                f"      ✓ Jacobian validation passed: {validation_msg}"
-                            )
-                        else:
-                            logger.warning(
-                                f"      ! Jacobian validation warning: {validation_msg}"
-                            )
-
-                    except Exception as jac_err:
-                        logger.warning(
-                            f"      ! Jacobian computation failed: {jac_err}"
-                        )
-
-                # Warp skull-strip mask if QC enabled and longitudinal Dice requested
-                if (
-                    orchestrator.qc_manager
-                    and orchestrator.qc_manager.config.metrics.mask_plausibility.longitudinal_dice
-                ):
-                    # Determine mask paths
-                    ref_mask_path = (
-                        artifacts_base.parent
-                        / reference_study_dir.name
-                        / f"{modality}_brain_mask.nii.gz"
-                    )
-                    moving_mask_path = (
-                        artifacts_base.parent
-                        / study_dir.name
-                        / f"{modality}_brain_mask.nii.gz"
-                    )
-
-                    if ref_mask_path.exists() and moving_mask_path.exists():
-                        # Create warped mask directory
-                        warped_mask_dir = transform_dir / "warped_masks"
-                        warped_mask_dir.mkdir(parents=True, exist_ok=True)
-                        warped_mask_path = (
-                            warped_mask_dir
-                            / f"{timestamp}_{modality}_mask_warped.nii.gz"
-                        )
-
-                        try:
-                            _warp_mask(
-                                mask_path=moving_mask_path,
-                                transform_path=transform_path,
-                                reference_path=reference_path,
-                                output_path=warped_mask_path,
-                            )
-
-                            # Store warped mask paths for QC
-                            if "warped_masks" not in results:
-                                results["warped_masks"] = {}
-                            results["warped_masks"][f"{timestamp}_{modality}"] = {
-                                "ref_mask": ref_mask_path,
-                                "warped_mask": warped_mask_path,
-                            }
-                            logger.info(f"      ✓ {modality} mask warped for QC")
-                        except Exception as e:
-                            logger.warning(
-                                f"      ! Failed to warp mask for {modality}: {e}"
-                            )
-
-                # Generate visualization if enabled
-                if config.save_visualization and pre_registration_path:
-                    # Save visualization in study-specific directory to match other steps
-                    viz_output = (
-                        viz_base
-                        / study_dir.name
-                        / f"longitudinal_registration_{modality}.png"
-                    )
-                    viz_output.parent.mkdir(parents=True, exist_ok=True)
-                    registrator.visualize(
-                        reference_path=reference_path,
-                        pre_registration_path=pre_registration_path,
-                        post_registration_path=moving_path,
-                        output_path=viz_output,
-                    )
-
-            except Exception as e:
-                logger.error(f"      ✗ Failed: {e}")
-                continue
-            finally:
-                # Clean up temporary pre-registration file
-                if pre_registration_path and pre_registration_path.exists():
-                    pre_registration_path.unlink()
-
-    # Convert set to list for results
     results["registered_studies"] = sorted(list(registered_studies_set))
 
 
@@ -768,7 +734,16 @@ def _warp_mask(
         transform_path: Path to transform file (.h5 or .mat)
         reference_path: Path to reference image
         output_path: Path to save warped mask
+
+    Raises:
+        FileNotFoundError: If transform file does not exist (registration failed upstream)
     """
+    if not transform_path.exists():
+        raise FileNotFoundError(
+            f"Transform file not found: {transform_path}. "
+            "Registration likely failed for this pair — cannot warp mask."
+        )
+
     import ants
 
     mask = ants.image_read(str(mask_path))

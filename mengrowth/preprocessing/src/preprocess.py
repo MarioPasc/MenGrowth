@@ -9,9 +9,7 @@ from typing import List, Optional, Any, Tuple, Dict, Union
 import logging
 
 from mengrowth.preprocessing.src.config import (
-    PreprocessingPipelineConfig,
     PipelineExecutionConfig,
-    DataHarmonizationConfig,  # Backwards compatibility alias
     StepRegistry,
     StepExecutionContext,
     STEP_METADATA,
@@ -19,9 +17,11 @@ from mengrowth.preprocessing.src.config import (
     DataHarmonizationStepConfig,
     BiasFieldCorrectionStepConfig,
     ResamplingStepConfig,
+    CubicPaddingStepConfig,
     RegistrationStepConfig,
     SkullStrippingStepConfig,
     IntensityNormalizationStepConfig,
+    LongitudinalRegistrationStepConfig,
 )
 from mengrowth.preprocessing.src.data_harmonization.io import NRRDtoNIfTIConverter
 from mengrowth.preprocessing.src.data_harmonization.orient import Reorienter
@@ -71,7 +71,6 @@ class PreprocessingOrchestrator:
 
         # Component cache for lazy initialization
         self._components = {}
-        self._step_results = {}  # Store results from previous steps
 
         # State variables
         self.selected_reference_modality = None
@@ -710,222 +709,8 @@ class PreprocessingOrchestrator:
 
         return {
             "nifti": output_base / f"{modality}.nii.gz",
-            "reoriented": output_base / f"{modality}.nii.gz",  # Same file, in-place
-            "masked": output_base / f"{modality}.nii.gz",  # Same file, in-place
-            "bias_corrected": output_base / f"{modality}.nii.gz",  # Same file, in-place
-            "resampled": output_base / f"{modality}.nii.gz",  # Same file, in-place
-            "bias_field": artifacts_base / f"{modality}_bias_field.nii.gz",  # Artifact: bias field
-            "viz_convert": viz_base / f"step0_convert_{modality}.png",
-            "viz_reorient": viz_base / f"step0_reorient_{modality}.png",
-            "viz_background": viz_base / f"step0_background_{modality}.png",
-            "viz_bias_field": viz_base / f"step1_bias_field_{modality}.png",
-            "viz_resampling": viz_base / f"step2_resampling_{modality}.png",
-            "viz_registration": viz_base / f"step3_registration_{modality}.png",
+            "bias_field": artifacts_base / f"{modality}_bias_field.nii.gz",
         }
-
-    def _visualize_normalization_and_resampling(
-        self,
-        original_path: Path,
-        normalized_path: Path,
-        resampled_path: Path,
-        output_path: Path,
-        norm_result: dict,
-        resample_result: dict
-    ) -> None:
-        """Generate 3-row visualization: original → normalized → resampled.
-
-        Creates a comprehensive visualization showing all three stages of processing
-        when normalization is enabled before resampling. Each row shows:
-        - 3 anatomical views (axial, sagittal, coronal)
-        - 1 intensity histogram
-
-        Args:
-            original_path: Path to original image
-            normalized_path: Path to normalized image
-            resampled_path: Path to resampled image
-            output_path: Path to save visualization (PNG)
-            norm_result: Normalization metadata from normalizer.execute()
-            resample_result: Resampling metadata from resampler.execute()
-
-        Raises:
-            RuntimeError: If visualization generation fails
-        """
-        import matplotlib
-        matplotlib.use('Agg')
-        import matplotlib.pyplot as plt
-        import nibabel as nib
-
-        self.logger.info(f"Generating combined normalization + resampling visualization: {output_path}")
-
-        try:
-            # Load all three images
-            original_img = nib.load(str(original_path))
-            original_data = original_img.get_fdata()
-
-            normalized_img = nib.load(str(normalized_path))
-            normalized_data = normalized_img.get_fdata()
-
-            resampled_img = nib.load(str(resampled_path))
-            resampled_data = resampled_img.get_fdata()
-
-            # Get middle slices for each view - using original image dimensions
-            # Axial (XY plane, slice along Z)
-            mid_z_orig = original_data.shape[2] // 2
-            axial_orig = original_data[:, :, mid_z_orig].T
-
-            mid_z_norm = normalized_data.shape[2] // 2
-            axial_norm = normalized_data[:, :, mid_z_norm].T
-
-            mid_z_resamp = resampled_data.shape[2] // 2
-            axial_resamp = resampled_data[:, :, mid_z_resamp].T
-
-            # Sagittal (YZ plane, slice along X)
-            mid_x_orig = original_data.shape[0] // 2
-            sagittal_orig = original_data[mid_x_orig, :, :].T
-
-            mid_x_norm = normalized_data.shape[0] // 2
-            sagittal_norm = normalized_data[mid_x_norm, :, :].T
-
-            mid_x_resamp = resampled_data.shape[0] // 2
-            sagittal_resamp = resampled_data[mid_x_resamp, :, :].T
-
-            # Coronal (XZ plane, slice along Y)
-            mid_y_orig = original_data.shape[1] // 2
-            coronal_orig = original_data[:, mid_y_orig, :].T
-
-            mid_y_norm = normalized_data.shape[1] // 2
-            coronal_norm = normalized_data[:, mid_y_norm, :].T
-
-            mid_y_resamp = resampled_data.shape[1] // 2
-            coronal_resamp = resampled_data[:, mid_y_resamp, :].T
-
-            # Create figure: 3 rows x 4 columns (3 views + 1 histogram per row)
-            fig, axes = plt.subplots(3, 4, figsize=(20, 15))
-
-            # Determine normalization method for title
-            norm_method = type(self.normalizer).__name__.replace("Normalizer", "")
-            resample_method = type(self.resampler).__name__.replace("Resampler", "")
-
-            fig.suptitle(
-                f'Normalization ({norm_method}) + Resampling ({resample_method}): {original_path.stem}',
-                fontsize=16,
-                fontweight='bold'
-            )
-
-            # Row 1: Original image
-            vmin_orig = original_data.min()
-            vmax_orig = original_data.max()
-
-            axes[0, 0].imshow(axial_orig, cmap='gray', origin='lower', vmin=vmin_orig, vmax=vmax_orig)
-            axes[0, 0].set_title('Original - Axial', fontsize=11)
-            axes[0, 0].axis('off')
-
-            axes[0, 1].imshow(sagittal_orig, cmap='gray', origin='lower', vmin=vmin_orig, vmax=vmax_orig)
-            axes[0, 1].set_title('Original - Sagittal', fontsize=11)
-            axes[0, 1].axis('off')
-
-            axes[0, 2].imshow(coronal_orig, cmap='gray', origin='lower', vmin=vmin_orig, vmax=vmax_orig)
-            axes[0, 2].set_title('Original - Coronal', fontsize=11)
-            axes[0, 2].axis('off')
-
-            # Histogram for original
-            orig_nonzero = original_data[original_data > 0]
-            axes[0, 3].hist(orig_nonzero, bins=100, alpha=0.7, color='blue', density=True)
-            axes[0, 3].set_xlabel('Intensity', fontsize=9)
-            axes[0, 3].set_ylabel('Density', fontsize=9)
-            axes[0, 3].set_title('Original Histogram', fontsize=11)
-            axes[0, 3].grid(True, alpha=0.3)
-
-            # Row 2: Normalized image
-            vmin_norm = normalized_data.min()
-            vmax_norm = normalized_data.max()
-
-            axes[1, 0].imshow(axial_norm, cmap='gray', origin='lower', vmin=vmin_norm, vmax=vmax_norm)
-            axes[1, 0].set_title('Normalized - Axial', fontsize=11)
-            axes[1, 0].axis('off')
-
-            axes[1, 1].imshow(sagittal_norm, cmap='gray', origin='lower', vmin=vmin_norm, vmax=vmax_norm)
-            axes[1, 1].set_title('Normalized - Sagittal', fontsize=11)
-            axes[1, 1].axis('off')
-
-            axes[1, 2].imshow(coronal_norm, cmap='gray', origin='lower', vmin=vmin_norm, vmax=vmax_norm)
-            axes[1, 2].set_title('Normalized - Coronal', fontsize=11)
-            axes[1, 2].axis('off')
-
-            # Histogram for normalized
-            norm_nonzero = normalized_data[normalized_data > vmin_norm]
-            axes[1, 3].hist(norm_nonzero, bins=100, alpha=0.7, color='green', density=True)
-            axes[1, 3].set_xlabel('Intensity', fontsize=9)
-            axes[1, 3].set_ylabel('Density', fontsize=9)
-            axes[1, 3].set_title('Normalized Histogram', fontsize=11)
-            axes[1, 3].grid(True, alpha=0.3)
-
-            # Row 3: Resampled image
-            vmin_resamp = resampled_data.min()
-            vmax_resamp = resampled_data.max()
-
-            axes[2, 0].imshow(axial_resamp, cmap='gray', origin='lower', vmin=vmin_resamp, vmax=vmax_resamp)
-            axes[2, 0].set_title('Resampled - Axial', fontsize=11)
-            axes[2, 0].axis('off')
-
-            axes[2, 1].imshow(sagittal_resamp, cmap='gray', origin='lower', vmin=vmin_resamp, vmax=vmax_resamp)
-            axes[2, 1].set_title('Resampled - Sagittal', fontsize=11)
-            axes[2, 1].axis('off')
-
-            axes[2, 2].imshow(coronal_resamp, cmap='gray', origin='lower', vmin=vmin_resamp, vmax=vmax_resamp)
-            axes[2, 2].set_title('Resampled - Coronal', fontsize=11)
-            axes[2, 2].axis('off')
-
-            # Histogram for resampled
-            resamp_nonzero = resampled_data[resampled_data > vmin_resamp]
-            axes[2, 3].hist(resamp_nonzero, bins=100, alpha=0.7, color='orange', density=True)
-            axes[2, 3].set_xlabel('Intensity', fontsize=9)
-            axes[2, 3].set_ylabel('Density', fontsize=9)
-            axes[2, 3].set_title('Resampled Histogram', fontsize=11)
-            axes[2, 3].grid(True, alpha=0.3)
-
-            # Add metadata text
-            # Build metadata string based on normalization method
-            norm_info = f"Normalization: {norm_method}\n"
-            if 'mean' in norm_result:
-                norm_info += f"  Mean={norm_result['mean']:.3f}, Std={norm_result['std']:.3f}\n"
-            elif 'mode' in norm_result:
-                norm_info += f"  Mode={norm_result['mode']:.3f}\n"
-            elif 'p1_value' in norm_result:
-                norm_info += f"  P{norm_result['p1_percentile']}={norm_result['p1_value']:.3f}, P{norm_result['p2_percentile']}={norm_result['p2_value']:.3f}\n"
-
-            metadata_text = (
-                f"{norm_info}\n"
-                f"Resampling: {resample_method}\n"
-                f"  Original Spacing: {resample_result['original_spacing']}\n"
-                f"  Target Spacing: {resample_result['target_spacing']}\n"
-                f"  Original Shape: {resample_result['original_shape']}\n"
-                f"  Resampled Shape: {resample_result['resampled_shape']}"
-            )
-
-            fig.text(
-                0.5, 0.01,
-                metadata_text,
-                ha='center',
-                fontsize=9,
-                family='monospace',
-                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5)
-            )
-
-            plt.tight_layout(rect=[0, 0.08, 1, 0.98])
-
-            # Ensure output directory exists
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-
-            # Save figure
-            plt.savefig(output_path, dpi=150, bbox_inches='tight')
-            plt.close(fig)
-
-            self.logger.info(f"Visualization saved to {output_path}")
-
-        except Exception as e:
-            self.logger.error(f"Visualization generation failed: {e}")
-            raise RuntimeError(f"Visualization failed: {e}") from e
 
     def run_patient(self, patient_id: str) -> None:
         """Run preprocessing pipeline for a single patient with dynamic step execution.
@@ -1101,30 +886,6 @@ class PreprocessingOrchestrator:
         record = PipelineOrderRecord.from_config(patient_id, self.config)
         record.save(json_path)
 
-    def _categorize_steps(self) -> Tuple[List[str], List[str]]:
-        """Categorize steps into per-modality and study-level using STEP_METADATA.
-
-        Returns:
-            Tuple of (per_modality_steps, study_level_steps)
-        """
-        per_modality_steps = []
-        study_level_steps = []
-
-        for step_name in self.config.steps:
-            # Find matching pattern in STEP_METADATA
-            step_level = "modality"  # Default
-            for pattern, metadata in STEP_METADATA.items():
-                if pattern in step_name:
-                    step_level = metadata.level
-                    break
-            
-            if step_level == "study":
-                study_level_steps.append(step_name)
-            else:
-                per_modality_steps.append(step_name)
-
-        return per_modality_steps, study_level_steps
-
     def _categorize_step_groups(self) -> Tuple[List[Tuple[str, List[str]]], List[str]]:
         """Categorize steps into modality/study groups and patient-level steps.
 
@@ -1234,8 +995,6 @@ class PreprocessingOrchestrator:
             # Execute step
             try:
                 result = handler_func(context, total_steps, step_num)
-                # Store result for potential use by downstream steps
-                self._step_results[step_name] = result
 
                 # Trigger QC if enabled
                 self._trigger_qc_if_needed(step_name, context, result)
@@ -1289,7 +1048,6 @@ class PreprocessingOrchestrator:
             pattern, handler_func = self.step_registry.get_handler(step_name)
             try:
                 result = handler_func(context, total_steps=0, current_step_num=0)
-                self._step_results[step_name] = result
 
                 # Trigger QC if enabled
                 self._trigger_qc_if_needed(step_name, context, result)
@@ -1333,7 +1091,6 @@ class PreprocessingOrchestrator:
             pattern, handler_func = self.step_registry.get_handler(step_name)
             try:
                 result = handler_func(context, total_steps=0, current_step_num=0)
-                self._step_results[step_name] = result
 
                 # Trigger QC if enabled
                 self._trigger_qc_if_needed(step_name, context, result)
@@ -1357,9 +1114,11 @@ class PreprocessingOrchestrator:
         DataHarmonizationStepConfig,
         BiasFieldCorrectionStepConfig,
         ResamplingStepConfig,
+        CubicPaddingStepConfig,
         RegistrationStepConfig,
         SkullStrippingStepConfig,
         IntensityNormalizationStepConfig,
+        LongitudinalRegistrationStepConfig,
     ]:
         """Get configuration for a step name using substring matching.
 
