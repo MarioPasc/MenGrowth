@@ -165,12 +165,15 @@ echo "Config:  ${CONFIG_FILE}"
 echo "Patient: ${PATIENT_ID}"
 echo ""
 
+# Disable errexit to capture the exit code — otherwise set -e kills the
+# script immediately on non-zero return, skipping the post-flight summary.
+set +e
 mengrowth-preprocess \
     --config "${CONFIG_FILE}" \
     --patient "${PATIENT_ID}" \
     --verbose
-
 PREPROCESS_EXIT=$?
+set -e
 
 # ========================================================================
 # POST-FLIGHT SUMMARY

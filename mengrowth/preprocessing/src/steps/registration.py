@@ -3,10 +3,11 @@
 This is a study-level step that operates on all modalities together:
 1. Intra-study multi-modal coregistration to reference modality
 2. Intra-study to atlas registration (optional)
+3. Propagate brain masks to atlas space (if skull stripping ran before registration)
 """
 
 import shutil
-from typing import Dict, Any
+from typing import Dict, Any, List
 from pathlib import Path
 import logging
 from mengrowth.preprocessing.src.config import StepExecutionContext
@@ -15,6 +16,86 @@ from mengrowth.preprocessing.src.steps.utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _propagate_brain_masks_to_atlas_space(
+    atlas_path: Path,
+    transform_path: str,
+    artifacts_dir: Path,
+    modalities: List[str],
+) -> int:
+    """Propagate skull-stripping brain masks to atlas space after registration.
+
+    When skull stripping runs BEFORE registration (v2 pipeline), brain masks
+    are created in subject space. After atlas registration transforms modality
+    images to atlas space, these masks must also be transformed. Using the
+    actual registration transform (Rigid+Affine) is critical — a naive
+    scipy.ndimage.zoom would only scale without applying rotation, causing
+    systematic mask misalignment.
+
+    NearestNeighbor interpolation preserves binary mask integrity (no partial
+    volume artifacts at mask boundaries).
+
+    Args:
+        atlas_path: Path to atlas NIfTI file (defines output grid).
+        transform_path: Path to ref→atlas composite transform (.h5).
+        artifacts_dir: Directory containing brain mask artifacts.
+        modalities: List of modality names to search for masks.
+
+    Returns:
+        Number of masks successfully propagated.
+    """
+    try:
+        import ants
+    except ImportError:
+        logger.warning(
+            "  ANTsPy not available — cannot propagate brain masks to atlas space"
+        )
+        return 0
+
+    # Collect all brain mask files in artifacts
+    mask_files: set[Path] = set()
+    for modality in modalities:
+        for suffix in ("_brain_mask.nii.gz", "_brain_mask_individual.nii.gz"):
+            candidate = artifacts_dir / f"{modality}{suffix}"
+            if candidate.exists():
+                mask_files.add(candidate)
+
+    consensus = artifacts_dir / "consensus_brain_mask.nii.gz"
+    if consensus.exists():
+        mask_files.add(consensus)
+
+    if not mask_files:
+        logger.debug("  No brain masks found in artifacts — skipping propagation")
+        return 0
+
+    logger.info(f"  Propagating {len(mask_files)} brain mask(s) to atlas space")
+
+    atlas_img = ants.image_read(str(atlas_path))
+    propagated = 0
+
+    for mask_file in sorted(mask_files):
+        try:
+            mask_img = ants.image_read(str(mask_file))
+            transformed = ants.apply_transforms(
+                fixed=atlas_img,
+                moving=mask_img,
+                transformlist=[str(transform_path)],
+                interpolator="nearestNeighbor",
+                defaultvalue=0,
+            )
+
+            # Atomic write via temp file
+            temp_path = mask_file.parent / f"_temp_{mask_file.name}"
+            ants.image_write(transformed, str(temp_path))
+            temp_path.replace(mask_file)
+
+            logger.info(f"    Propagated: {mask_file.name}")
+            propagated += 1
+        except Exception as e:
+            logger.warning(f"    Failed to propagate {mask_file.name}: {e}")
+
+    return propagated
 
 
 def execute(
@@ -233,6 +314,19 @@ def execute(
             # Add quality metrics from atlas registration if available
             if "quality_metrics" in atlas_result:
                 results["quality_metrics"] = atlas_result["quality_metrics"]
+
+            # Propagate brain masks to atlas space (critical for skull-strip-first pipelines)
+            # If skull stripping ran before registration, masks are in subject space but
+            # images are now in atlas space. Downstream steps (intensity normalization)
+            # need masks in atlas space for correct brain voxel identification.
+            ref_to_atlas_transform = atlas_result.get("ref_to_atlas_transform")
+            if ref_to_atlas_transform:
+                _propagate_brain_masks_to_atlas_space(
+                    atlas_path=Path(config.intra_study_to_atlas.atlas_path),
+                    transform_path=ref_to_atlas_transform,
+                    artifacts_dir=artifacts_base,
+                    modalities=orchestrator.config.modalities,
+                )
 
         except Exception as e:
             logger.error(f"  [Error] Intra-study to atlas registration failed: {e}")
