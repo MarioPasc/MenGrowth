@@ -25,13 +25,23 @@ from mengrowth.preprocessing.src.config import (
 )
 from mengrowth.preprocessing.src.data_harmonization.io import NRRDtoNIfTIConverter
 from mengrowth.preprocessing.src.data_harmonization.orient import Reorienter
-from mengrowth.preprocessing.src.data_harmonization.head_masking.conservative import ConservativeBackgroundRemover
-from mengrowth.preprocessing.src.data_harmonization.head_masking.self import SELFBackgroundRemover
-from mengrowth.preprocessing.src.data_harmonization.head_masking.otsu_foreground import OtsuForegroundRemover
-from mengrowth.preprocessing.src.bias_field_correction.n4_sitk import N4BiasFieldCorrector
+from mengrowth.preprocessing.src.data_harmonization.head_masking.conservative import (
+    ConservativeBackgroundRemover,
+)
+from mengrowth.preprocessing.src.data_harmonization.head_masking.self import (
+    SELFBackgroundRemover,
+)
+from mengrowth.preprocessing.src.data_harmonization.head_masking.otsu_foreground import (
+    OtsuForegroundRemover,
+)
+from mengrowth.preprocessing.src.bias_field_correction.n4_sitk import (
+    N4BiasFieldCorrector,
+)
 from mengrowth.preprocessing.src.normalization.zscore import ZScoreNormalizer
 from mengrowth.preprocessing.src.normalization.kde import KDENormalizer
-from mengrowth.preprocessing.src.normalization.percentile_minmax import PercentileMinMaxNormalizer
+from mengrowth.preprocessing.src.normalization.percentile_minmax import (
+    PercentileMinMaxNormalizer,
+)
 from mengrowth.preprocessing.src.normalization.whitestripe import WhiteStripeNormalizer
 from mengrowth.preprocessing.src.normalization.fcm import FCMNormalizer
 from mengrowth.preprocessing.src.normalization.lsq import LSQNormalizer
@@ -39,7 +49,9 @@ from mengrowth.preprocessing.src.resampling.bspline import BSplineResampler
 from mengrowth.preprocessing.src.resampling.eclare import EclareResampler
 from mengrowth.preprocessing.src.resampling.composite import CompositeResampler
 from mengrowth.preprocessing.src.skull_stripping.hdbet import HDBetSkullStripper
-from mengrowth.preprocessing.src.skull_stripping.synthstrip import SynthStripSkullStripper
+from mengrowth.preprocessing.src.skull_stripping.synthstrip import (
+    SynthStripSkullStripper,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -80,23 +92,26 @@ class PreprocessingOrchestrator:
         if config.qc_metrics.enabled:
             site_map = self._load_site_map(config.qc_metrics.site_metadata)
             from mengrowth.preprocessing.quality_analysis.qc_manager import QCManager
+
             self.qc_manager = QCManager(config.qc_metrics, site_map=site_map)
             self.logger.info("QC Manager initialized")
 
         # Initialize Checkpoint Manager if enabled
         self.checkpoint_manager = None
-        checkpoint_config = getattr(config, 'checkpoints', None)
-        if checkpoint_config and checkpoint_config.get('enabled', False):
+        checkpoint_config = getattr(config, "checkpoints", None)
+        if checkpoint_config and checkpoint_config.get("enabled", False):
             from mengrowth.preprocessing.src.checkpoint import CheckpointManager
-            checkpoint_dir = Path(checkpoint_config.get('checkpoint_dir', ''))
+
+            checkpoint_dir = Path(checkpoint_config.get("checkpoint_dir", ""))
             if checkpoint_dir:
                 self.checkpoint_manager = CheckpointManager(
-                    checkpoint_dir=checkpoint_dir,
-                    enabled=True
+                    checkpoint_dir=checkpoint_dir, enabled=True
                 )
                 self.logger.info(f"Checkpoint Manager initialized: {checkpoint_dir}")
 
-        self.logger.info("Preprocessing orchestrator initialized with dynamic pipeline execution")
+        self.logger.info(
+            "Preprocessing orchestrator initialized with dynamic pipeline execution"
+        )
 
     def _register_step_handlers(self) -> None:
         """Register all step handler functions with the registry.
@@ -112,19 +127,27 @@ class PreprocessingOrchestrator:
             cubic_padding,
             registration,
             skull_stripping,
-            longitudinal_registration
+            longitudinal_registration,
         )
 
         self.step_registry.register("data_harmonization", data_harmonization.execute)
-        self.step_registry.register("bias_field_correction", bias_field_correction.execute)
-        self.step_registry.register("intensity_normalization", intensity_normalization.execute)
+        self.step_registry.register(
+            "bias_field_correction", bias_field_correction.execute
+        )
+        self.step_registry.register(
+            "intensity_normalization", intensity_normalization.execute
+        )
         self.step_registry.register("resampling", resampling.execute)
         self.step_registry.register("cubic_padding", cubic_padding.execute)
-        self.step_registry.register("longitudinal_registration", longitudinal_registration.execute)
+        self.step_registry.register(
+            "longitudinal_registration", longitudinal_registration.execute
+        )
         self.step_registry.register("registration", registration.execute)
         self.step_registry.register("skull_stripping", skull_stripping.execute)
 
-        self.logger.debug(f"Registered {len(self.step_registry.list_patterns())} step patterns")
+        self.logger.debug(
+            f"Registered {len(self.step_registry.list_patterns())} step patterns"
+        )
 
     def _load_site_map(self, yaml_path: Optional[str]) -> Dict[str, str]:
         """Load optional site metadata YAML mapping patient_id -> site.
@@ -140,17 +163,15 @@ class PreprocessingOrchestrator:
 
         try:
             import yaml
-            with open(yaml_path, 'r') as f:
+
+            with open(yaml_path, "r") as f:
                 return yaml.safe_load(f) or {}
         except Exception as e:
             self.logger.warning(f"Failed to load site metadata from {yaml_path}: {e}")
             return {}
 
     def _trigger_qc_if_needed(
-        self,
-        step_name: str,
-        context: 'StepExecutionContext',
-        result: Dict[str, Any]
+        self, step_name: str, context: "StepExecutionContext", result: Dict[str, Any]
     ) -> None:
         """Trigger QC metric collection if this step is configured for QC.
 
@@ -189,7 +210,9 @@ class PreprocessingOrchestrator:
 
             # For registration: iterate over modalities and create QC records
             if step_base == "registration":
-                self._trigger_registration_qc(step_name, case_metadata, qc_paths, result)
+                self._trigger_registration_qc(
+                    step_name, case_metadata, qc_paths, result
+                )
                 return
 
             # For skull_stripping: iterate over modalities
@@ -219,7 +242,7 @@ class PreprocessingOrchestrator:
                 step_name=step_name,
                 case_metadata=case_metadata,
                 image_paths=image_paths,
-                artifact_paths=artifact_paths
+                artifact_paths=artifact_paths,
             )
         except Exception as e:
             self.logger.warning(f"QC trigger failed for {step_name}: {e}")
@@ -234,9 +257,16 @@ class PreprocessingOrchestrator:
             Base step type (e.g., "registration", "skull_stripping")
         """
         # Check against known patterns in order of specificity
-        for pattern in ["longitudinal_registration", "registration", "skull_stripping",
-                       "intensity_normalization", "bias_field_correction", "data_harmonization",
-                       "resampling", "cubic_padding"]:
+        for pattern in [
+            "longitudinal_registration",
+            "registration",
+            "skull_stripping",
+            "intensity_normalization",
+            "bias_field_correction",
+            "data_harmonization",
+            "resampling",
+            "cubic_padding",
+        ]:
             if pattern in step_name:
                 return pattern
         return step_name
@@ -246,7 +276,7 @@ class PreprocessingOrchestrator:
         step_name: str,
         base_metadata: Dict[str, Any],
         qc_paths: Dict[str, Any],
-        result: Dict[str, Any]
+        result: Dict[str, Any],
     ) -> None:
         """Trigger QC for registration step with proper paths.
 
@@ -266,14 +296,9 @@ class PreprocessingOrchestrator:
             if not output_path.exists():
                 continue
 
-            case_metadata = {
-                **base_metadata,
-                "modality": modality
-            }
+            case_metadata = {**base_metadata, "modality": modality}
 
-            image_paths = {
-                "output": output_path
-            }
+            image_paths = {"output": output_path}
             if atlas_path and atlas_path.exists():
                 image_paths["reference"] = atlas_path
 
@@ -284,16 +309,15 @@ class PreprocessingOrchestrator:
                     step_name=step_name,
                     case_metadata=case_metadata,
                     image_paths=image_paths,
-                    artifact_paths=artifact_paths
+                    artifact_paths=artifact_paths,
                 )
             except Exception as e:
-                self.logger.warning(f"QC trigger failed for {step_name}/{modality}: {e}")
+                self.logger.warning(
+                    f"QC trigger failed for {step_name}/{modality}: {e}"
+                )
 
     def _trigger_skull_stripping_qc(
-        self,
-        step_name: str,
-        base_metadata: Dict[str, Any],
-        qc_paths: Dict[str, Any]
+        self, step_name: str, base_metadata: Dict[str, Any], qc_paths: Dict[str, Any]
     ) -> None:
         """Trigger QC for skull stripping step with proper paths.
 
@@ -311,10 +335,7 @@ class PreprocessingOrchestrator:
             if not output_path.exists():
                 continue
 
-            case_metadata = {
-                **base_metadata,
-                "modality": modality
-            }
+            case_metadata = {**base_metadata, "modality": modality}
 
             image_paths = {"output": output_path}
             artifact_paths = {}
@@ -331,10 +352,46 @@ class PreprocessingOrchestrator:
                     step_name=step_name,
                     case_metadata=case_metadata,
                     image_paths=image_paths,
-                    artifact_paths=artifact_paths
+                    artifact_paths=artifact_paths,
                 )
             except Exception as e:
-                self.logger.warning(f"QC trigger failed for {step_name}/{modality}: {e}")
+                self.logger.warning(
+                    f"QC trigger failed for {step_name}/{modality}: {e}"
+                )
+
+    # Prefixes of cached components that hold GPU memory or large CPU allocations
+    _GPU_COMPONENT_PREFIXES = (
+        "skull_stripper_",
+        "resampler_eclare",
+        "resampler_composite",
+    )
+
+    def _release_gpu_components(self) -> None:
+        """Release cached components that hold GPU memory or large CPU allocations.
+
+        Called between studies to prevent RAM/VRAM accumulation when processing
+        patients with many longitudinal studies.
+        """
+        keys_to_delete = [
+            k for k in self._components if k.startswith(self._GPU_COMPONENT_PREFIXES)
+        ]
+        if not keys_to_delete:
+            return
+
+        for key in keys_to_delete:
+            del self._components[key]
+
+        gc.collect()
+
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except ImportError:
+            pass
+
+        self.logger.debug(f"Released GPU components: {keys_to_delete}")
 
     def _get_component(self, component_type: str, config: Any) -> Any:
         """Get or create a component instance (lazy initialization).
@@ -347,7 +404,9 @@ class PreprocessingOrchestrator:
             Component instance (cached for reuse)
         """
         if component_type not in self._components:
-            self._components[component_type] = self._create_component(component_type, config)
+            self._components[component_type] = self._create_component(
+                component_type, config
+            )
         return self._components[component_type]
 
     def _create_component(self, component_type: str, config: Any) -> Any:
@@ -365,11 +424,12 @@ class PreprocessingOrchestrator:
             return NRRDtoNIfTIConverter(verbose=self.verbose)
         elif component_type == "reorienter":
             return Reorienter(
-                target_orientation=config.reorient_to,
-                verbose=self.verbose
+                target_orientation=config.reorient_to, verbose=self.verbose
             )
         elif component_type.startswith("background_remover_"):
-            method = component_type.split("_", 2)[2]  # Extract method from "background_remover_METHOD"
+            method = component_type.split("_", 2)[
+                2
+            ]  # Extract method from "background_remover_METHOD"
             return self._create_background_remover(method, config)
         elif component_type.startswith("bias_corrector_"):
             parts = component_type.split("_", 3)
@@ -401,18 +461,15 @@ class PreprocessingOrchestrator:
         """Create background remover instance."""
         if method == "border_connected_percentile":
             return ConservativeBackgroundRemover(
-                config=config.background_zeroing,
-                verbose=self.verbose
+                config=config.background_zeroing, verbose=self.verbose
             )
         elif method == "self_head_mask":
             return SELFBackgroundRemover(
-                config=config.background_zeroing,
-                verbose=self.verbose
+                config=config.background_zeroing, verbose=self.verbose
             )
         elif method == "otsu_foreground":
             return OtsuForegroundRemover(
-                config=config.background_zeroing,
-                verbose=self.verbose
+                config=config.background_zeroing, verbose=self.verbose
             )
         else:
             raise ValueError(f"Unknown background removal method: {method}")
@@ -426,10 +483,7 @@ class PreprocessingOrchestrator:
                 "bias_field_fwhm": config.bias_field_correction.bias_field_fwhm,
                 "convergence_threshold": config.bias_field_correction.convergence_threshold,
             }
-            return N4BiasFieldCorrector(
-                config=bf_config_dict,
-                verbose=self.verbose
-            )
+            return N4BiasFieldCorrector(config=bf_config_dict, verbose=self.verbose)
         else:
             raise ValueError(f"Unknown bias field correction method: {method}")
 
@@ -451,7 +505,9 @@ class PreprocessingOrchestrator:
                 "p1": config.intensity_normalization.p1,
                 "p2": config.intensity_normalization.p2,
             }
-            return PercentileMinMaxNormalizer(config=norm_config_dict, verbose=self.verbose)
+            return PercentileMinMaxNormalizer(
+                config=norm_config_dict, verbose=self.verbose
+            )
         elif method == "whitestripe":
             norm_config_dict = {
                 "width": config.intensity_normalization.width,
@@ -485,7 +541,7 @@ class PreprocessingOrchestrator:
             return BSplineResampler(
                 target_voxel_size=config.resampling.target_voxel_size,
                 config=resample_config_dict,
-                verbose=self.verbose
+                verbose=self.verbose,
             )
         elif method == "eclare":
             resample_config_dict = {
@@ -495,12 +551,14 @@ class PreprocessingOrchestrator:
                 "patch_sampling": config.resampling.patch_sampling,
                 "suffix": config.resampling.suffix,
                 "gpu_id": config.resampling.gpu_id,
-                "verbose": config.resampling.verbose if hasattr(config.resampling, "verbose") else self.verbose,
+                "verbose": config.resampling.verbose
+                if hasattr(config.resampling, "verbose")
+                else self.verbose,
             }
             return EclareResampler(
                 target_voxel_size=config.resampling.target_voxel_size,
                 config=resample_config_dict,
-                verbose=self.verbose
+                verbose=self.verbose,
             )
         elif method == "composite":
             resample_config_dict = {
@@ -520,15 +578,19 @@ class PreprocessingOrchestrator:
             return CompositeResampler(
                 target_voxel_size=config.resampling.target_voxel_size,
                 config=resample_config_dict,
-                verbose=self.verbose
+                verbose=self.verbose,
             )
         else:
             raise ValueError(f"Unknown resampling method: {method}")
 
     def _create_intra_study_registrator(self, config: Any) -> Any:
         """Create intra-study to reference registrator."""
-        from mengrowth.preprocessing.src.registration.factory import create_multi_modal_coregistration
-        from mengrowth.preprocessing.src.registration.constants import DEFAULT_REGISTRATION_ENGINE
+        from mengrowth.preprocessing.src.registration.factory import (
+            create_multi_modal_coregistration,
+        )
+        from mengrowth.preprocessing.src.registration.constants import (
+            DEFAULT_REGISTRATION_ENGINE,
+        )
 
         intra_study_config = {
             "reference_modality_priority": config.intra_study_to_reference.reference_modality_priority,
@@ -544,18 +606,25 @@ class PreprocessingOrchestrator:
             "convergence_window_size": config.intra_study_to_reference.convergence_window_size,
             "write_composite_transform": config.intra_study_to_reference.write_composite_transform,
             "interpolation": config.intra_study_to_reference.interpolation,
-            "engine": config.intra_study_to_reference.engine or DEFAULT_REGISTRATION_ENGINE,
+            "engine": config.intra_study_to_reference.engine
+            or DEFAULT_REGISTRATION_ENGINE,
             "save_detailed_registration_info": config.intra_study_to_reference.save_detailed_registration_info,
             "use_center_of_mass_init": config.intra_study_to_reference.use_center_of_mass_init,
             "validate_registration_quality": config.intra_study_to_reference.validate_registration_quality,
             "quality_warning_threshold": config.intra_study_to_reference.quality_warning_threshold,
         }
-        return create_multi_modal_coregistration(config=intra_study_config, verbose=self.verbose)
+        return create_multi_modal_coregistration(
+            config=intra_study_config, verbose=self.verbose
+        )
 
     def _create_atlas_registrator(self, config: Any) -> Any:
         """Create intra-study to atlas registrator."""
-        from mengrowth.preprocessing.src.registration.factory import create_intra_study_to_atlas
-        from mengrowth.preprocessing.src.registration.constants import DEFAULT_REGISTRATION_ENGINE
+        from mengrowth.preprocessing.src.registration.factory import (
+            create_intra_study_to_atlas,
+        )
+        from mengrowth.preprocessing.src.registration.constants import (
+            DEFAULT_REGISTRATION_ENGINE,
+        )
 
         atlas_config = {
             "atlas_path": config.intra_study_to_atlas.atlas_path,
@@ -580,7 +649,7 @@ class PreprocessingOrchestrator:
         return create_intra_study_to_atlas(
             config=atlas_config,
             reference_modality=self.selected_reference_modality,
-            verbose=self.verbose
+            verbose=self.verbose,
         )
 
     def _create_skull_stripper(self, method: str, config: Any) -> Any:
@@ -599,7 +668,9 @@ class PreprocessingOrchestrator:
                 "device": config.skull_stripping.synthstrip_device,
                 "fill_value": config.skull_stripping.fill_value,
             }
-            return SynthStripSkullStripper(config=skull_strip_config, verbose=self.verbose)
+            return SynthStripSkullStripper(
+                config=skull_strip_config, verbose=self.verbose
+            )
         else:
             raise ValueError(f"Unknown skull stripping method: {method}")
 
@@ -609,8 +680,12 @@ class PreprocessingOrchestrator:
         Args:
             config: LongitudinalRegistrationConfig object (not full StepExecutionConfig)
         """
-        from mengrowth.preprocessing.src.registration.longitudinal_registration import LongitudinalRegistration
-        from mengrowth.preprocessing.src.registration.constants import DEFAULT_REGISTRATION_ENGINE
+        from mengrowth.preprocessing.src.registration.longitudinal_registration import (
+            LongitudinalRegistration,
+        )
+        from mengrowth.preprocessing.src.registration.constants import (
+            DEFAULT_REGISTRATION_ENGINE,
+        )
 
         long_config = {
             "engine": config.engine or DEFAULT_REGISTRATION_ENGINE,
@@ -674,10 +749,7 @@ class PreprocessingOrchestrator:
         return None
 
     def _get_output_paths(
-        self,
-        patient_id: str,
-        study_dir: Path,
-        modality: str
+        self, patient_id: str, study_dir: Path, modality: str
     ) -> dict:
         """Get output paths for all processing steps.
 
@@ -695,12 +767,16 @@ class PreprocessingOrchestrator:
             # Test mode: write to separate output directory
             output_base = Path(self.config.output_root) / patient_id / study_name
             viz_base = Path(self.config.viz_root) / patient_id / study_name
-            artifacts_base = Path(self.config.preprocessing_artifacts_path) / patient_id / study_name
+            artifacts_base = (
+                Path(self.config.preprocessing_artifacts_path) / patient_id / study_name
+            )
         else:
             # Pipeline mode: write in-place
             output_base = study_dir
             viz_base = Path(self.config.viz_root) / patient_id / study_name
-            artifacts_base = Path(self.config.preprocessing_artifacts_path) / patient_id / study_name
+            artifacts_base = (
+                Path(self.config.preprocessing_artifacts_path) / patient_id / study_name
+            )
 
         # Ensure directories exist
         output_base.mkdir(parents=True, exist_ok=True)
@@ -722,9 +798,9 @@ class PreprocessingOrchestrator:
             FileNotFoundError: If patient directory not found
             RuntimeError: If processing fails
         """
-        self.logger.info(f"{'='*80}")
+        self.logger.info(f"{'=' * 80}")
         self.logger.info(f"Processing patient: {patient_id}")
-        self.logger.info(f"{'='*80}")
+        self.logger.info(f"{'=' * 80}")
 
         # Get study directories
         study_dirs = self._get_study_directories(patient_id)
@@ -742,10 +818,12 @@ class PreprocessingOrchestrator:
 
         # PHASE 2: Execute patient-level steps (new)
         if patient_level_steps:
-            self.logger.info(f"\n{'='*80}")
+            self.logger.info(f"\n{'=' * 80}")
             self.logger.info(f"Executing patient-level steps for {patient_id}")
-            self.logger.info(f"{'='*80}")
-            self._execute_patient_level_steps(patient_id, study_dirs, patient_level_steps)
+            self.logger.info(f"{'=' * 80}")
+            self._execute_patient_level_steps(
+                patient_id, study_dirs, patient_level_steps
+            )
 
         # PHASE 3: Finalize QC for this patient (if enabled)
         if self.qc_manager:
@@ -757,18 +835,18 @@ class PreprocessingOrchestrator:
                 self.logger.error(f"QC finalization failed: {e}", exc_info=True)
 
         # Summary
-        self.logger.info(f"\n{'='*80}")
+        self.logger.info(f"\n{'=' * 80}")
         self.logger.info(f"Patient {patient_id} processing complete:")
         self.logger.info(f"  Processed: {total_processed}")
         self.logger.info(f"  Skipped:   {total_skipped}")
         self.logger.info(f"  Errors:    {total_errors}")
-        self.logger.info(f"{'='*80}\n")
+        self.logger.info(f"{'=' * 80}\n")
 
     def _process_studies(
         self,
         patient_id: str,
         study_dirs: List[Path],
-        step_groups: List[Tuple[str, List[str]]]
+        step_groups: List[Tuple[str, List[str]]],
     ) -> Tuple[int, int, int]:
         """Process all studies with modality-level and study-level steps.
 
@@ -786,7 +864,9 @@ class PreprocessingOrchestrator:
 
         # Process each study
         for study_idx, study_dir in enumerate(study_dirs, 1):
-            self.logger.info(f"\n[Study {study_idx}/{len(study_dirs)}] {study_dir.name}")
+            self.logger.info(
+                f"\n[Study {study_idx}/{len(study_dirs)}] {study_dir.name}"
+            )
 
             # Track modalities that have been processed successfully
             processed_modalities = set()
@@ -802,17 +882,27 @@ class PreprocessingOrchestrator:
                             # Find input file (only check on first group)
                             input_file = self._get_modality_file(study_dir, modality)
 
-                            if input_file is None and modality not in processed_modalities:
-                                self.logger.warning(f"    Modality {modality} not found - skipping")
+                            if (
+                                input_file is None
+                                and modality not in processed_modalities
+                            ):
+                                self.logger.warning(
+                                    f"    Modality {modality} not found - skipping"
+                                )
                                 total_skipped += 1
                                 continue
 
                             # Get output paths
-                            paths = self._get_output_paths(patient_id, study_dir, modality)
+                            paths = self._get_output_paths(
+                                patient_id, study_dir, modality
+                            )
 
                             # Check overwrite conditions (only on first group)
                             if modality not in processed_modalities:
-                                if paths["nifti"].exists() and not self.config.overwrite:
+                                if (
+                                    paths["nifti"].exists()
+                                    and not self.config.overwrite
+                                ):
                                     if self.config.mode == "pipeline":
                                         raise FileExistsError(
                                             f"Output file exists and overwrite=False: {paths['nifti']}\n"
@@ -831,14 +921,14 @@ class PreprocessingOrchestrator:
                                 study_dir=study_dir,
                                 modality=modality,
                                 paths=paths,
-                                steps=group_steps
+                                steps=group_steps,
                             )
 
                             processed_modalities.add(modality)
                             self.logger.info(f"    Successfully processed {modality}")
                             total_processed += 1
 
-                        except FileExistsError as e:
+                        except FileExistsError:
                             # Re-raise overwrite errors (halt execution)
                             raise
                         except Exception as e:
@@ -849,22 +939,28 @@ class PreprocessingOrchestrator:
                 else:
                     # Execute study-level steps
                     self._execute_study_level_steps(
-                        patient_id=patient_id,
-                        study_dir=study_dir,
-                        steps=group_steps
+                        patient_id=patient_id, study_dir=study_dir, steps=group_steps
                     )
+
+            # Free GPU models and large allocations between studies to prevent
+            # RAM/VRAM accumulation (HD-BET ensemble, ECLARE, etc.)
+            self._release_gpu_components()
 
         return total_processed, total_skipped, total_errors
 
     def _log_pipeline_order(self, patient_id: str) -> None:
         """Log pipeline configuration to console and JSON file."""
-        from mengrowth.preprocessing.src.utils.pipeline_logger import PipelineOrderRecord
+        from mengrowth.preprocessing.src.utils.pipeline_logger import (
+            PipelineOrderRecord,
+        )
 
         # Console logging
-        self.logger.info("="*80)
+        self.logger.info("=" * 80)
         self.logger.info("PIPELINE CONFIGURATION")
-        self.logger.info("="*80)
-        self.logger.info(f"Mode: {self.config.mode}, Overwrite: {self.config.overwrite}")
+        self.logger.info("=" * 80)
+        self.logger.info(
+            f"Mode: {self.config.mode}, Overwrite: {self.config.overwrite}"
+        )
         self.logger.info(f"Step Order ({len(self.config.steps)} steps):")
         for i, step_name in enumerate(self.config.steps, 1):
             # Find matching config pattern
@@ -876,10 +972,11 @@ class PreprocessingOrchestrator:
             self.logger.info(f"  {i}. {step_name} (config: {pattern})")
 
         self.logger.info(f"Modalities: {', '.join(self.config.modalities)}")
-        self.logger.info("="*80)
+        self.logger.info("=" * 80)
 
         # JSON logging
         from pathlib import Path
+
         artifacts_path = Path(self.config.preprocessing_artifacts_path)
         json_path = artifacts_path / patient_id / "pipeline_order.json"
 
@@ -939,7 +1036,7 @@ class PreprocessingOrchestrator:
         study_dir: Path,
         modality: str,
         paths: Dict[str, Path],
-        steps: List[str]
+        steps: List[str],
     ) -> None:
         """Execute per-modality steps in order.
 
@@ -964,7 +1061,9 @@ class PreprocessingOrchestrator:
                 try:
                     self.qc_manager.capture_baseline(case_metadata, input_file)
                 except Exception as e:
-                    self.logger.warning(f"    Baseline capture failed for {modality}: {e}")
+                    self.logger.warning(
+                        f"    Baseline capture failed for {modality}: {e}"
+                    )
 
         for step_num, step_name in enumerate(steps, 1):
             # Check if step can be skipped due to checkpoint
@@ -972,7 +1071,9 @@ class PreprocessingOrchestrator:
                 if self.checkpoint_manager.is_step_completed(
                     patient_id, study_dir.name, modality, step_name
                 ):
-                    self.logger.info(f"    [{step_num}/{total_steps}] {step_name} - skipped (checkpoint exists)")
+                    self.logger.info(
+                        f"    [{step_num}/{total_steps}] {step_name} - skipped (checkpoint exists)"
+                    )
                     continue
 
             # Get step config
@@ -986,7 +1087,7 @@ class PreprocessingOrchestrator:
                 paths=paths,
                 orchestrator=self,
                 step_name=step_name,
-                step_config=step_config
+                step_config=step_config,
             )
 
             # Get handler function
@@ -1009,7 +1110,7 @@ class PreprocessingOrchestrator:
                             modality=modality,
                             step_name=step_name,
                             output_path=output_path,
-                            metadata=result
+                            metadata=result,
                         )
 
             except Exception as e:
@@ -1017,10 +1118,7 @@ class PreprocessingOrchestrator:
                 raise RuntimeError(f"Step '{step_name}' failed") from e
 
     def _execute_study_level_steps(
-        self,
-        patient_id: str,
-        study_dir: Path,
-        steps: List[str]
+        self, patient_id: str, study_dir: Path, steps: List[str]
     ) -> None:
         """Execute study-level steps (registration, skull stripping).
 
@@ -1038,10 +1136,10 @@ class PreprocessingOrchestrator:
                 patient_id=patient_id,
                 study_dir=study_dir,
                 modality=None,  # N/A for study-level
-                paths=None,     # Will be computed per-modality internally
+                paths=None,  # Will be computed per-modality internally
                 orchestrator=self,
                 step_name=step_name,
-                step_config=step_config
+                step_config=step_config,
             )
 
             # Get handler and execute
@@ -1057,10 +1155,7 @@ class PreprocessingOrchestrator:
                 # Continue anyway - don't halt for study-level failures
 
     def _execute_patient_level_steps(
-        self,
-        patient_id: str,
-        study_dirs: List[Path],
-        steps: List[str]
+        self, patient_id: str, study_dirs: List[Path], steps: List[str]
     ) -> None:
         """Execute patient-level steps that operate across all timestamps.
 
@@ -1079,12 +1174,12 @@ class PreprocessingOrchestrator:
             context = StepExecutionContext(
                 patient_id=patient_id,
                 study_dir=None,  # N/A for patient-level
-                modality=None,   # N/A for patient-level
-                paths=None,      # N/A for patient-level
+                modality=None,  # N/A for patient-level
+                paths=None,  # N/A for patient-level
                 orchestrator=self,
                 step_name=step_name,
                 step_config=step_config,
-                all_study_dirs=study_dirs  # NEW: Pass all study dirs
+                all_study_dirs=study_dirs,  # NEW: Pass all study dirs
             )
 
             # Get handler and execute
@@ -1098,8 +1193,7 @@ class PreprocessingOrchestrator:
                 # Store warped masks info for longitudinal registration
                 if result and "warped_masks" in result and self.qc_manager:
                     self.qc_manager.store_warped_masks_info(
-                        patient_id=patient_id,
-                        warped_masks=result["warped_masks"]
+                        patient_id=patient_id, warped_masks=result["warped_masks"]
                     )
 
                 self.logger.info(f"  ✓ {step_name} completed successfully")
@@ -1108,8 +1202,7 @@ class PreprocessingOrchestrator:
                 raise RuntimeError(f"Patient-level step '{step_name}' failed") from e
 
     def _get_step_config(
-        self, 
-        step_name: str
+        self, step_name: str
     ) -> Union[
         DataHarmonizationStepConfig,
         BiasFieldCorrectionStepConfig,
@@ -1141,7 +1234,9 @@ class PreprocessingOrchestrator:
         )
 
 
-def run_preprocessing(config: PipelineExecutionConfig, patient_id: Optional[str] = None) -> None:
+def run_preprocessing(
+    config: PipelineExecutionConfig, patient_id: Optional[str] = None
+) -> None:
     """Run preprocessing pipeline on selected patients.
 
     Args:
@@ -1173,14 +1268,20 @@ def run_preprocessing(config: PipelineExecutionConfig, patient_id: Optional[str]
     elif config.patient_selector == "all":
         # Get all patient directories
         dataset_root = Path(config.dataset_root)
-        patient_dirs = sorted([d for d in dataset_root.iterdir() if d.is_dir() and d.name.startswith("MenGrowth-")])
+        patient_dirs = sorted(
+            [
+                d
+                for d in dataset_root.iterdir()
+                if d.is_dir() and d.name.startswith("MenGrowth-")
+            ]
+        )
 
         logger.info(f"Processing all patients: {len(patient_dirs)} found")
 
         for idx, patient_dir in enumerate(patient_dirs, 1):
-            logger.info(f"\n\n{'#'*80}")
+            logger.info(f"\n\n{'#' * 80}")
             logger.info(f"# Patient {idx}/{len(patient_dirs)}: {patient_dir.name}")
-            logger.info(f"{'#'*80}")
+            logger.info(f"{'#' * 80}")
 
             try:
                 orchestrator.run_patient(patient_dir.name)
@@ -1188,9 +1289,11 @@ def run_preprocessing(config: PipelineExecutionConfig, patient_id: Optional[str]
                 logger.error(f"Failed to process {patient_dir.name}: {e}")
                 # Continue with next patient
 
-        logger.info(f"\n\n{'#'*80}")
-        logger.info(f"# All patients processing complete ({len(patient_dirs)} patients)")
-        logger.info(f"{'#'*80}")
+        logger.info(f"\n\n{'#' * 80}")
+        logger.info(
+            f"# All patients processing complete ({len(patient_dirs)} patients)"
+        )
+        logger.info(f"{'#' * 80}")
 
     else:
         raise ValueError(

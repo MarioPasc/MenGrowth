@@ -14,7 +14,7 @@ Reference:
 """
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 import logging
 import subprocess
 import os
@@ -44,7 +44,7 @@ class EclareResampler(BaseResampler):
         self,
         target_voxel_size: List[float],
         config: Dict[str, Any],
-        verbose: bool = False
+        verbose: bool = False,
     ) -> None:
         """Initialize ECLARE resampler.
 
@@ -63,9 +63,7 @@ class EclareResampler(BaseResampler):
             ValueError: If required parameters are missing or invalid
         """
         super().__init__(
-            target_voxel_size=target_voxel_size,
-            config=config,
-            verbose=verbose
+            target_voxel_size=target_voxel_size, config=config, verbose=verbose
         )
 
         # Extract ECLARE-specific parameters with defaults
@@ -81,10 +79,14 @@ class EclareResampler(BaseResampler):
             raise ValueError("conda_environment_eclare must be a non-empty string")
 
         if not isinstance(self.batch_size, int) or self.batch_size <= 0:
-            raise ValueError(f"batch_size must be a positive integer, got {self.batch_size}")
+            raise ValueError(
+                f"batch_size must be a positive integer, got {self.batch_size}"
+            )
 
         if not isinstance(self.n_patches, int) or self.n_patches <= 0:
-            raise ValueError(f"n_patches must be a positive integer, got {self.n_patches}")
+            raise ValueError(
+                f"n_patches must be a positive integer, got {self.n_patches}"
+            )
 
         if self.patch_sampling not in ["uniform", "gradient", "random"]:
             self.logger.warning(
@@ -102,7 +104,9 @@ class EclareResampler(BaseResampler):
             if len(self.gpu_id) == 0:
                 raise ValueError("gpu_id list cannot be empty")
         else:
-            raise ValueError(f"gpu_id must be int or List[int], got {type(self.gpu_id)}")
+            raise ValueError(
+                f"gpu_id must be int or List[int], got {type(self.gpu_id)}"
+            )
 
         self.logger.info(
             f"Initialized EclareResampler: "
@@ -135,7 +139,7 @@ class EclareResampler(BaseResampler):
             # This is the FWHM for the Gaussian kernel
             relative_thickness = through_plane / min_in_plane
 
-            dim_labels = ['X', 'Y', 'Z']
+            dim_labels = ["X", "Y", "Z"]
             self.logger.info(
                 f"Computed relative slice thickness: {relative_thickness:.3f} "
                 f"(through-plane={dim_labels[worst_dim]}={through_plane:.3f}mm / "
@@ -147,14 +151,14 @@ class EclareResampler(BaseResampler):
         except Exception as e:
             self.logger.error(f"Failed to compute relative slice thickness: {e}")
             raise RuntimeError(f"Slice thickness computation failed: {e}") from e
-        
+
     def _run_eclare_subprocess(
         self,
         input_path: Path,
         output_dir: Path,
         relative_slice_thickness: float,
         gpu_id: int,
-        inplane_acq_res: Optional[List[float]] = None
+        inplane_acq_res: Optional[List[float]] = None,
     ) -> None:
         """Run ECLARE as a subprocess via conda run.
 
@@ -177,16 +181,27 @@ class EclareResampler(BaseResampler):
 
         # Build ECLARE command
         cmd = [
-            "conda", "run", "-n", self.conda_env,
+            "conda",
+            "run",
+            "-n",
+            self.conda_env,
             "run-eclare",
-            "--in-fpath", str(input_path),
-            "--out-dir", str(output_dir),
-            "--batch-size", str(self.batch_size),
-            "--n-patches", str(self.n_patches),
-            "--inplane-acq-res", f"{inplane_acq_res[0]}", f"{inplane_acq_res[1]}",
-            "--patch-sampling", self.patch_sampling,
-            #"--relative-slice-thickness", str(relative_slice_thickness),
-            "--gpu-id", str(gpu_id)
+            "--in-fpath",
+            str(input_path),
+            "--out-dir",
+            str(output_dir),
+            "--batch-size",
+            str(self.batch_size),
+            "--n-patches",
+            str(self.n_patches),
+            "--inplane-acq-res",
+            f"{inplane_acq_res[0]}",
+            f"{inplane_acq_res[1]}",
+            "--patch-sampling",
+            self.patch_sampling,
+            # "--relative-slice-thickness", str(relative_slice_thickness),
+            "--gpu-id",
+            str(gpu_id),
         ]
 
         # Add optional suffix if specified
@@ -194,7 +209,7 @@ class EclareResampler(BaseResampler):
             cmd.extend(["--suffix", self.suffix])
 
         # Add verbose flag if enabled
-        if self.eclare_verbose:
+        if self.verbose:
             cmd.append("--verbose")
 
         self.logger.info(f"Running ECLARE command: {' '.join(cmd)}")
@@ -202,11 +217,7 @@ class EclareResampler(BaseResampler):
         try:
             # Run subprocess with output capture
             result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=True,
-                env=os.environ.copy()
+                cmd, capture_output=True, text=True, check=True, env=os.environ.copy()
             )
 
             # Log stdout if available
@@ -235,10 +246,7 @@ class EclareResampler(BaseResampler):
             ) from e
 
     def execute(
-        self,
-        input_path: Path,
-        output_path: Path,
-        **kwargs: Any
+        self, input_path: Path, output_path: Path, **kwargs: Any
     ) -> Dict[str, Any]:
         """Execute ECLARE deep learning-based resampling.
 
@@ -292,7 +300,7 @@ class EclareResampler(BaseResampler):
             worst_dim = int(np.argmax(original_spacing))
             in_plane_dims = [i for i in range(3) if i != worst_dim]
             sorted_spacing = np.sort(original_spacing)
-            dim_labels = ['X', 'Y', 'Z']
+            dim_labels = ["X", "Y", "Z"]
 
             if (sorted_spacing[-1] - sorted_spacing[-2]) < 1e-3:
                 raise RuntimeError(
@@ -314,11 +322,13 @@ class EclareResampler(BaseResampler):
             # Compute in-plane target resolution from the non-worst dimensions
             inplane_acq_res = [
                 self.target_voxel_size[in_plane_dims[0]],
-                self.target_voxel_size[in_plane_dims[1]]
+                self.target_voxel_size[in_plane_dims[1]],
             ]
 
             # Compute relative slice thickness
-            relative_slice_thickness = self._compute_relative_slice_thickness(input_path)
+            relative_slice_thickness = self._compute_relative_slice_thickness(
+                input_path
+            )
 
             # Select GPU (use first one if multiple GPUs specified)
             if isinstance(self.gpu_id, list):
@@ -347,14 +357,14 @@ class EclareResampler(BaseResampler):
                     output_dir=tmp_output_dir,
                     relative_slice_thickness=relative_slice_thickness,
                     gpu_id=selected_gpu,
-                    inplane_acq_res=inplane_acq_res
+                    inplane_acq_res=inplane_acq_res,
                 )
 
                 # Find ECLARE output file
                 # ECLARE typically outputs: <input_stem><suffix>.nii.gz
                 expected_output_name = f"{input_path.stem}{self.suffix}.nii.gz"
                 # Remove .nii from stem if present (since stem includes everything before final suffix)
-                if input_path.stem.endswith('.nii'):
+                if input_path.stem.endswith(".nii"):
                     expected_output_name = f"{input_path.stem[:-4]}{self.suffix}.nii.gz"
 
                 eclare_output_path = tmp_output_dir / expected_output_name
@@ -399,7 +409,7 @@ class EclareResampler(BaseResampler):
                 "original_spacing": original_spacing.tolist(),
                 "target_spacing": target_spacing.tolist(),
                 "original_shape": original_size.tolist(),
-                "resampled_shape": output_size.tolist()
+                "resampled_shape": output_size.tolist(),
             }
 
         except Exception as e:
@@ -409,11 +419,7 @@ class EclareResampler(BaseResampler):
             raise RuntimeError(f"ECLARE resampling failed: {e}") from e
 
     def visualize(
-        self,
-        before_path: Path,
-        after_path: Path,
-        output_path: Path,
-        **kwargs: Any
+        self, before_path: Path, after_path: Path, output_path: Path, **kwargs: Any
     ) -> None:
         """Generate 3-view comparison visualization with intensity histogram overlay.
 
@@ -441,7 +447,8 @@ class EclareResampler(BaseResampler):
             RuntimeError: If visualization generation fails
         """
         import matplotlib
-        matplotlib.use('Agg')
+
+        matplotlib.use("Agg")
         import matplotlib.pyplot as plt
 
         original_spacing = kwargs.get("original_spacing")
@@ -483,9 +490,9 @@ class EclareResampler(BaseResampler):
             gs = fig.add_gridspec(3, 3, hspace=0.3, wspace=0.2)
 
             fig.suptitle(
-                f'ECLARE Super-Resolution: {before_path.stem}',
+                f"ECLARE Super-Resolution: {before_path.stem}",
                 fontsize=16,
-                fontweight='bold'
+                fontweight="bold",
             )
 
             # Compute shared intensity range for consistent visualization
@@ -494,35 +501,43 @@ class EclareResampler(BaseResampler):
 
             # Row 1: Original image
             ax00 = fig.add_subplot(gs[0, 0])
-            ax00.imshow(axial_before, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
-            ax00.set_title('Original - Axial', fontsize=12)
-            ax00.axis('off')
+            ax00.imshow(axial_before, cmap="gray", origin="lower", vmin=vmin, vmax=vmax)
+            ax00.set_title("Original - Axial", fontsize=12)
+            ax00.axis("off")
 
             ax01 = fig.add_subplot(gs[0, 1])
-            ax01.imshow(sagittal_before, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
-            ax01.set_title('Original - Sagittal', fontsize=12)
-            ax01.axis('off')
+            ax01.imshow(
+                sagittal_before, cmap="gray", origin="lower", vmin=vmin, vmax=vmax
+            )
+            ax01.set_title("Original - Sagittal", fontsize=12)
+            ax01.axis("off")
 
             ax02 = fig.add_subplot(gs[0, 2])
-            ax02.imshow(coronal_before, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
-            ax02.set_title('Original - Coronal', fontsize=12)
-            ax02.axis('off')
+            ax02.imshow(
+                coronal_before, cmap="gray", origin="lower", vmin=vmin, vmax=vmax
+            )
+            ax02.set_title("Original - Coronal", fontsize=12)
+            ax02.axis("off")
 
             # Row 2: Resampled image
             ax10 = fig.add_subplot(gs[1, 0])
-            ax10.imshow(axial_after, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
-            ax10.set_title('ECLARE Resampled - Axial', fontsize=12)
-            ax10.axis('off')
+            ax10.imshow(axial_after, cmap="gray", origin="lower", vmin=vmin, vmax=vmax)
+            ax10.set_title("ECLARE Resampled - Axial", fontsize=12)
+            ax10.axis("off")
 
             ax11 = fig.add_subplot(gs[1, 1])
-            ax11.imshow(sagittal_after, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
-            ax11.set_title('ECLARE Resampled - Sagittal', fontsize=12)
-            ax11.axis('off')
+            ax11.imshow(
+                sagittal_after, cmap="gray", origin="lower", vmin=vmin, vmax=vmax
+            )
+            ax11.set_title("ECLARE Resampled - Sagittal", fontsize=12)
+            ax11.axis("off")
 
             ax12 = fig.add_subplot(gs[1, 2])
-            ax12.imshow(coronal_after, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
-            ax12.set_title('ECLARE Resampled - Coronal', fontsize=12)
-            ax12.axis('off')
+            ax12.imshow(
+                coronal_after, cmap="gray", origin="lower", vmin=vmin, vmax=vmax
+            )
+            ax12.set_title("ECLARE Resampled - Coronal", fontsize=12)
+            ax12.axis("off")
 
             # Row 3: Overlayed histogram (center column, spans all 3 columns)
             ax2 = fig.add_subplot(gs[2, :])
@@ -539,7 +554,7 @@ class EclareResampler(BaseResampler):
             bins = 100
             hist_range = (
                 min(before_nonzero.min(), after_nonzero.min()),
-                max(before_nonzero.max(), after_nonzero.max())
+                max(before_nonzero.max(), after_nonzero.max()),
             )
 
             # Plot overlayed histograms with transparency
@@ -548,23 +563,25 @@ class EclareResampler(BaseResampler):
                 bins=bins,
                 range=hist_range,
                 alpha=0.5,
-                label='Original',
-                color='blue',
-                density=True
+                label="Original",
+                color="blue",
+                density=True,
             )
             ax2.hist(
                 after_nonzero,
                 bins=bins,
                 range=hist_range,
                 alpha=0.5,
-                label='ECLARE Resampled',
-                color='red',
-                density=True
+                label="ECLARE Resampled",
+                color="red",
+                density=True,
             )
 
-            ax2.set_xlabel('Intensity', fontsize=11)
-            ax2.set_ylabel('Density', fontsize=11)
-            ax2.set_title('Intensity Distribution Comparison (non-zero voxels)', fontsize=12)
+            ax2.set_xlabel("Intensity", fontsize=11)
+            ax2.set_ylabel("Density", fontsize=11)
+            ax2.set_title(
+                "Intensity Distribution Comparison (non-zero voxels)", fontsize=12
+            )
             ax2.legend(fontsize=10)
             ax2.grid(True, alpha=0.3)
 
@@ -583,19 +600,20 @@ class EclareResampler(BaseResampler):
             )
 
             fig.text(
-                0.5, 0.01,
+                0.5,
+                0.01,
                 metadata_text,
-                ha='center',
+                ha="center",
                 fontsize=9,
-                family='monospace',
-                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5)
+                family="monospace",
+                bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5),
             )
 
             # Ensure output directory exists
             output_path.parent.mkdir(parents=True, exist_ok=True)
 
             # Save figure
-            plt.savefig(output_path, dpi=150, bbox_inches='tight')
+            plt.savefig(output_path, dpi=150, bbox_inches="tight")
             plt.close(fig)
 
             self.logger.info(f"Visualization saved to {output_path}")
