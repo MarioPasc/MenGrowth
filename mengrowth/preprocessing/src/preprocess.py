@@ -4,6 +4,7 @@ This module coordinates the execution of preprocessing steps on patient data,
 managing file paths, mode semantics, and visualization outputs.
 """
 
+import gc
 from pathlib import Path
 from typing import List, Optional, Any, Tuple, Dict, Union
 import logging

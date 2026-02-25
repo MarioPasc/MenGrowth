@@ -240,6 +240,17 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
             atlas_img = ants.image_read(str(atlas_path))
             reference_img = ants.image_read(str(reference_path))
 
+            # Validate spacing — ITK crashes with an opaque error on zero-valued spacing
+            for label, img, path in [
+                ("atlas", atlas_img, atlas_path),
+                ("reference", reference_img, reference_path),
+            ]:
+                if any(s <= 0 for s in img.spacing):
+                    raise RuntimeError(
+                        f"{label} image has invalid spacing {img.spacing}: {path}. "
+                        "Zero or negative spacing is not supported by ITK."
+                    )
+
             # Get transform types from config
             transforms = self.config.get("transforms", ["Rigid", "Affine"])
 

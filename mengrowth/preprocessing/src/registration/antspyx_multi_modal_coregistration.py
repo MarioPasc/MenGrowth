@@ -202,6 +202,17 @@ class AntsPyXMultiModalCoregistration(BaseRegistrator):
             fixed_img = ants.image_read(str(fixed_path))
             moving_img = ants.image_read(str(moving_path))
 
+            # Validate spacing — ITK crashes with an opaque error on zero-valued spacing
+            for label, img, path in [
+                ("fixed", fixed_img, fixed_path),
+                ("moving", moving_img, moving_path),
+            ]:
+                if any(s <= 0 for s in img.spacing):
+                    raise RuntimeError(
+                        f"{label} image has invalid spacing {img.spacing}: {path}. "
+                        "Zero or negative spacing is not supported by ITK."
+                    )
+
             # Get transform types from config (can be string or list)
             transform_type_config = self.config.get("transform_type", "Rigid")
 
