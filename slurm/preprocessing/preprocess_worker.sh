@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #SBATCH -J mgpp
-#SBATCH --time=0-06:00:00
+#SBATCH --time=0-02:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G

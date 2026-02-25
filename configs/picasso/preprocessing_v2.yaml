@@ -130,28 +130,21 @@ preprocessing:
     # ========================================================================
     # Step 3: Resampling (modality-level)                          *** CHANGED ***
     # ========================================================================
-    # CHANGED from v1: bspline → composite
+    # CHANGED: composite → bspline
     #
-    # Clinical meningioma MRI typically has:
-    #   In-plane:      0.4-1.0 mm (high resolution, acquired directly)
-    #   Through-plane: 1.0-6.0 mm (slice thickness, often thick)
+    # Composite (BSpline+ECLARE) caused catastrophic failures on thick-slice
+    # data (e.g., t2f with 6mm through-plane in MenGrowth-0002-000 produced
+    # completely black output). ECLARE is fragile for extreme anisotropy
+    # (>5mm) and near-isotropic edge cases. BSpline order=3 blurs slightly
+    # at large upsampling factors but is robust and deterministic.
     #
-    # BSpline blurs badly at large upsampling factors (e.g., 5mm → 1mm = 5x).
-    # ECLARE (deep learning super-resolution) preserves edges but is slower.
-    # Composite picks the best method per dimension automatically:
-    #
-    #   Spacing ≤ target (1mm): already fine → DL enhancement only
-    #   Spacing ≤ 1.5mm:        small gap → BSpline (fast, adequate)
-    #   Spacing 1.5-5.0mm:      medium gap → ECLARE (quality matters)
-    #   Spacing > 5.0mm:        large gap → BSpline to 3.5mm, then ECLARE to 1mm
-    #
-    # FALLBACK: If ECLARE conda env is not available on Picasso, change
-    # method to "bspline" and set bspline_order: 3. Everything else is ignored.
+    # FUTURE: Re-enable composite after ECLARE robustness is improved, or
+    # use composite only for modalities with moderate anisotropy (1.5-5mm).
     resampling:
       save_visualization: true
 
       resampling:
-        method: composite              # CHANGED: was "bspline". Options: "bspline" | "eclare" | "composite"
+        method: bspline                # CHANGED: was "composite". BSpline is robust for all spacing ranges.
         target_voxel_size: [1.0, 1.0, 1.0]   # Isotropic 1mm³ (BraTS standard)
 
         # Pre-resampling normalization (applied BEFORE resampling to stabilize intensities)
@@ -343,32 +336,26 @@ preprocessing:
     # ========================================================================
     # Step 7: Intensity Normalization (modality-level)           *** CHANGED ***
     # ========================================================================
-    # Z-score normalization within the brain mask (mean=0, std=1).
-    # This is the BraTS/nnU-Net convention for deep learning input.
+    # CHANGED: method=null (disabled). Z-score normalization will be done
+    # on-the-fly in the training dataloader instead.
     #
-    # CHANGED from v1: Added clip_range: [-5.0, 5.0]
-    #   Prevents extreme outliers (e.g., from partial volume at brain edge,
-    #   residual skull fragments, or vessel hyperintensities) from dominating
-    #   the intensity range. Standard in nnU-Net preprocessing.
-    #   5 std covers 99.99994% of a Gaussian distribution.
+    # Rationale: In the skull-strip-first pipeline, the brain mask from
+    # skull stripping may not perfectly align with the brain after atlas
+    # registration. Z-score normalization within the mask creates a visible
+    # shadow/boundary artifact at mask edges. Deferring normalization to
+    # training time avoids this artifact and allows per-sample statistics.
     #
-    # Alternative methods (available but not recommended for this pipeline):
-    #   - "kde": Kernel density estimation. More robust to non-Gaussian tails.
-    #   - "percentile_minmax": Scale to [0, 1] based on percentiles. Simpler.
-    #   - "whitestripe": WM-specific. Good for T1, not for T2-FLAIR.
-    #   - "fcm": Tissue-specific via clustering. Slower, requires good segmentation.
-    #   - "lsq": Least-squares fit to reference. For cross-site harmonization.
+    # save_visualization=true still generates a passthrough snapshot
+    # (3 views + histogram) for QC without modifying the data.
     intensity_normalization:
       save_visualization: true
 
       intensity_normalization:
-          method: zscore                     # BraTS/nnU-Net standard.
+          method: null                       # CHANGED: was "zscore". Normalize on-the-fly in dataloader.
           norm_value: 1.0
-
-          # CHANGED: was null. Clip to [-5, 5] std to prevent extreme outliers.
           clip_range: [-5.0, 5.0]
 
-          # Unused params for other methods (kept for config compatibility)
+          # Unused params (kept for config compatibility)
           p1: 1.0
           p2: 99.0
           width: 0.05
