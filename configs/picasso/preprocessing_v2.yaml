@@ -54,9 +54,9 @@ preprocessing:
     # I/O mode
     mode: "test"                       # "test" | "pipeline"
     dataset_root: "/mnt/home/users/tic_163_uma/mpascual/fscratch/datasets/meningiomas/dataset/MenGrowth-2025"
-    output_root: "/mnt/home/users/tic_163_uma/mpascual/fscratch/datasets/meningiomas/dataset/preprocessed_v2"
-    preprocessing_artifacts_path: "/mnt/home/users/tic_163_uma/mpascual/execs/mengrowth-dataset/artifacts_v2"
-    viz_root: "/mnt/home/users/tic_163_uma/mpascual/execs/mengrowth-dataset/viz_v2"
+    output_root: "/mnt/home/users/tic_163_uma/mpascual/fscratch/datasets/meningiomas/dataset/preprocecessed/MenGrowth-2025"
+    preprocessing_artifacts_path: "/mnt/home/users/tic_163_uma/mpascual/fscratch/datasets/meningiomas/dataset/preprocecessed/artifacts"
+    viz_root: "/mnt/home/users/tic_163_uma/mpascual/fscratch/datasets/meningiomas/dataset/preprocecessed/visualizations"
     overwrite: true
 
     # Modalities to include (if present in a study directory)
@@ -437,8 +437,8 @@ preprocessing:
   # Note: compute_after_steps order updated to match new step order.
   qc_metrics:
     enabled: true
-    output_dir: "/mnt/home/users/tic_163_uma/mpascual/execs/mengrowth-dataset/qc_v2"
-    artifacts_dir: "/mnt/home/users/tic_163_uma/mpascual/execs/mengrowth-dataset/qc_v2/artifacts"
+    output_dir: "/mnt/home/users/tic_163_uma/mpascual/fscratch/datasets/meningiomas/dataset/preprocecessed/quality"
+    artifacts_dir: "/mnt/home/users/tic_163_uma/mpascual/fscratch/datasets/meningiomas/dataset/preprocecessed/quality/artifacts"
     overwrite: true
 
     compute_after_steps:
@@ -519,14 +519,14 @@ preprocessing:
   # ============================================================================
   checkpoints:
     enabled: true
-    checkpoint_dir: "/mnt/home/users/tic_163_uma/mpascual/execs/mengrowth-dataset/checkpoints_v2"
+    checkpoint_dir: "/mnt/home/users/tic_163_uma/mpascual/fscratch/datasets/meningiomas/dataset/preprocecessed/checkpoints"
 
   # ============================================================================
   # Post-processing Quality Analysis
   # ============================================================================
   quality_analysis:
-    input_dir: "/mnt/home/users/tic_163_uma/mpascual/fscratch/datasets/meningiomas/dataset/preprocessed_v2"
-    output_dir: "/mnt/home/users/tic_163_uma/mpascual/execs/mengrowth-dataset/qa_reports_v2"
+    input_dir: "/mnt/home/users/tic_163_uma/mpascual/fscratch/datasets/meningiomas/dataset/preprocecessed/MenGrowth-2025"
+    output_dir: "/mnt/home/users/tic_163_uma/mpascual/fscratch/datasets/meningiomas/dataset/preprocecessed/qa_reports"
     file_format: "nifti"
     expected_sequences: ["t1c", "t1n", "t2w", "t2f"]
 
