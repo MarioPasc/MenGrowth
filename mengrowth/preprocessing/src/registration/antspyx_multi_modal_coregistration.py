@@ -317,44 +317,34 @@ class AntsPyXMultiModalCoregistration(BaseRegistrator):
                     initial_tx = None
 
             # Perform registration
+            # NOTE: moving_mask is intentionally NOT used here. Testing showed that
+            # on sparse skull-stripped volumes (~7.5% nonzero in 256³ padded cube),
+            # the mask causes catastrophic failure at coarse multi-resolution levels.
+            # COM initialization handles spatial alignment sufficiently.
             write_composite = self.config.get("write_composite_transform", True)
 
             # Capture stdout if detailed info is enabled
             captured_stdout = None
+            reg_kwargs = dict(
+                fixed=fixed_img,
+                moving=moving_img,
+                type_of_transform=type_of_transform,
+                initial_transform=initial_tx,
+                outprefix=transform_prefix,
+                aff_metric=metric,
+                aff_sampling=metric_bins,
+                aff_random_sampling_rate=sampling_percentage,
+                aff_iterations=aff_iterations,
+                aff_shrink_factors=aff_shrink_factors,
+                aff_smoothing_sigmas=aff_smoothing_sigmas,
+                write_composite_transform=write_composite,
+            )
             if self.save_detailed_info:
                 with capture_stdout() as captured:
-                    result = ants.registration(
-                        fixed=fixed_img,
-                        moving=moving_img,
-                        type_of_transform=type_of_transform,
-                        initial_transform=initial_tx,
-                        outprefix=transform_prefix,
-                        aff_metric=metric,
-                        aff_sampling=metric_bins,
-                        aff_random_sampling_rate=sampling_percentage,
-                        aff_iterations=aff_iterations,
-                        aff_shrink_factors=aff_shrink_factors,
-                        aff_smoothing_sigmas=aff_smoothing_sigmas,
-                        write_composite_transform=write_composite,
-                        verbose=True,  # Force verbose for stdout capture
-                    )
+                    result = ants.registration(**reg_kwargs, verbose=True)
                 captured_stdout = captured.getvalue()
             else:
-                result = ants.registration(
-                    fixed=fixed_img,
-                    moving=moving_img,
-                    type_of_transform=type_of_transform,
-                    initial_transform=initial_tx,
-                    outprefix=transform_prefix,
-                    aff_metric=metric,
-                    aff_sampling=metric_bins,
-                    aff_random_sampling_rate=sampling_percentage,
-                    aff_iterations=aff_iterations,
-                    aff_shrink_factors=aff_shrink_factors,
-                    aff_smoothing_sigmas=aff_smoothing_sigmas,
-                    write_composite_transform=write_composite,
-                    verbose=self.verbose,
-                )
+                result = ants.registration(**reg_kwargs, verbose=self.verbose)
 
             if self.verbose:
                 self.logger.debug("[DEBUG] [AntsPyX] Registration completed")

@@ -309,78 +309,36 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
                 self.logger.debug(f"  aff_metric: {metric}")
                 self.logger.debug(f"  aff_iterations: {aff_iterations}")
 
-            # Compute center-of-mass alignment as initial transform if enabled
-            # NOTE: ants.registration() expects initial_transform as a file path string,
-            # not an ANTsTransform object. We write the transform to a temp file.
-            initial_tx = None
-            if self.use_center_of_mass_init:
-                self.logger.info("  Computing center-of-mass initialization...")
-                try:
-                    atlas_com = ants.get_center_of_mass(atlas_img)
-                    ref_com = ants.get_center_of_mass(reference_img)
-
-                    # Create translation to align centers
-                    translation = [a - r for a, r in zip(atlas_com, ref_com)]
-
-                    com_tx = ants.create_ants_transform(
-                        transform_type="Euler3DTransform",
-                        center=ref_com,
-                        translation=translation,
-                    )
-                    # Write to temp file — ants.registration() needs a file path, not an object
-                    com_tx_path = (
-                        study_dir
-                        / f"_temp_{self.reference_modality}_atlas_com_init.mat"
-                    )
-                    ants.write_transform(com_tx, str(com_tx_path))
-                    initial_tx = str(com_tx_path)
-                    if self.verbose:
-                        self.logger.debug(
-                            f"[DEBUG] [AntsPyX] COM translation: {translation}"
-                        )
-                except Exception as com_error:
-                    self.logger.warning(
-                        f"  COM initialization failed, proceeding without: {com_error}"
-                    )
-                    initial_tx = None
-
-            # Perform registration
-            # Capture stdout if detailed info is enabled
+            # COM initialization: let antspy handle it internally via [fixed,moving,1].
+            # Testing showed that our custom Euler3DTransform COM init causes the
+            # optimizer to diverge when the COM offset is large (>60mm), producing
+            # catastrophic failures (MI≈-0.01). ANTs' built-in [fixed,moving,1]
+            # initialization handles this correctly and works for all offset magnitudes.
+            # When initial_transform=None, antspy uses -r [fixed,moving,1] automatically.
+            #
+            # NOTE: moving_mask is also intentionally NOT used. On sparse skull-stripped
+            # volumes (~7.5% nonzero in 256³ padded cube), the mask causes failure at
+            # coarse multi-resolution levels.
             captured_stdout = None
+            reg_kwargs = dict(
+                fixed=atlas_img,
+                moving=reference_img,
+                type_of_transform=type_of_transform,
+                outprefix=transform_prefix,
+                aff_metric=metric,
+                aff_sampling=metric_bins,
+                aff_random_sampling_rate=sampling_percentage,
+                aff_iterations=aff_iterations,
+                aff_shrink_factors=aff_shrink_factors,
+                aff_smoothing_sigmas=aff_smoothing_sigmas,
+                write_composite_transform=True,
+            )
             if self.save_detailed_info:
                 with capture_stdout() as captured:
-                    result = ants.registration(
-                        fixed=atlas_img,
-                        moving=reference_img,
-                        type_of_transform=type_of_transform,
-                        initial_transform=initial_tx,
-                        outprefix=transform_prefix,
-                        aff_metric=metric,
-                        aff_sampling=metric_bins,
-                        aff_random_sampling_rate=sampling_percentage,
-                        aff_iterations=aff_iterations,
-                        aff_shrink_factors=aff_shrink_factors,
-                        aff_smoothing_sigmas=aff_smoothing_sigmas,
-                        write_composite_transform=True,
-                        verbose=True,  # Force verbose for stdout capture
-                    )
+                    result = ants.registration(**reg_kwargs, verbose=True)
                 captured_stdout = captured.getvalue()
             else:
-                result = ants.registration(
-                    fixed=atlas_img,
-                    moving=reference_img,
-                    type_of_transform=type_of_transform,
-                    initial_transform=initial_tx,
-                    outprefix=transform_prefix,
-                    aff_metric=metric,
-                    aff_sampling=metric_bins,
-                    aff_random_sampling_rate=sampling_percentage,
-                    aff_iterations=aff_iterations,
-                    aff_shrink_factors=aff_shrink_factors,
-                    aff_smoothing_sigmas=aff_smoothing_sigmas,
-                    write_composite_transform=True,
-                    verbose=self.verbose,
-                )
+                result = ants.registration(**reg_kwargs, verbose=self.verbose)
 
             if self.verbose:
                 self.logger.debug("[DEBUG] [AntsPyX] Registration completed")

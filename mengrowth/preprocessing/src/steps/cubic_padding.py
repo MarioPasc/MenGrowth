@@ -17,7 +17,8 @@ import logging
 import numpy as np
 import nibabel as nib
 import matplotlib
-matplotlib.use('Agg')
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from mengrowth.preprocessing.src.config import StepExecutionContext
@@ -31,9 +32,7 @@ logger = logging.getLogger(__name__)
 
 
 def execute(
-    context: StepExecutionContext,
-    total_steps: int,
-    current_step_num: int
+    context: StepExecutionContext, total_steps: int, current_step_num: int
 ) -> Dict[str, Any]:
     """Execute cubic padding step (study-level operation).
 
@@ -65,7 +64,9 @@ def execute(
     # Check if cubic padding is enabled
     method = config.cubic_padding.method
     if method is None:
-        logger.info(f"\n  Executing study-level step: {context.step_name} - skipped (method=None)")
+        logger.info(
+            f"\n  Executing study-level step: {context.step_name} - skipped (method=None)"
+        )
         return {}
 
     logger.info(f"\n  Executing study-level step: {context.step_name} ({method})")
@@ -133,8 +134,11 @@ def execute(
         if is_4d:
             data = data[..., 0]
 
-        # Compute fill value (minimum intensity of this image)
-        fill_value = float(np.min(data))
+        # Compute fill value based on configured mode
+        if config.cubic_padding.fill_value_mode == "zero":
+            fill_value = 0.0
+        else:  # "min"
+            fill_value = float(np.min(data))
 
         # Calculate symmetric padding for each axis
         padding = []
@@ -145,12 +149,7 @@ def execute(
             padding.append((pad_before, pad_after))
 
         # Apply padding
-        padded_data = np.pad(
-            data,
-            padding,
-            mode='constant',
-            constant_values=fill_value
-        )
+        padded_data = np.pad(data, padding, mode="constant", constant_values=fill_value)
 
         # Update affine to account for the shift in origin
         # The origin shifts by -(pad_before * voxel_spacing) for each axis
@@ -180,7 +179,7 @@ def execute(
                 original_shape=original_shape,
                 padded_shape=padded_data.shape,
                 padding=padding,
-                fill_value=fill_value
+                fill_value=fill_value,
             )
 
         # Replace original with padded version (in-place)
@@ -200,7 +199,7 @@ def execute(
             f"(fill={fill_value:.2f})"
         )
 
-    logger.info(f"  Cubic padding completed successfully")
+    logger.info("  Cubic padding completed successfully")
 
     return results
 
@@ -213,7 +212,7 @@ def _visualize_padding(
     original_shape: Tuple[int, ...],
     padded_shape: Tuple[int, ...],
     padding: List[Tuple[int, int]],
-    fill_value: float
+    fill_value: float,
 ) -> None:
     """Generate visualization comparing original and padded volumes.
 
@@ -252,13 +251,21 @@ def _visualize_padding(
         fig, axes = plt.subplots(3, 2, figsize=(14, 16))
 
         # Compute display range (excluding fill value for better contrast)
-        vmin = np.percentile(orig_data[orig_data > fill_value + 1], 1) if np.any(orig_data > fill_value + 1) else np.min(orig_data)
-        vmax = np.percentile(orig_data[orig_data > fill_value + 1], 99) if np.any(orig_data > fill_value + 1) else np.max(orig_data)
+        vmin = (
+            np.percentile(orig_data[orig_data > fill_value + 1], 1)
+            if np.any(orig_data > fill_value + 1)
+            else np.min(orig_data)
+        )
+        vmax = (
+            np.percentile(orig_data[orig_data > fill_value + 1], 99)
+            if np.any(orig_data > fill_value + 1)
+            else np.max(orig_data)
+        )
 
         views = [
-            ("Axial (Z)", 2, (0, 1)),     # Slice along z-axis, shows X×Y
+            ("Axial (Z)", 2, (0, 1)),  # Slice along z-axis, shows X×Y
             ("Sagittal (X)", 0, (1, 2)),  # Slice along x-axis, shows Y×Z
-            ("Coronal (Y)", 1, (0, 2)),   # Slice along y-axis, shows X×Z
+            ("Coronal (Y)", 1, (0, 2)),  # Slice along y-axis, shows X×Z
         ]
 
         for row, (view_name, axis, dims) in enumerate(views):
@@ -287,25 +294,31 @@ def _visualize_padding(
                 dim_labels = ("X", "Y")
 
             # Plot original
-            axes[row, 0].imshow(orig_slice.T, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
-            axes[row, 0].set_title(
-                f'{view_name}: Original\n'
-                f'{dim_labels[0]}={orig_dims[0]} × {dim_labels[1]}={orig_dims[1]} voxels',
-                fontsize=11, fontweight='bold'
+            axes[row, 0].imshow(
+                orig_slice.T, cmap="gray", origin="lower", vmin=vmin, vmax=vmax
             )
-            axes[row, 0].set_xlabel(f'{dim_labels[0]} ({orig_dims[0]} vox)', fontsize=9)
-            axes[row, 0].set_ylabel(f'{dim_labels[1]} ({orig_dims[1]} vox)', fontsize=9)
+            axes[row, 0].set_title(
+                f"{view_name}: Original\n"
+                f"{dim_labels[0]}={orig_dims[0]} × {dim_labels[1]}={orig_dims[1]} voxels",
+                fontsize=11,
+                fontweight="bold",
+            )
+            axes[row, 0].set_xlabel(f"{dim_labels[0]} ({orig_dims[0]} vox)", fontsize=9)
+            axes[row, 0].set_ylabel(f"{dim_labels[1]} ({orig_dims[1]} vox)", fontsize=9)
             axes[row, 0].tick_params(labelbottom=False, labelleft=False)
 
             # Plot padded with boundary rectangle
-            axes[row, 1].imshow(padded_slice.T, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
-            axes[row, 1].set_title(
-                f'{view_name}: Padded\n'
-                f'{dim_labels[0]}={pad_dims[0]} × {dim_labels[1]}={pad_dims[1]} voxels',
-                fontsize=11, fontweight='bold'
+            axes[row, 1].imshow(
+                padded_slice.T, cmap="gray", origin="lower", vmin=vmin, vmax=vmax
             )
-            axes[row, 1].set_xlabel(f'{dim_labels[0]} ({pad_dims[0]} vox)', fontsize=9)
-            axes[row, 1].set_ylabel(f'{dim_labels[1]} ({pad_dims[1]} vox)', fontsize=9)
+            axes[row, 1].set_title(
+                f"{view_name}: Padded\n"
+                f"{dim_labels[0]}={pad_dims[0]} × {dim_labels[1]}={pad_dims[1]} voxels",
+                fontsize=11,
+                fontweight="bold",
+            )
+            axes[row, 1].set_xlabel(f"{dim_labels[0]} ({pad_dims[0]} vox)", fontsize=9)
+            axes[row, 1].set_ylabel(f"{dim_labels[1]} ({pad_dims[1]} vox)", fontsize=9)
             axes[row, 1].tick_params(labelbottom=False, labelleft=False)
 
             # Draw rectangle showing original content boundary within padded image
@@ -320,35 +333,52 @@ def _visualize_padding(
                 width, height = original_shape[0], original_shape[1]
 
             from matplotlib.patches import Rectangle
+
             rect = Rectangle(
-                (pad_x - 0.5, pad_y - 0.5), width, height,
-                linewidth=2, edgecolor='cyan', facecolor='none',
-                linestyle='--', label='Original extent'
+                (pad_x - 0.5, pad_y - 0.5),
+                width,
+                height,
+                linewidth=2,
+                edgecolor="cyan",
+                facecolor="none",
+                linestyle="--",
+                label="Original extent",
             )
             axes[row, 1].add_patch(rect)
 
         # Add main title with comprehensive info
         total_pad_voxels = sum(p[0] + p[1] for p in padding)
         fig.suptitle(
-            f'Cubic Padding: {modality.upper()}\n'
-            f'Original: {original_shape[0]}×{original_shape[1]}×{original_shape[2]} voxels  →  '
-            f'Padded: {padded_shape[0]}×{padded_shape[1]}×{padded_shape[2]} voxels\n'
-            f'Padding per axis: X=({padding[0][0]},{padding[0][1]}), '
-            f'Y=({padding[1][0]},{padding[1][1]}), Z=({padding[2][0]},{padding[2][1]})  |  '
-            f'Fill value: {fill_value:.2f}',
-            fontsize=12, y=0.98
+            f"Cubic Padding: {modality.upper()}\n"
+            f"Original: {original_shape[0]}×{original_shape[1]}×{original_shape[2]} voxels  →  "
+            f"Padded: {padded_shape[0]}×{padded_shape[1]}×{padded_shape[2]} voxels\n"
+            f"Padding per axis: X=({padding[0][0]},{padding[0][1]}), "
+            f"Y=({padding[1][0]},{padding[1][1]}), Z=({padding[2][0]},{padding[2][1]})  |  "
+            f"Fill value: {fill_value:.2f}",
+            fontsize=12,
+            y=0.98,
         )
 
         # Add legend
         from matplotlib.lines import Line2D
-        legend_elements = [Line2D([0], [0], color='cyan', linestyle='--', linewidth=2, label='Original extent')]
-        fig.legend(handles=legend_elements, loc='lower center', ncol=1, fontsize=10)
+
+        legend_elements = [
+            Line2D(
+                [0],
+                [0],
+                color="cyan",
+                linestyle="--",
+                linewidth=2,
+                label="Original extent",
+            )
+        ]
+        fig.legend(handles=legend_elements, loc="lower center", ncol=1, fontsize=10)
 
         plt.tight_layout(rect=[0, 0.02, 1, 0.93])
 
         # Save
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        plt.savefig(output_path, dpi=150, bbox_inches="tight")
         plt.close(fig)
 
         logger.debug(f"    Saved visualization: {output_path.name}")

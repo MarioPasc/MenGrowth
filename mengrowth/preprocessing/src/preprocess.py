@@ -806,6 +806,20 @@ class PreprocessingOrchestrator:
         # Get study directories
         study_dirs = self._get_study_directories(patient_id)
 
+        # Clear checkpoints when overwrite is enabled to ensure full re-processing
+        if self.config.overwrite and self.checkpoint_manager:
+            cleared = 0
+            for study_dir in study_dirs:
+                for modality in self.config.modalities:
+                    if self.checkpoint_manager.clear_checkpoint(
+                        patient_id, study_dir.name, modality
+                    ):
+                        cleared += 1
+            if cleared:
+                self.logger.info(
+                    f"Cleared {cleared} checkpoint(s) for {patient_id} (overwrite=True)"
+                )
+
         # Log and save pipeline configuration
         self._log_pipeline_order(patient_id)
 

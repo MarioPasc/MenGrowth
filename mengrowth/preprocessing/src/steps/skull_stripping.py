@@ -256,6 +256,21 @@ def execute(
                 temp_file.unlink()
                 logger.debug(f"    Cleaned up temporary file: {temp_file.name}")
 
+    # ── Diagnostic: log final file state after skull stripping ──
+    for modality in list(results.keys()):
+        final_path = study_output_dir / f"{modality}.nii.gz"
+        if final_path.exists():
+            diag_nii = nib.load(str(final_path))
+            diag_data = diag_nii.get_fdata()
+            nonzero_frac = np.count_nonzero(diag_data) / diag_data.size
+            logger.info(
+                f"  [DIAG] {modality} after skull stripping: "
+                f"shape={diag_data.shape}, "
+                f"nonzero={nonzero_frac:.3%}, "
+                f"range=[{diag_data.min():.2f}, {diag_data.max():.2f}], "
+                f"path={final_path}"
+            )
+
     logger.info("  Skull stripping completed successfully")
 
     # Add qc_paths for QC system (study-level step output paths)

@@ -10,6 +10,8 @@ import shutil
 from typing import Dict, Any, List
 from pathlib import Path
 import logging
+
+
 from mengrowth.preprocessing.src.config import StepExecutionContext
 from mengrowth.preprocessing.src.steps.utils import (
     get_output_dir,
@@ -129,6 +131,24 @@ def execute(
 
     # Determine study output directory based on mode
     study_output_dir = get_output_dir(context=context)
+
+    # ── Diagnostic: log file state BEFORE registration reads anything ──
+    import nibabel as nib
+    import numpy as np
+
+    for mod in orchestrator.config.modalities:
+        mod_path = study_output_dir / f"{mod}.nii.gz"
+        if mod_path.exists():
+            diag_nii = nib.load(str(mod_path))
+            diag_data = diag_nii.get_fdata()
+            nonzero_frac = np.count_nonzero(diag_data) / diag_data.size
+            logger.info(
+                f"  [DIAG] {mod} BEFORE registration: "
+                f"shape={diag_data.shape}, "
+                f"nonzero={nonzero_frac:.3%}, "
+                f"range=[{diag_data.min():.2f}, {diag_data.max():.2f}], "
+                f"path={mod_path}"
+            )
     artifacts_base = (
         Path(orchestrator.config.preprocessing_artifacts_path)
         / patient_id
@@ -327,6 +347,20 @@ def execute(
                     artifacts_dir=artifacts_base,
                     modalities=orchestrator.config.modalities,
                 )
+
+            # ── Diagnostic: log file state AFTER atlas registration ──
+            for mod in orchestrator.config.modalities:
+                mod_path = study_output_dir / f"{mod}.nii.gz"
+                if mod_path.exists():
+                    diag_nii = nib.load(str(mod_path))
+                    diag_data = diag_nii.get_fdata()
+                    nonzero_frac = np.count_nonzero(diag_data) / diag_data.size
+                    logger.info(
+                        f"  [DIAG] {mod} AFTER atlas registration: "
+                        f"shape={diag_data.shape}, "
+                        f"nonzero={nonzero_frac:.3%}, "
+                        f"range=[{diag_data.min():.2f}, {diag_data.max():.2f}]"
+                    )
 
         except Exception as e:
             logger.error(f"  [Error] Intra-study to atlas registration failed: {e}")
