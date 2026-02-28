@@ -1,12 +1,17 @@
 """Skull stripping step: brain extraction using HD-BET or SynthStrip.
 
 This is a study-level step that processes all modalities.
-Supports consensus masking: individual per-modality masks are combined via
-majority voting to produce a single brain mask applied uniformly.
+
+Two modes of operation:
+  1. Reference mask mode (BraTS-standard): skull-strip only the reference modality
+     (e.g. T1c) and apply its brain mask to all co-registered modalities.
+     Activated by setting `reference_mask_modality` in config.
+  2. Per-modality mode (legacy): each modality gets its own brain mask, with
+     optional consensus voting across modalities.
 """
 
 import shutil
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from pathlib import Path
 import logging
 
@@ -44,15 +49,174 @@ def _largest_connected_component(mask: np.ndarray) -> np.ndarray:
     return (labeled == largest_label).astype(mask.dtype)
 
 
+def _execute_reference_mask_mode(
+    context: StepExecutionContext,
+    skull_stripper: Any,
+    study_output_dir: Path,
+    artifacts_base: Path,
+) -> Dict[str, Any]:
+    """Execute skull stripping using a single reference modality mask for all modalities.
+
+    BraTS-standard approach: skull-strip only the reference modality (e.g. T1c),
+    then apply that mask to all co-registered modalities.
+
+    Args:
+        context: Execution context
+        skull_stripper: Initialized skull stripping component
+        study_output_dir: Directory containing modality NIfTI files
+        artifacts_base: Directory for saving mask artifacts
+
+    Returns:
+        Dict with skull stripping results per modality
+    """
+    config = context.step_config
+    orchestrator = context.orchestrator
+    ss_config = config.skull_stripping
+    ref_modality = ss_config.reference_mask_modality
+
+    logger.info(f"  Reference mask mode: using {ref_modality} mask for all modalities")
+
+    # ── Phase 1: Extract brain mask from reference modality only ──
+    ref_path = study_output_dir / f"{ref_modality}.nii.gz"
+    if not ref_path.exists():
+        raise RuntimeError(
+            f"Reference modality '{ref_modality}' not found at {ref_path}. "
+            f"Cannot perform reference-mask skull stripping."
+        )
+
+    logger.info(f"  [Phase 1] Extracting brain mask from {ref_modality}...")
+
+    temp_ref_stripped = get_temp_path(context, ref_modality, "skull_stripped")
+    ref_mask_path = get_artifact_path(context, f"{ref_modality}_brain_mask")
+
+    ref_result = skull_stripper.execute(
+        ref_path,
+        temp_ref_stripped,
+        mask_path=ref_mask_path,
+        allow_overwrite=True,
+    )
+
+    logger.info(
+        f"  {ref_modality}: brain_volume={ref_result['brain_volume_mm3']:.1f} mm³, "
+        f"coverage={ref_result['brain_coverage_percent']:.1f}%"
+    )
+
+    # Load the reference mask
+    ref_mask_nii = nib.load(str(ref_mask_path))
+    ref_mask_data = (ref_mask_nii.get_fdata() > 0).astype(bool)
+
+    # ── Phase 2: Skipped (single authoritative mask) ──
+    logger.info("  [Phase 2] Skipped — using single reference mask")
+
+    # ── Phase 3: Apply reference mask to ALL modalities ──
+    results = {}
+    processed_modalities = []
+
+    for modality in orchestrator.config.modalities:
+        modality_path = study_output_dir / f"{modality}.nii.gz"
+        if not modality_path.exists():
+            logger.warning(f"  Skipping {modality} — file not found")
+            continue
+
+        processed_modalities.append(modality)
+
+        if modality == ref_modality:
+            # For reference modality, visualize before replacing
+            if config.save_visualization:
+                viz_output = get_visualization_path(context, suffix=f"_{modality}")
+                skull_stripper.visualize(
+                    modality_path, temp_ref_stripped, viz_output, **ref_result
+                )
+
+            # Replace original with skull-stripped output
+            logger.info(f"  [Phase 3] Using skull-stripped output for {modality} (reference)")
+            temp_ref_stripped.replace(modality_path)
+            results[modality] = ref_result
+        else:
+            # Apply reference mask to this modality
+            logger.info(f"  [Phase 3] Applying {ref_modality} mask to {modality}...")
+            original_nii = nib.load(str(modality_path))
+            original_data = original_nii.get_fdata()
+
+            stripped = np.where(ref_mask_data, original_data, ss_config.fill_value)
+            stripped_nii = nib.Nifti1Image(
+                stripped.astype(original_data.dtype),
+                original_nii.affine,
+                original_nii.header,
+            )
+
+            temp_out = get_temp_path(context, modality, "ref_mask_stripped")
+            nib.save(stripped_nii, str(temp_out))
+
+            # Compute result metrics for this modality
+            brain_voxels = int(ref_mask_data.sum())
+            total_voxels = int(ref_mask_data.size)
+            voxel_volume = float(np.prod(original_nii.header.get_zooms()[:3]))
+            results[modality] = {
+                "mask_path": ref_mask_path,
+                "brain_volume_mm3": brain_voxels * voxel_volume,
+                "brain_coverage_percent": 100.0 * brain_voxels / total_voxels,
+                "reference_mask_from": ref_modality,
+            }
+
+            # Visualize before replacing original
+            if config.save_visualization:
+                viz_output = get_visualization_path(context, suffix=f"_{modality}")
+                skull_stripper.visualize(
+                    modality_path, temp_out, viz_output, **results[modality]
+                )
+
+            # Replace original with masked output
+            temp_out.replace(modality_path)
+
+        # Save per-modality mask copy for downstream compatibility (e.g. intensity normalization)
+        if config.save_mask and modality != ref_modality:
+            modality_mask_path = get_artifact_path(context, f"{modality}_brain_mask")
+            shutil.copy2(str(ref_mask_path), str(modality_mask_path))
+            logger.debug(f"  Saved {ref_modality} mask as {modality}_brain_mask")
+
+    # ── Diagnostic: log final file state ──
+    for modality in processed_modalities:
+        final_path = study_output_dir / f"{modality}.nii.gz"
+        if final_path.exists():
+            diag_nii = nib.load(str(final_path))
+            diag_data = diag_nii.get_fdata()
+            nonzero_frac = np.count_nonzero(diag_data) / diag_data.size
+            logger.info(
+                f"  [DIAG] {modality} after skull stripping: "
+                f"shape={diag_data.shape}, "
+                f"nonzero={nonzero_frac:.3%}, "
+                f"range=[{diag_data.min():.2f}, {diag_data.max():.2f}], "
+                f"path={final_path}"
+            )
+
+    logger.info("  Skull stripping completed successfully (reference mask mode)")
+
+    # Add qc_paths for QC system
+    results["qc_paths"] = {
+        "study_output_dir": str(study_output_dir),
+        "mask_outputs": {
+            mod: str(artifacts_base / f"{mod}_brain_mask.nii.gz")
+            for mod in processed_modalities
+        }
+        if config.save_mask
+        else {},
+        "image_outputs": {
+            mod: str(study_output_dir / f"{mod}.nii.gz") for mod in processed_modalities
+        },
+    }
+
+    return results
+
+
 def execute(
     context: StepExecutionContext, total_steps: int, current_step_num: int
 ) -> Dict[str, Any]:
     """Execute skull stripping step (study-level operation).
 
-    Three-phase algorithm when consensus_masking is enabled:
-      Phase 1: Extract individual brain masks per modality (no file replacement).
-      Phase 2: Compute consensus mask via majority voting + largest component.
-      Phase 3: Apply consensus mask to each modality and replace originals.
+    Two modes:
+      - Reference mask mode: skull-strip reference modality only, apply to all.
+      - Per-modality mode: individual masks with optional consensus voting.
 
     Args:
         context: Execution context (modality will be None for study-level steps)
@@ -92,9 +256,16 @@ def execute(
         / patient_id
         / study_dir.name
     )
-    viz_base = Path(orchestrator.config.viz_root) / patient_id / study_dir.name
 
     ss_config = config.skull_stripping
+
+    # ── Reference mask mode (BraTS-standard) ──
+    if ss_config.reference_mask_modality is not None:
+        return _execute_reference_mask_mode(
+            context, skull_stripper, study_output_dir, artifacts_base
+        )
+
+    # ── Per-modality mode (legacy) ──
     use_consensus = ss_config.consensus_masking
 
     results = {}

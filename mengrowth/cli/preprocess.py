@@ -88,6 +88,12 @@ Output structure:
     )
 
     parser.add_argument(
+        "--study",
+        type=str,
+        help="Study ID to process (e.g., MenGrowth-0009-003). Filters to this study only.",
+    )
+
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Validate configuration and display processing plan without executing.",
@@ -170,7 +176,7 @@ def main() -> int:
         logger.info("Starting preprocessing pipeline...")
         logger.info("")
 
-        run_preprocessing(config, patient_id=args.patient)
+        run_preprocessing(config, patient_id=args.patient, study_id=args.study)
 
         logger.info("")
         logger.info("="*80)

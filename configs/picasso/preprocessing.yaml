@@ -1,5 +1,33 @@
+# ============================================================================
+# MenGrowth Preprocessing — Picasso v3 (register-first, BraTS-standard skull stripping)
+# ============================================================================
+#
+# Key changes from v2:
+#   1. Step order: registration BEFORE skull_stripping (reverted to v1 order)
+#      Rationale: Per-modality skull stripping before registration clips tumor
+#      tissue on T2f/FLAIR for extra-axial meningiomas (HD-BET optimized for T1w).
+#      Registering full-head volumes first gives MI good landmarks from scalp/skull.
+#
+#   2. Skull stripping: reference_mask_modality = "t1c" (BraTS-standard)
+#      Only T1c is skull-stripped; its brain mask is applied to all co-registered
+#      modalities. Ensures consistent masking and retains full tumor extent on T2f.
+#
+#   3. Registration interpolation: BSpline (no brain boundary discontinuity)
+#      Full-head input means no sharp brain→0 boundary, so BSpline ringing is
+#      not a concern. BSpline gives better interior quality than Linear.
+#
+#   4. Atlas: full-head T1.nii (matches full-head subject input)
+#      No metric mismatch — both subject and atlas have skull/scalp.
+#
+#   5. Intensity normalization: disabled (defer to training dataloader)
+#      Z-score on-the-fly avoids mask-edge artifacts and allows per-sample stats.
+#
+# ============================================================================
+
 preprocessing:
-  # Pipeline step order
+  # ── Pipeline step order ──
+  # v2: ... skull_stripping → registration ...
+  # v3: ... registration → skull_stripping ...   (BraTS-standard)
   steps: ["data_harmonization",
           "bias_field_correction",
           "resampling",
@@ -15,382 +43,318 @@ preprocessing:
 
     # Selection
     patient_selector: "all"        # "single" | "all"
-    patient_id: "MenGrowth-0006"      # used only if patient_selector == "single"
+    patient_id: "MenGrowth-0006"   # used only if patient_selector == "single"
 
     # I/O mode
     mode: "test"                       # "test" | "pipeline"
     dataset_root: "/mnt/home/users/tic_163_uma/mpascual/fscratch/datasets/meningiomas/dataset/MenGrowth-2025"
-    output_root: "/mnt/home/users/tic_163_uma/mpascual/fscratch/datasets/meningiomas/dataset/preprocessed"     # used in test mode
-    preprocessing_artifacts_path: "/mnt/home/users/tic_163_uma/mpascual/execs/mengrowth-dataset/artifacts"  # intermediate artifacts
-    viz_root: "/mnt/home/users/tic_163_uma/mpascual/execs/mengrowth-dataset/viz"              # quick-looks for both modes
-    overwrite: true                                                   # guard rails
+    output_root: "/mnt/home/users/tic_163_uma/mpascual/fscratch/datasets/meningiomas/dataset/preprocecessed/MenGrowth-2025"
+    preprocessing_artifacts_path: "/mnt/home/users/tic_163_uma/mpascual/fscratch/datasets/meningiomas/dataset/preprocecessed/artifacts"
+    viz_root: "/mnt/home/users/tic_163_uma/mpascual/fscratch/datasets/meningiomas/dataset/preprocecessed/visualizations"
+    overwrite: true
 
     # Modalities to include (if present in a study directory)
     modalities: ["t1c", "t1n", "t2w", "t2f"]
 
+    # Detailed patient archive (HDF5 snapshots for showcase patients)
+    detailed_archive:
+      enabled: true
+      patient_ids: ["MenGrowth-0009"]
+      compression: "gzip"
+      compression_level: 4
+
+  # ============================================================================
   # Step-specific configurations
+  # ============================================================================
   step_configs:
+
+    # ========================================================================
+    # Step 1: Data Harmonization (modality-level)
+    # ========================================================================
+    # NRRD → NIfTI conversion, RAS reorientation, optional background removal.
+    # background_zeroing is null — skull stripping handles brain extraction.
     data_harmonization:
-      save_visualization: true # Save this step's visualization for the method used
+      save_visualization: true
 
-      # Orientation
-      reorient_to: "RAS"                 # "RAS" | "LPS"
+      reorient_to: "RAS"                 # Standard for ANTs. "LPS" for ITK convention.
 
-      # Background zeroing (conservative)
       background_zeroing:
-        method: null # "border_connected_percentile" | "self_head_mask" | "otsu_foreground" | null
+        method: null                     # null = skip (let skull stripping handle brain extraction)
 
-        # if method == "border_connected_percentile"
-        percentile_low: 2              # [0.1-2.0], conservative default
-        gaussian_sigma: 0.5            # smoothing before thresholding (vox)
-        min_comp_voxels: 500           # ignore tiny components
+        # Parameters below are inactive when method=null but kept for reference.
+        percentile_low: 2
+        gaussian_sigma: 0.5
+        min_comp_voxels: 500
+        auto_fallback: true
+        fallback_threshold: 0.05
+        fallback_method: "otsu"
+        fallback_percentile: 10.0
+        fill_value: 0.0
+        air_p_low: 2.0
+        air_p_high: 20.0
+        air_p_global: 0.2
+        erode_vox: 1
+        close_iters: 2
+        connectivity: 2
+        air_border_margin: 0
+        expand_air_mask: 3
+        gaussian_sigma_px: 1.0
+        n_components_to_keep: 1
+        relaxed_threshold_factor: 0.1
+        p_low: 1.0
+        p_high: 99.0
 
-        # if method == "self_head_mask" - Fallback control
-        auto_fallback: true            # Use simple fallback if SELF fails
-        fallback_threshold: 0.05       # Min coverage (5%) for SELF before fallback
-        fallback_method: "otsu"        # Fallback method: "otsu" | "percentile" | "zero"
-        fallback_percentile: 10.0      # Percentile threshold for fallback (if method="percentile")
-        fill_value: 0.0                # Value to set for background voxels
-
-        air_p_low: 2.0                 # Percentile threshold for seeding air [0.0-100.0]
-        air_p_high: 20.0               # Percentile threshold for flood-fill through dark voxels
-        air_p_global: 0.2              # Global percentile for darkest voxels as fallback seeds
-        erode_vox: 1                   # Erosion iterations on head seed (0=conservative)
-        close_iters: 2                 # Iterations for final morphological smoothing
-        connectivity: 2                # Connectivity: 1=6-conn, 2=18-conn, 3=26-conn
-
-        # Common parameters (post-processing on air mask)
-        air_border_margin: 0           # Voxels to erode the air mask (MORE conservative - shrinks air region)
-        expand_air_mask: 3             # Voxels to dilate the air mask (LESS conservative - expands air region)
-        # Note: Use EITHER air_border_margin OR expand_air_mask, not both > 0
-
-        # if method == "otsu_foreground" - Otsu-based foreground extraction
-        # This method performs robust percentile scaling, Gaussian smoothing,
-        # Otsu thresholding, and connected component analysis to extract foreground
-        gaussian_sigma_px: 1.0         # Gaussian smoothing sigma in pixels
-        n_components_to_keep: 1        # Number of largest components to keep (usually 1 for brain)
-        relaxed_threshold_factor: 0.1  # Factor for including smaller components (0.0-1.0)
-        p_low: 1.0                     # Lower percentile for intensity scaling
-        p_high: 99.0                   # Upper percentile for intensity scaling
-
+    # ========================================================================
+    # Step 2: Bias Field Correction (modality-level)
+    # ========================================================================
+    # N4ITK removes low-frequency intensity non-uniformity (RF coil inhomogeneity).
+    # Parameters are ITK recommended defaults — no changes needed.
+    #
+    # shrink_factor=4: Downsample 4x for speed. The bias field is spatially smooth
+    #   so 4x is fine. Increase to 2 for very small FOV or high-quality requirement.
+    # max_iterations=[50,50,50,50]: 4 resolution levels, 50 iters each. Standard.
+    # bias_field_fwhm=0.15: Controls smoothness of the estimated bias field.
+    #   Higher = smoother field, prevents overfitting. 0.15 is conservative.
+    # convergence_threshold=0.001: Stop if field change < 0.1%. Standard.
     bias_field_correction:
-      save_visualization: true # Save visualization for bias field correction
-      save_artifact: true      # Save bias field NIfTI to artifacts directory
+      save_visualization: true
+      save_artifact: true              # Useful for QC: inspect the estimated bias field
 
-      # Bias field correction parameters
       bias_field_correction:
-        method: "n4"                     # "n4" | null (null to skip)
-        shrink_factor: 4                 # Downsampling factor [1-8], higher=faster but coarser
-        max_iterations: [50, 50, 50, 50] # Iterations per resolution level (4 levels)
-        bias_field_fwhm: 0.15            # Gaussian smoothing FWHM [0.01-1.0], higher=smoother field
-        convergence_threshold: 0.001     # Early stopping threshold (0.0-1.0)
+        method: "n4"                   # Only option. Set null to skip entirely.
+        shrink_factor: 4               # [1-8]. 4 = standard. 2 = more precise, 2x slower.
+        max_iterations: [50, 50, 50, 50]   # Per-level. More = diminishing returns.
+        bias_field_fwhm: 0.15          # [0.01-1.0]. 0.15 = standard for brain MRI.
+        convergence_threshold: 0.001   # [0.0001-0.01]. 0.001 = standard.
 
+    # ========================================================================
+    # Step 3: Resampling (modality-level)
+    # ========================================================================
+    # BSpline order=3 for isotropic resampling. Robust for all spacing ranges.
+    # ECLARE/composite disabled due to catastrophic failures on thick-slice data.
     resampling:
-      save_visualization: true # Save visualization for resampling step, we must see axial, sagittal, and coronal views
+      save_visualization: true
+
       resampling:
-        method: bspline                   # "bspline" | "eclare" | "composite" | null (null to skip)
-        
-        target_voxel_size: [1.0, 1.0, 1.0]  # in mm (isotropic)
+        method: bspline                # BSpline is robust for all spacing ranges.
+        target_voxel_size: [1.0, 1.0, 1.0]   # Isotropic 1mm³ (BraTS standard)
 
-        # Normalization parameters before resampling
-        normalize_method: null  # null | "zscore" | "kde" | "percentile_minmax" | "whitestripe" | "fcm" | "lsq"
+        # Pre-resampling normalization (applied BEFORE resampling to stabilize intensities)
+        # null is recommended — normalization happens at step 7 after skull stripping.
+        normalize_method: null
 
-        # Common parameters
-        norm_value: 1.0  # For zscore, kde, lsq
+        # ── BSpline parameters ──
+        bspline_order: 3               # 3 = cubic (recommended). 0=NN, 1=linear, 5=quintic.
 
-        # Percentile MinMax parameters
-        p1: 1.0
-        p2: 99.0
+        # ── ECLARE parameters (inactive when method=bspline, kept for reference) ──
+        conda_environment_eclare: "mengrowth"
+        batch_size: 128
+        n_patches: 80000
+        patch_sampling: "gradient"
+        suffix: ""
+        gpu_id: 0
 
-        # WhiteStripe parameters
-        whitestripe_width: 0.05
-        whitestripe_width_l: null  # Optional lower bound override
-        whitestripe_width_u: null  # Optional upper bound override
+        # ── Composite routing thresholds ──
+        composite_interpolator: "bspline"
+        composite_dl_method: "eclare"
 
-        # FCM parameters
-        fcm_n_clusters: 3
-        fcm_tissue_type: "WM"  # "WM" | "GM" | "CSF"
-        fcm_max_iter: 50
-        fcm_error_threshold: 0.005
-        fcm_fuzziness: 2.0 
-
-        # BSPLINE parameters
-        bspline_order: 3                    # if method == "bspline", order [0-5]
-
-        # ECLARE Deep-Learning based super-resolution parameters
-        conda_environment_eclare: "eclare"        # Name of the conda environment with ECLARE installed
-        batch_size: 128                           # Batch size for ECLARE inference
-        n_patches: 80000                          # Number of patches to sample for ECLARE inference
-        patch_sampling: "gradient"                # Patch sampling strategy: "uniform" | "gradient" | "random"
-        suffix: ""                                # Suffix to add to output filename when using ECLARE
-        gpu_id: 0                                 # GPU ID(s) to use for ECLARE inference (int or list of ints, e.g., 0 or [0, 1])
-
-        # COMPOSITE parameters
-        # Composite consists of applying interpolation followed by a deep-learning based enhancement. 
-        # The idea is that interpolators work better when the resolution of the image is better or closer to the target resolution.
-        # Therefore, if we detect a dimension in the image that has a better resolution than the target_voxel_size, we apply the 
-        # interpolator first to bring that dimension closer to the target resolution. 
-        # Then, we apply the deep-learning based enhancement to reach the target resolution.
-        composite_interpolator: "bspline"   # Interpolator for the first step of composite
-        composite_dl_method: "eclare"       # Deep-learning method for the second step of composite
-          
-        # The following three arguments operate following these set of rules:
-        # For a MRI volume with dimensions [dx, dy, dz] and target_voxel_size [tx, ty, tz]:
-        # 1. If any dimension is lower than the corresponding target voxel size (i.e., dx < tx, dy < ty, or dz < tz),
-        #    then we apply the interpolator to that dimension. 
-        #    (e.g., [tx, ty, tz] = [1.0, 1.0, 1.0], [dx, dy, dz] = [0.5, 1.2, 1.5] -> apply interpolator to dx)
-        # 2. If a dimension is higher than the target voxel size, but lower than the max_mm_interpolator threshold,
-        #    we also apply the interpolator to that dimension.
-        #    (e.g., [tx, ty, tz] = [1.0, 1.0, 1.0], [dx, dy, dz] = [1.1, 2.5, 6.0], max_mm_interpolator = 1.2 -> apply interpolator to dx)
-        # 3. Dimensions between max_mm_interpolator and max_mm_dl_method are processed by deep-learning method only. 
-        #    (e.g., [tx, ty, tz] = [1.0, 1.0, 1.0], [dx, dy, dz] = [1.5, 4.0, 6.0], max_mm_interpolator = 1.2, max_mm_dl_method = 5.0 -> apply dl to dx and dy)
-        # 4. Dimensions higher than max_mm_dl_method are resampled using the interpolator to bring them to the resolution specified in the
-        #    resample_mm_to_interpolator_if_max_mm_dl_method parameter for that dimension, then, we apply the deep-learning method to that output.
-        #    (e.g., [tx, ty, tz] = [1.0, 1.0, 1.0], [dx, dy, dz] = [1.5, 6.0, 10.0], max_mm_dl_method = 5.0, resample_mm_to_interpolator_if_max_mm_dl_method = 3.0 
-        #     -> resample dy and dz to 3.0 mm using the interpolator, then apply dl to dy and dz, for dx, apply dl directly)
-
-        # Complete example:
-        # Given target_voxel_size = [1.0, 1.0, 1.0], max_mm_interpolator = 1.5, max_mm_dl_method = 5.0, resample_mm_to_interpolator_if_max_mm_dl_method = 3.0
-        # For an image with voxel sizes [0.8, 1.5, 6.0]:
-        # - 0.8 mm  -> DL method only (rule 1)
-        # - 1.5 mm  -> interpolation method only (rule 2): 1.5 <= max_mm_interpolator
-        # - 6.0 mm  -> Resample to 3.0 mm with interpolator, then DL method (rule 4): 6.0 is > max_mm_dl_method 
-        
         max_mm_interpolator: 1.5
         max_mm_dl_method: 5.0
         resample_mm_to_interpolator_if_max_mm_dl_method: 3.5
 
-    # ============================================================================
-    # Cubic Padding: Zero-pad volumes to cubic shape for registration stability
-    # ============================================================================
-    # This step normalizes the field-of-view (FOV) across all modalities by:
-    # 1. Finding the maximum dimension across all modalities in the study
-    # 2. Padding each modality to a cube of that size
-    # 3. Using symmetric padding (brain centered)
-    # 4. Fill value = minimum intensity of each image
+        # Unused normalization params (kept for config compatibility)
+        norm_value: 1.0
+        p1: 1.0
+        p2: 99.0
+        whitestripe_width: 0.05
+        whitestripe_width_l: null
+        whitestripe_width_u: null
+        fcm_n_clusters: 3
+        fcm_tissue_type: "WM"
+        fcm_max_iter: 50
+        fcm_error_threshold: 0.005
+        fcm_fuzziness: 2.0
+
+    # ========================================================================
+    # Step 4: Cubic Padding (study-level)
+    # ========================================================================
+    # Pads all modalities to the same cubic FOV. Prevents edge clipping during
+    # registration affine transforms and normalizes FOV across modalities.
     #
-    # Scientific rationale:
-    # - Reduces boundary artifacts during registration transforms
-    # - Prevents edge clipping during affine rotations/translations
-    # - Normalizes FOV across T1, T2, FLAIR (which often have different FOV)
+    # fill_value_mode="zero": Always pad with 0. Avoids negative fill from N4.
+    # target_shape_mode="max_across_modalities": All modalities get the same cubic size.
+    #   Critical for multi-modal registration (same grid = faster, no resampling).
     cubic_padding:
-      save_visualization: true  # Save before/after comparison PNGs
+      save_visualization: true
 
       cubic_padding:
-        # Padding method
-        # - "symmetric": Center the brain with equal padding on both sides
-        # - null: Skip cubic padding
-        method: "symmetric"
+        method: "symmetric"                  # Center brain, equal padding both sides.
+        fill_value_mode: "zero"              # Zero avoids negative fill from N4.
+        target_shape_mode: "max_across_modalities"   # "max_across_modalities" | "max_per_modality"
 
-        # How to determine the fill value for padded regions
-        # - "min": Use minimum intensity of each image (recommended)
-        #          This matches the background/air signal level
-        # - "zero": Always use 0 (may create intensity discontinuities)
-        fill_value_mode: "min"
-
-        # How to determine the target cubic size
-        # - "max_across_modalities": Use the maximum dimension found across
-        #                            all modalities in the study (recommended)
-        #                            Ensures consistent FOV for registration
-        # - "max_per_modality": Pad each image to its own maximum dimension
-        #                       (results in different FOV per modality)
-        target_shape_mode: "max_across_modalities"
-
+    # ========================================================================
+    # Step 5: Registration (study-level)                    *** NOW BEFORE SKULL STRIPPING ***
+    # ========================================================================
+    # Operates on full-head volumes (skull stripping has not run yet).
+    #
+    # v3 changes:
+    #   - interpolation: BSpline (full-head input has no brain→0 discontinuity)
+    #   - atlas_path: T1.nii (full-head atlas matches full-head subject)
+    #
+    # Metric choice: Mattes MI is robust for multi-modal contrast.
     registration_static:
-        save_visualization: true  # One PNG per modality
-        save_detailed_registration_info: true  # Save detailed diagnostics (convergence, timing) to JSON
+        save_visualization: true
+        save_detailed_registration_info: true
 
-        # Step 3a: Intra-study multi-modal coregistration to reference
+        # ── Step 5a: Intra-study coregistration ──
+        # Aligns T1c, T2w, T2f to reference (T1n preferred) within one timepoint.
         intra_study_to_reference:
-          method: "ants"                                # "ants" | null (null to skip)
-          engine: "antspyx"                           # Optional: "nipype" (default) | "antspyx" - Registration engine to use
-          save_detailed_registration_info: true       # Optional: Per-substep override for detailed diagnostics
-          reference_modality_priority: "t1n > t1c > t2f > t2w"  # Priority order for reference selection
+          method: "ants"
+          engine: "antspyx"                  # antspyx = faster than nipype
+          save_detailed_registration_info: true
+          reference_modality_priority: "t1n > t1c > t2f > t2w"
 
-          # Transform parameters
-          transform_type: ["Rigid", "Affine"]                      # "Rigid" | "Affine" | "SyN"
+          # Rigid+Affine is appropriate for intra-study: accounts for patient motion
+          # between sequences + minor geometric distortions. SyN would overfit.
+          transform_type: ["Rigid", "Affine"]
 
-          # Metric parameters
-          metric: "Mattes"                              # "Mattes" | "MI" | "CC" | "MeanSquares" | "Demons"
-          metric_bins: 64                               # Number of bins for mutual information [8-128]
-          sampling_strategy: "Random"                   # "Random" | "Regular" | "None"
-          sampling_percentage: 0.5                      # Percentage of voxels to sample (0.0-1.0]
+          # Metric: Mattes MI handles multi-modal contrast well.
+          # metric_bins=64: Good balance. 32 for noisy data, 128 for high-quality.
+          metric: "Mattes"
+          metric_bins: 64
+          sampling_strategy: "Random"
+          sampling_percentage: 0.5           # 50% of voxels. Increase to 0.75 if registration is unstable.
 
-          # Multi-resolution schedule
-          number_of_iterations: [[1000, 500, 250, 0], [1000, 500, 250, 0]]      # Iterations per level (list of lists)
-          shrink_factors: [[8, 4, 2, 1], [8, 4, 2, 1]]                   # Downsampling factors per level (list of lists)
-          smoothing_sigmas: [[3, 2, 1, 0], [3, 2, 1, 0]]                 # Smoothing sigmas per level (list of lists)
+          # Multi-resolution: 4 levels, coarse-to-fine.
+          number_of_iterations: [[1000, 500, 250, 0], [1000, 500, 250, 0]]
+          shrink_factors: [[8, 4, 2, 1], [8, 4, 2, 1]]
+          smoothing_sigmas: [[3, 2, 1, 0], [3, 2, 1, 0]]
 
-          # Convergence parameters
-          convergence_threshold: 1.0e-6                 # Convergence threshold for optimization
-          convergence_window_size: 10                   # Window size for convergence detection
+          convergence_threshold: 1.0e-6
+          convergence_window_size: 10
 
-          # Output parameters
-          write_composite_transform: true               # Write composite transform file (.h5)
-          interpolation: "BSpline"                       # "Linear" | "BSpline" | "NearestNeighbor"
+          write_composite_transform: true
+          interpolation: "BSpline"           # Full-head input: no brain boundary ringing.
 
-          # Registration initialization and quality validation
-          use_center_of_mass_init: true                 # Align centers-of-mass before registration (helps avoid local minima)
-          validate_registration_quality: true           # Compute and log registration quality metrics
-          quality_warning_threshold: -0.3               # Warn if correlation dissimilarity > this threshold
+          use_center_of_mass_init: true
+          validate_registration_quality: true
+          quality_warning_threshold: -0.3
 
-        # Step 3b: Register reference modality to atlas space and propagate transforms
+        # ── Step 5b: Atlas registration ──
+        # Registers reference modality to SRI24 atlas space.
+        # All other modalities are propagated via composite transforms.
         intra_study_to_atlas:
-          method: "ants"                                # "ants" | null (null to skip atlas registration)
-          engine: "antspyx"                           # Optional: "nipype" (default) | "antspyx" - Registration engine to use
-          save_detailed_registration_info: true       # Optional: Per-substep override for detailed diagnostics
-          atlas_path: "/mnt/home/users/tic_163_uma/mpascual/fscratch/datasets/meningiomas/sri24_atlas/T1.nii"  # Path to full-head atlas template (register full-head, skull-strip after)
+          method: "ants"
+          engine: "antspyx"
+          save_detailed_registration_info: true
 
-          # Transform parameters (can specify multiple transforms)
-          transforms: ["Rigid", "Affine"]               # List of transforms to apply sequentially
+          # Full-head atlas (T1.nii) matches full-head subject input.
+          atlas_path: "/mnt/home/users/tic_163_uma/mpascual/fscratch/datasets/meningiomas/sri24_atlas/T1.nii"
 
-          # Whether to create composite M→atlas transforms (M→ref→atlas merged into single file)
-          create_composite_transforms: false            # true | false
+          transforms: ["Rigid", "Affine"]
+          create_composite_transforms: false
 
-          # Metric parameters
-          metric: "MI"                              # "Mattes" | "MI" | "CC" | "MeanSquares" | "Demons"
-          metric_bins: 128                               # Number of bins for mutual information [8-128]
-          sampling_strategy: "Random"                   # "Random" | "Regular" | "None"
-          sampling_percentage: 0.5                      # Percentage of voxels to sample (0.0-1.0]
+          # MI with 128 bins: atlas registration benefits from more precise metric
+          # since the atlas is high-quality and we want accurate spatial normalization.
+          metric: "MI"
+          metric_bins: 128
+          sampling_strategy: "Random"
+          sampling_percentage: 0.5
 
-          # Multi-resolution schedule (one sublist per transform) - more aggressive schedule for atlas registration
-          number_of_iterations: [[2000, 1000, 500, 250], [1000, 500, 250, 100]]  # First for Rigid, second for Affine
-          shrink_factors: [[8, 4, 2, 1], [4, 2, 1, 1]]        # First for Rigid, second for Affine - start coarser
-          smoothing_sigmas: [[4, 2, 1, 0], [2, 1, 0, 0]]      # First for Rigid, second for Affine
+          # More aggressive schedule for atlas registration (inter-subject alignment
+          # requires more iterations than intra-study).
+          number_of_iterations: [[2000, 1000, 500, 250], [1000, 500, 250, 100]]
+          shrink_factors: [[8, 4, 2, 1], [4, 2, 1, 1]]
+          smoothing_sigmas: [[4, 2, 1, 0], [2, 1, 0, 0]]
 
-          # Convergence parameters
-          convergence_threshold: 1.0e-6                 # Convergence threshold for optimization
-          convergence_window_size: 10                   # Window size for convergence detection
+          convergence_threshold: 1.0e-6
+          convergence_window_size: 10
 
-          # Output parameters
-          interpolation: "BSpline"                       # "Linear" | "BSpline" | "NearestNeighbor"
+          interpolation: "BSpline"           # Full-head input: no brain boundary ringing.
 
-          # Registration initialization and quality validation
-          use_center_of_mass_init: true                 # Align centers-of-mass before registration (helps avoid local minima)
-          validate_registration_quality: true           # Compute and log registration quality metrics
-          quality_warning_threshold: -0.3               # Warn if correlation dissimilarity > this threshold
+          use_center_of_mass_init: true
+          validate_registration_quality: true
+          quality_warning_threshold: -0.3
 
+    # ========================================================================
+    # Step 6: Skull Stripping (study-level)                 *** NOW AFTER REGISTRATION ***
+    # ========================================================================
+    # BraTS-standard approach: skull-strip T1c only, apply its mask to all
+    # co-registered modalities. Ensures consistent masking and retains full
+    # tumor extent on T2f (HD-BET clips extra-axial tumors on FLAIR).
+    #
+    # HD-BET accurate + TTA: Ensemble of 5 U-Nets × 5 mirror augmentations = 25
+    #   predictions averaged. ~30s/volume but highest quality.
     skull_stripping:
-      save_visualization: true      # Save visualization PNGs
-      save_mask: true              # Save brain mask NIfTI to artifacts directory
+      save_visualization: true
+      save_mask: true                  # Save brain mask to artifacts (used by intensity normalization)
 
       skull_stripping:
-          method: "hdbet"          # "hdbet" | "synthstrip" | null (null to skip)
-          fill_value: 0.0          # Value for background voxels
+          method: "hdbet"              # "hdbet" | "synthstrip". HD-BET for pathological brains.
+          fill_value: 0.0              # Background after masking. 0 is standard.
 
-          # Consensus masking: combine per-modality masks via majority voting
-          consensus_masking: true    # Use consensus voting across modalities
-          consensus_threshold: 2     # Min modalities that must agree a voxel is brain
+          # BraTS-standard: T1c mask for all co-registered modalities
+          reference_mask_modality: "t1c"
 
-          # HD-BET specific parameters (used if method == "hdbet")
-          hdbet_mode: "accurate"   # "fast" | "accurate"
-          hdbet_device: 0          # GPU id (int) or "cpu" (str)
-          hdbet_do_tta: true       # Test-time augmentation
+          # Consensus disabled (irrelevant with reference_mask_modality)
+          consensus_masking: false
+          consensus_threshold: 2
 
-          # SynthStrip specific parameters (used if method == "synthstrip")
-          synthstrip_border: 1     # Border parameter in mm
-          synthstrip_device: 0     # GPU id (int) or "cpu" (str)
+          # HD-BET
+          hdbet_mode: "accurate"       # "accurate" (ensemble+TTA) | "fast" (single model)
+          hdbet_device: 0              # GPU id. Use "cpu" if no GPU.
+          hdbet_do_tta: true           # Test-time augmentation (mirror predictions). Slower but better.
 
+          # SynthStrip (unused when method="hdbet", kept for reference)
+          synthstrip_border: 1
+          synthstrip_device: 0
+
+    # ========================================================================
+    # Step 7: Intensity Normalization (modality-level)
+    # ========================================================================
+    # Disabled: z-score normalization deferred to training dataloader.
+    # save_visualization=true still generates a passthrough snapshot for QC.
     intensity_normalization:
-      save_visualization: true # Save visualization for intensity normalization step
+      save_visualization: true
+
       intensity_normalization:
-          method: zscore  # null | "zscore" | "kde" | "percentile_minmax" | "whitestripe" | "fcm" | "lsq"
-          # Alternative: method: zscore for BraTS/nnU-Net compatibility
+          method: null                       # Normalize on-the-fly in dataloader.
+          norm_value: 1.0
+          clip_range: [-5.0, 5.0]
 
-          # Common parameters
-          norm_value: 1.0  # For zscore, kde, lsq
-
-          # Z-score specific parameters
-          clip_range: null  # Optional [low, high] clipping after z-score (e.g., [-5.0, 5.0])
-
-          # Percentile MinMax parameters
+          # Unused params (kept for config compatibility)
           p1: 1.0
           p2: 99.0
-
-          # WhiteStripe parameters
           width: 0.05
-          width_l: null  # Optional lower bound override
-          width_u: null  # Optional upper bound override
-
-          # FCM parameters
+          width_l: null
+          width_u: null
           n_clusters: 3
-          tissue_type: "WM"  # "WM" | "GM" | "CSF"
+          tissue_type: "WM"
           max_iter: 50
           error_threshold: 0.005
           fuzziness: 2.0
 
+    # ========================================================================
+    # Step 8: Longitudinal Registration (patient-level)
+    # ========================================================================
+    # Aligns timepoints for each patient to a reference timestamp.
+    # BSpline interpolation is kept here — interior accuracy matters for
+    # growth measurement, and both fixed/moving are already skull-stripped
+    # so any boundary artifacts are at the brain edge (not clinically relevant
+    # for tumor volumetry).
     longitudinal_registration:
-      # Enable/disable visualization generation for longitudinal registration
-      # Generates PNG images showing registration quality across timestamps
       save_visualization: true
 
       longitudinal_registration:
-          # Registration method
-          # - "ants": Use ANTs (Advanced Normalization Tools) for registration
-          # - null: Skip longitudinal registration entirely
           method: "ants"
-
-          # Registration engine backend
-          # - "antspyx": Use ANTsPy Python library (faster, recommended)
-          # - "nipype": Use Nipype wrapper around ANTs command-line tools
-          # - null: Use default engine (antspyx)
           engine: "antspyx"
 
-          # Reference modality selection strategy
-          # This parameter determines HOW to perform longitudinal registration:
-          #
-          # Option 1: Priority string (e.g., "t1n > t1c > t2f > t2w")
-          #   - Single-reference mode
-          #   - Selects ONE reference modality from reference timestamp using priority
-          #   - Registers ALL modalities from other timestamps to that single reference
-          #   - Example: If ref_timestamp=000, ref_modality=t1n (highest priority available)
-          #     Then: 001-t1n → 000-t1n, 001-t1c → 000-t1n, 001-t2w → 000-t1n
-          #   - Use when: You want to align all sequences to one "master" reference
-          #
-          # Option 2: "per_modality"
-          #   - Per-modality mode
-          #   - Registers each modality type independently across timestamps
-          #   - Example: If ref_timestamp=000
-          #     Then: 001-t1n → 000-t1n, 001-t1c → 000-t1c, 001-t2w → 000-t2w
-          #   - Use when: You want to track changes in each sequence type separately
-          #   - Recommended for longitudinal analysis where each modality evolves independently
           reference_modality_priority: "t1n > t1c > t2f > t2w"
 
-          # Path to YAML file mapping patient IDs to reference timestamps
-          # File format (configs/longitudinal_registration_matches.yaml):
-          #   MenGrowth-0006: 001   # Use timestamp 001 as reference for this patient
-          #   MenGrowth-0007: 002   # Use timestamp 002 as reference for this patient
-          #   MenGrowth-0008: 001
-          #   MenGrowth-0009: 000
-          #
-          # Behavior:
-          #   - If patient IS in file: Use specified timestamp as reference
-          #   - If patient NOT in file: Use default "000" as reference
-          #   - If file path is null: Use default "000" for all patients
-          #   - If reference timestamp doesn't exist for patient: Error raised
-          #
-          # The reference timestamp is the "fixed" image - all other timestamps
-          # will be registered (warped) to align with this reference.
           reference_timestamp_per_study: "configs/picasso/longitudinal_registration_matches.yaml"
 
-          # ============================================================================
-          # Automatic Reference Selection (used when patient NOT in YAML override)
-          # ============================================================================
-          # When a patient is not found in reference_timestamp_per_study YAML,
-          # the system automatically selects the optimal reference using these settings.
-
-          # Selection method:
-          #   - "quality_based": Select based on image quality metrics (recommended)
-          #   - "first": Use first (earliest) timestamp
-          #   - "last": Use last (latest) timestamp
-          #   - "midpoint": Use middle timestamp chronologically
+          # Quality-based automatic reference selection
           reference_selection_method: "quality_based"
-
-          # Quality metrics to evaluate (for quality_based method)
-          # Higher scores are better for all metrics
-          #   - snr_foreground: Signal-to-noise ratio (Kaufman method)
-          #   - cnr_high_low: Contrast-to-noise ratio between tissue regions
-          #   - boundary_gradient_score: Edge sharpness (lower blur = higher quality)
           reference_selection_metrics:
             - "snr_foreground"
             - "cnr_high_low"
@@ -398,333 +362,133 @@ preprocessing:
             - "brain_coverage_fraction"
             - "laplacian_sharpness"
             - "ghosting_score"
-
-          # Tiebreaker: prefer earlier timestamps when quality scores are equal
-          # Rationale: Earlier scans may have less disease progression
           reference_selection_prefer_earlier: true
-
-          # Jacobian determinant validation
-          # Validates that registration produces physically plausible deformations
           reference_selection_validate_jacobian: true
-
-          # Maximum allowed mean |log(det(J))| for valid registration
-          # Lower threshold = stricter validation
-          # 0.5 is conservative; allows ~60% volume change on average
           reference_selection_jacobian_threshold: 0.5
 
-          # Transform type(s) to apply during registration
-          # Can be a single transform or a list of transforms applied sequentially
-          #
-          # Single transform examples:
-          #   transform_type: "Rigid"     # Only rotation + translation
-          #   transform_type: "Affine"    # Rotation + translation + scaling + shearing
-          #   transform_type: "SyN"       # Symmetric diffeomorphic deformable registration
-          #
-          # Multiple transforms (applied in sequence):
-          #   transform_type: ["Rigid", "Affine"]  # First rigid, then refine with affine
-          #   transform_type: ["Rigid", "Affine", "SyN"]  # Linear then non-linear
-          #
-          # Recommendations:
-          #   - For longitudinal MRI (same patient): ["Rigid", "Affine"] (account for positioning + growth)
-          #   - For minimal change expected: ["Rigid"] (faster, prevents overfitting)
-          #   - For tumor growth tracking: ["Rigid", "Affine", "SyN"] (capture deformation)
           transform_type: ["Rigid", "Affine"]
 
-          # Similarity metric for registration optimization
-          # Determines how well two images are aligned
-          #
-          # Options:
-          #   - "Mattes": Mattes mutual information (default, robust, good for multi-modal)
-          #   - "MI": Mutual information (classic, similar to Mattes)
-          #   - "CC": Cross-correlation (good for same-modality, same contrast)
-          #   - "MeanSquares": Mean squared difference (simple, for same-modality only)
-          #   - "Demons": Demons algorithm metric (for deformable registration)
-          #
-          # Recommendations:
-          #   - Same modality (t1n → t1n): "CC" or "Mattes"
-          #   - Multi-modal (t1c → t1n): "Mattes" or "MI"
-          #   - Longitudinal same sequence: "CC" (faster) or "Mattes" (more robust)
           metric: "Mattes"
-
-          # Number of histogram bins for mutual information metrics
-          # Only used when metric is "Mattes" or "MI"
-          #
-          # Range: 8-128 (powers of 2 recommended: 32, 64, 128)
-          # - Lower (32): Faster, less precise, better for low SNR images
-          # - Higher (128): Slower, more precise, better for high quality images
-          # - Default (64): Good balance for most MRI data
           metric_bins: 64
-
-          # Sampling strategy for metric evaluation
-          # Determines which voxels are used to compute the similarity metric
-          #
-          # Options:
-          #   - "Random": Randomly sample voxels (fast, good default)
-          #   - "Regular": Sample on a regular grid (deterministic, slower)
-          #   - "None": Use all voxels (slowest, most accurate, memory intensive)
-          #
-          # Recommendations:
-          #   - Fast registration: "Random" with low sampling_percentage (0.2-0.3)
-          #   - Accurate registration: "Random" with high sampling_percentage (0.5-1.0)
-          #   - Reproducible results: "Regular" (same voxels every time)
           sampling_strategy: "Random"
-
-          # Percentage of voxels to sample for metric computation
-          # Only used when sampling_strategy is "Random" or "Regular"
-          #
-          # Range: 0.0-1.0
-          # - 0.1 (10%): Very fast, less accurate
-          # - 0.2-0.3: Good balance for quick iterations
-          # - 0.5 (50%): Default, good accuracy/speed tradeoff
-          # - 1.0 (100%): Use all voxels (equivalent to sampling_strategy="None")
-          #
-          # Higher values increase computation time but improve accuracy
           sampling_percentage: 0.5
 
-          # Multi-resolution pyramid schedule: Iterations per level
-          # List of lists, one sublist per transform type
-          #
-          # Format: [[iters_transform1_level1, level2, level3, ...], [iters_transform2_level1, ...]]
-          # - Each level represents a coarser-to-finer resolution
-          # - Level 1 = coarsest (downsampled), Last level = finest (full resolution)
-          # - 0 iterations = skip this level
-          #
-          # For transform_type: ["Rigid", "Affine"], need 2 sublists:
-          #   number_of_iterations:   [[1000, 500, 250, 0],      [1000, 500, 250, 0]]
-          #                          └── Rigid iterations ──┘  └── Affine iterations ──┘
-          #
-          # Tuning:
-          #   - More iterations = more accurate but slower
-          #   - Coarse levels (early): Can use fewer iterations (fast rough alignment)
-          #   - Fine levels (later): Need more iterations (precise alignment)
-          #   - Typical: Start high (1000) at coarse, decrease at fine levels
           number_of_iterations: [[1000, 500, 250, 0], [1000, 500, 250, 0]]
-
-          # Multi-resolution pyramid schedule: Shrink factors per level
-          # Downsampling factors for each resolution level
-          #
-          # Format: Same structure as number_of_iterations
-          # - Factor of 8 = downsample by 8x (very coarse)
-          # - Factor of 4 = downsample by 4x (coarse)
-          # - Factor of 2 = downsample by 2x (medium)
-          # - Factor of 1 = full resolution (fine)
-          #
-          # Example: [[8, 4, 2, 1], [8, 4, 2, 1]]
-          #   - Level 1: 8x downsampled (fast, rough alignment)
-          #   - Level 2: 4x downsampled
-          #   - Level 3: 2x downsampled
-          #   - Level 4: Full resolution (precise alignment)
-          #
-          # Must match length of number_of_iterations sublists
           shrink_factors: [[8, 4, 2, 1], [8, 4, 2, 1]]
-
-          # Multi-resolution pyramid schedule: Smoothing sigmas per level
-          # Gaussian smoothing applied at each resolution level (in voxels)
-          #
-          # Format: Same structure as number_of_iterations
-          # - Higher sigma = more smoothing (removes noise, finds global alignment)
-          # - Lower sigma = less smoothing (preserves detail, local refinement)
-          # - Sigma of 0 = no smoothing
-          #
-          # Example: [[3, 2, 1, 0], [3, 2, 1, 0]]
-          #   - Coarse levels: More smoothing (3, 2) - focus on large-scale alignment
-          #   - Fine levels: Less smoothing (1, 0) - preserve anatomical detail
-          #
-          # Rule of thumb: smoothing_sigmas[i] ≈ shrink_factors[i] / 2
-          # Must match length of number_of_iterations sublists
           smoothing_sigmas: [[3, 2, 1, 0], [3, 2, 1, 0]]
 
-          # Convergence threshold for optimization
-          # Stops iterations early if improvement falls below this value
-          #
-          # Range: 1e-10 to 1e-3
-          # - 1e-6: Default, good balance (recommended)
-          # - 1e-8: Stricter convergence (more iterations, better alignment)
-          # - 1e-4: Looser convergence (fewer iterations, faster)
-          #
-          # Lower values = more precise but slower
           convergence_threshold: 1.0e-6
-
-          # Convergence window size
-          # Number of recent iterations to evaluate for convergence
-          #
-          # Range: 5-20
-          # - Smaller (5): Faster convergence detection, may stop prematurely
-          # - Larger (15-20): More stable convergence, slower to detect
-          # - Default (10): Good balance
-          #
-          # Algorithm stops if metric improvement over last N iterations < threshold
           convergence_window_size: 10
-
-          # Write composite transform file
-          # Save combined transform as single .h5 file (instead of separate files per transform type)
-          #
-          # Options:
-          #   - true: Single .h5 file with all transforms (easier to apply, recommended)
-          #   - false: Separate transform files for each type (Rigid.mat, Affine.mat)
-          #
-          # Composite transforms are easier to apply and manage
           write_composite_transform: true
 
-          # Interpolation method for resampling registered images
-          # Determines how intensity values are computed at non-grid positions
-          #
-          # Options:
-          #   - "Linear": Fast, smooth, good for most cases
-          #   - "BSpline": Slower, smoother, better quality (recommended for final output)
-          #   - "NearestNeighbor": Fastest, preserves discrete values (for label maps only)
-          #   - "Gaussian": Smooth, good for anti-aliasing
-          #   - "MultiLabel": For multi-label segmentation masks
-          #
-          # Recommendations:
-          #   - Intensity images: "BSpline" (best quality)
-          #   - Quick preview: "Linear" (faster)
-          #   - Segmentation masks: "NearestNeighbor" or "MultiLabel"
+          # BSpline for longitudinal: interior accuracy is critical for measuring
+          # tumor growth between timepoints.
           interpolation: "BSpline"
 
-          # Save detailed registration diagnostics
-          # Generates JSON file with convergence history, timing, and quality metrics
-          #
-          # Options:
-          #   - true: Save detailed info to artifacts/longitudinal_registration/*.json
-          #   - false: Only save transforms and registered images
-          #
-          # Useful for:
-          #   - Debugging registration failures
-          #   - Quality control and validation
-          #   - Optimizing registration parameters
           save_detailed_registration_info: false
 
-          # Mask propagation settings (NEW)
-          # When enabled, warps the reference timestamp's brain mask to other timestamps
-          # This allows comparing independently computed masks vs propagated masks
-          # for QC purposes (Dice coefficient, volume consistency)
+          # Mask propagation: warp reference brain mask to other timestamps for QC
           propagate_reference_mask: true
-
-          # Compute comparison metrics between independent and propagated masks
-          # Produces Dice coefficient, volume difference, and overlap metrics
-          # Results are included in QC report
           compute_mask_comparison: true
 
-
-
-  # Per-step QC Metrics Configuration
-  # This is lightweight QC that runs DURING preprocessing (after specified steps)
-  # Different from quality_analysis which runs AFTER preprocessing on final outputs
+  # ============================================================================
+  # Per-step QC Metrics
+  # ============================================================================
   qc_metrics:
     enabled: true
-    output_dir: "/mnt/home/users/tic_163_uma/mpascual/execs/mengrowth-dataset/qc"
-    artifacts_dir: "/mnt/home/users/tic_163_uma/mpascual/execs/mengrowth-dataset/qc/artifacts"
+    output_dir: "/mnt/home/users/tic_163_uma/mpascual/fscratch/datasets/meningiomas/dataset/preprocecessed/quality"
+    artifacts_dir: "/mnt/home/users/tic_163_uma/mpascual/fscratch/datasets/meningiomas/dataset/preprocecessed/quality/artifacts"
     overwrite: true
 
-    # Steps after which to compute QC metrics
     compute_after_steps:
       - "data_harmonization"
       - "bias_field_correction"
       - "resampling"
-      - "skull_stripping"
-      - "registration_static"
+      - "registration_static"        # Now before skull_stripping (v3)
+      - "skull_stripping"            # Now after registration (v3)
       - "intensity_normalization"
       - "longitudinal_registration"
 
-    # Downsampling for cheap QC computation
-    downsample_to_mm: 2.0    # Target resolution in mm for QC (reduces computation)
-    max_voxels: 250000       # Maximum voxels after downsampling
-    random_seed: 1234        # For reproducible downsampling
-
-    # Mask source for QC metrics
-    # Options: "skullstrip_else_otsu" | "skullstrip_only" | "otsu_only" | "none"
+    downsample_to_mm: 2.0
+    max_voxels: 250000
+    random_seed: 1234
     mask_source: "skullstrip_else_otsu"
 
-    # Outlier detection configuration
     outlier_detection:
       enabled: true
-      method: "mad"          # "mad" (Median Absolute Deviation) | "iqr"
-      mad_threshold: 3.5     # Threshold for MAD-based outlier detection
-      iqr_multiplier: 3.0    # Multiplier for IQR-based outlier detection
+      method: "mad"
+      mad_threshold: 3.5
+      iqr_multiplier: 3.0
 
-    # Metric families
     metrics:
-      # Geometry/header consistency checks
       geometry:
         enabled: true
         check_orientation: true
         check_spacing: true
         check_affine_det: true
 
-      # Registration similarity (for registration steps)
       registration_similarity:
         enabled: true
-        nmi_multimodal: true        # NMI for multi-modal registration
-        ncc_longitudinal: true      # NCC for longitudinal registration
+        nmi_multimodal: true
+        ncc_longitudinal: true
         use_mask: true
 
-      # Mask plausibility checks
       mask_plausibility:
         enabled: true
         check_volume: true
         boundary_gradient_score: true
-        longitudinal_dice: true     # Compare masks across timestamps
+        longitudinal_dice: true
 
-      # Intensity stability metrics
       intensity_stability:
         enabled: true
         median_iqr: true
         wasserstein_distance: true
-        reference_mode: "site_modality"  # "site_modality" | "global"
+        reference_mode: "site_modality"
         histogram_bins: 256
         histogram_range_percentiles: [0.5, 99.5]
 
-      # SNR/CNR metrics (NEW)
       snr_cnr:
         enabled: true
-        background_percentile: 5.0   # Percentile for background detection
-        foreground_percentile: 75.0  # Percentile for foreground/signal detection
-        edge_erosion_iters: 3        # Erosion for Kaufman method
-        intensity_low_pct: 25.0      # Lower percentile for CNR region
-        intensity_mid_pct: 50.0      # Mid percentile for CNR
-        intensity_high_pct: 75.0     # Upper percentile for CNR region
+        background_percentile: 5.0
+        foreground_percentile: 75.0
+        edge_erosion_iters: 3
+        intensity_low_pct: 25.0
+        intensity_mid_pct: 50.0
+        intensity_high_pct: 75.0
 
-      # Baseline capture (NEW) - captures metrics before preprocessing
       baseline:
         enabled: true
         capture_before_first_step: true
         metrics_to_capture: ["geometry", "intensity", "snr_cnr"]
 
-      # Pre-vs-post comparison (NEW)
       comparison:
         enabled: true
-        compute_deltas: true         # Compute (post - baseline)
-        compute_ratios: true         # Compute (post / baseline)
-        flag_degradation_threshold_pct: 10.0  # Flag if quality degrades by >10%
+        compute_deltas: true
+        compute_ratios: true
+        flag_degradation_threshold_pct: 10.0
 
-    # Output formats
     outputs:
-      save_long_csv: true       # Tidy format (one metric per row)
-      save_wide_csv: true       # One row per image
-      save_summary_csv: true    # Aggregated stats with outlier flags
-      save_metadata_json: true  # Config snapshot and run metadata
+      save_long_csv: true
+      save_wide_csv: true
+      save_summary_csv: true
+      save_metadata_json: true
 
-  # Checkpoint system configuration
+  # ============================================================================
+  # Checkpoints
+  # ============================================================================
   checkpoints:
     enabled: true
-    checkpoint_dir: "/mnt/home/users/tic_163_uma/mpascual/execs/mengrowth-dataset/checkpoints"
+    checkpoint_dir: "/mnt/home/users/tic_163_uma/mpascual/fscratch/datasets/meningiomas/dataset/preprocecessed/checkpoints"
 
+  # ============================================================================
+  # Post-processing Quality Analysis
+  # ============================================================================
   quality_analysis:
-    # Input directory: Point this to your PREPROCESSED data output
-    # If mode="test", use output_root. If mode="pipeline", use dataset_root.
-    input_dir: "/mnt/home/users/tic_163_uma/mpascual/fscratch/datasets/meningiomas/dataset/preprocessed"
-    
-    # Output directory for QA reports and plots
-    output_dir: "/mnt/home/users/tic_163_uma/mpascual/execs/mengrowth-dataset/qa_reports"
-
-    # File format to look for ("nifti" for preprocessed .nii.gz, "nrrd" for raw)
+    input_dir: "/mnt/home/users/tic_163_uma/mpascual/fscratch/datasets/meningiomas/dataset/preprocecessed/MenGrowth-2025"
+    output_dir: "/mnt/home/users/tic_163_uma/mpascual/fscratch/datasets/meningiomas/dataset/preprocecessed/qa_reports"
     file_format: "nifti"
-
-    # Expected sequences to check for missing data
     expected_sequences: ["t1c", "t1n", "t2w", "t2f"]
 
-    # Metrics to compute
     metrics:
       patient_statistics: true
       missing_sequences: true
@@ -734,14 +498,12 @@ preprocessing:
       acquisition_consistency: true
       snr_estimation: true
 
-    # Outlier detection settings
     outlier_detection:
       enabled: true
-      method: "iqr"  # "iqr" or "zscore"
+      method: "iqr"
       iqr_multiplier: 1.5
       zscore_threshold: 3.0
 
-    # Visualization settings
     visualization:
       enabled: true
       plots:
@@ -753,9 +515,8 @@ preprocessing:
         snr_distribution: true
       html_report:
         enabled: true
-        title: "MenGrowth Preprocessing Quality Report"
+        title: "MenGrowth Preprocessing Quality Report (v3 — register-first, BraTS skull stripping)"
 
-    # Output settings
     output:
       save_per_study_csv: true
       save_per_patient_csv: true

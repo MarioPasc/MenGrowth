@@ -1236,7 +1236,11 @@ class SkullStrippingConfig:
     method: Optional[Literal["hdbet", "synthstrip"]] = "hdbet"
     fill_value: float = 0.0
 
-    # Consensus masking
+    # Reference mask modality: if set, only skull-strip this modality and apply its mask to all others
+    # (BraTS-standard approach). When None, each modality gets its own mask (legacy behavior).
+    reference_mask_modality: Optional[str] = None
+
+    # Consensus masking (ignored when reference_mask_modality is set)
     consensus_masking: bool = True
     consensus_threshold: int = 2
 
@@ -1294,6 +1298,14 @@ class SkullStrippingConfig:
             ):
                 raise ConfigurationError(
                     f"synthstrip_device must be int or 'cpu', got {self.synthstrip_device}"
+                )
+
+        # Validate reference_mask_modality
+        if self.reference_mask_modality is not None:
+            if not isinstance(self.reference_mask_modality, str) or not self.reference_mask_modality.strip():
+                raise ConfigurationError(
+                    f"reference_mask_modality must be a non-empty string or None, "
+                    f"got {self.reference_mask_modality!r}"
                 )
 
         # Validate consensus masking parameters
@@ -2018,6 +2030,38 @@ class QCConfig:
 
 
 @dataclass
+class DetailedArchiveConfig:
+    """Configuration for detailed patient archiving.
+
+    When enabled, saves per-step MRI snapshots and artifacts to HDF5 archives
+    for configured showcase patients. Used for publication figures and debugging
+    without re-running the pipeline.
+
+    Attributes:
+        enabled: Whether archiving is enabled
+        patient_ids: List of patient IDs to archive (showcase patients)
+        compression: HDF5 compression algorithm
+        compression_level: Compression level (1-9)
+    """
+
+    enabled: bool = False
+    patient_ids: List[str] = field(default_factory=list)
+    compression: str = "gzip"
+    compression_level: int = 4
+
+    def __post_init__(self) -> None:
+        """Validate archive configuration."""
+        if self.enabled and not self.patient_ids:
+            raise ConfigurationError(
+                "detailed_archive.patient_ids must be non-empty when enabled"
+            )
+        if self.compression_level < 1 or self.compression_level > 9:
+            raise ConfigurationError(
+                f"compression_level must be 1-9, got {self.compression_level}"
+            )
+
+
+@dataclass
 class PipelineExecutionConfig:
     """Configuration for the preprocessing pipeline execution.
 
@@ -2062,8 +2106,17 @@ class PipelineExecutionConfig:
     # Checkpoint configuration
     checkpoints: Optional[Dict[str, Any]] = None
 
+    # Detailed archive configuration
+    detailed_archive: DetailedArchiveConfig = field(
+        default_factory=DetailedArchiveConfig
+    )
+
     def __post_init__(self) -> None:
         """Validate configuration and convert step configs to typed dataclasses."""
+        # Convert detailed_archive from dict if needed
+        if isinstance(self.detailed_archive, dict):
+            self.detailed_archive = DetailedArchiveConfig(**self.detailed_archive)
+
         # Convert qc_metrics to QCConfig instance if needed
         if isinstance(self.qc_metrics, dict):
             self.qc_metrics = QCConfig(**self.qc_metrics)

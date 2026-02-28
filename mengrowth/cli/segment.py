@@ -259,6 +259,35 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_attach_to_archive(args: argparse.Namespace) -> int:
+    """Attach segmentation to an existing HDF5 archive.
+
+    Args:
+        args: Parsed CLI arguments.
+
+    Returns:
+        Exit code.
+    """
+    logger = logging.getLogger(__name__)
+
+    archive_path = Path(args.archive)
+    seg_path = Path(args.seg)
+
+    if not archive_path.exists():
+        logger.error(f"Archive not found: {archive_path}")
+        return 1
+    if not seg_path.exists():
+        logger.error(f"Segmentation not found: {seg_path}")
+        return 1
+
+    from mengrowth.preprocessing.src.archiver import DetailedPatientArchiver
+
+    label_map = {1: "necrotic_core", 2: "peritumoral_edema", 3: "enhancing_tumor"}
+    DetailedPatientArchiver.attach_segmentation(archive_path, seg_path, label_map)
+    logger.info(f"Attached {seg_path.name} to {archive_path}")
+    return 0
+
+
 def parse_arguments() -> argparse.Namespace:
     """Parse command-line arguments.
 
@@ -326,6 +355,24 @@ Examples:
         help="Process only this patient ID.",
     )
 
+    # attach-to-archive
+    p_attach = subparsers.add_parser(
+        "attach-to-archive", help="Attach segmentation to HDF5 archive"
+    )
+    _add_common_args(p_attach)
+    p_attach.add_argument(
+        "--archive",
+        type=Path,
+        required=True,
+        help="Path to archive.h5 file.",
+    )
+    p_attach.add_argument(
+        "--seg",
+        type=Path,
+        required=True,
+        help="Path to seg.nii.gz file.",
+    )
+
     return parser.parse_args()
 
 
@@ -352,6 +399,8 @@ def main() -> int:
             return cmd_cleanup(args)
         elif args.command == "run":
             return cmd_run(args)
+        elif args.command == "attach-to-archive":
+            return cmd_attach_to_archive(args)
         else:
             print(f"Unknown command: {args.command}", file=sys.stderr)
             return 1

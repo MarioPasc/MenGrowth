@@ -67,15 +67,22 @@ class PreprocessingOrchestrator:
     - Overwrite protection
     """
 
-    def __init__(self, config: PipelineExecutionConfig, verbose: bool = False) -> None:
+    def __init__(
+        self,
+        config: PipelineExecutionConfig,
+        verbose: bool = False,
+        study_id: Optional[str] = None,
+    ) -> None:
         """Initialize preprocessing orchestrator with lazy component loading.
 
         Args:
             config: Pipeline execution configuration
             verbose: Enable verbose logging
+            study_id: If set, only process this study directory
         """
         self.config = config
         self.verbose = verbose
+        self.study_id = study_id
         self.logger = logging.getLogger(__name__)
 
         # Initialize step registry
@@ -109,6 +116,18 @@ class PreprocessingOrchestrator:
                     checkpoint_dir=checkpoint_dir, enabled=True
                 )
                 self.logger.info(f"Checkpoint Manager initialized: {checkpoint_dir}")
+
+        # Initialize Detailed Archive if enabled
+        self.archiver = None
+        if config.detailed_archive.enabled:
+            from mengrowth.preprocessing.src.archiver import DetailedPatientArchiver
+
+            self.archiver = DetailedPatientArchiver(
+                config=config.detailed_archive,
+                output_root=config.output_root,
+                modalities=config.modalities,
+            )
+            self.logger.info("Detailed Patient Archiver initialized")
 
         self.logger.info(
             "Preprocessing orchestrator initialized with dynamic pipeline execution"
@@ -726,6 +745,15 @@ class PreprocessingOrchestrator:
         # Find all study directories (e.g., MenGrowth-0015-000, MenGrowth-0015-001)
         study_dirs = sorted([d for d in patient_dir.iterdir() if d.is_dir()])
 
+        # Filter to specific study if requested
+        if self.study_id is not None:
+            study_dirs = [d for d in study_dirs if d.name == self.study_id]
+            if not study_dirs:
+                raise FileNotFoundError(
+                    f"Study directory '{self.study_id}' not found in {patient_dir}"
+                )
+            self.logger.info(f"Filtered to study: {self.study_id}")
+
         self.logger.info(f"Found {len(study_dirs)} study directories for {patient_id}")
 
         return study_dirs
@@ -823,6 +851,17 @@ class PreprocessingOrchestrator:
         # Log and save pipeline configuration
         self._log_pipeline_order(patient_id)
 
+        # Save pipeline metadata to archive
+        if self.archiver and self.archiver.should_archive(patient_id):
+            for study_dir in study_dirs:
+                try:
+                    self.archiver.save_pipeline_metadata(
+                        patient_id, study_dir.name,
+                        self.config.steps, self.config.modalities,
+                    )
+                except Exception as e:
+                    self.logger.warning(f"Archive metadata save failed: {e}")
+
         # Separate patient-level from other steps
         modality_study_groups, patient_level_steps = self._categorize_step_groups()
 
@@ -831,13 +870,18 @@ class PreprocessingOrchestrator:
             patient_id, study_dirs, modality_study_groups
         )
 
-        # PHASE 2: Execute patient-level steps (new)
-        if patient_level_steps:
+        # PHASE 2: Execute patient-level steps (need 2+ studies for longitudinal)
+        if patient_level_steps and len(study_dirs) >= 2:
             self.logger.info(f"\n{'=' * 80}")
             self.logger.info(f"Executing patient-level steps for {patient_id}")
             self.logger.info(f"{'=' * 80}")
             self._execute_patient_level_steps(
                 patient_id, study_dirs, patient_level_steps
+            )
+        elif patient_level_steps:
+            self.logger.info(
+                f"\n  Skipping patient-level steps — only {len(study_dirs)} study "
+                f"(need 2+ for longitudinal registration)"
             )
 
         # PHASE 3: Finalize QC for this patient (if enabled)
@@ -848,6 +892,13 @@ class PreprocessingOrchestrator:
                     self.logger.info(f"\nQC finalized: {list(qc_outputs.keys())}")
             except Exception as e:
                 self.logger.error(f"QC finalization failed: {e}", exc_info=True)
+
+        # PHASE 4: Finalize archive for this patient
+        if self.archiver and self.archiver.should_archive(patient_id):
+            try:
+                self.archiver.finalize(patient_id)
+            except Exception as e:
+                self.logger.error(f"Archive finalization failed: {e}")
 
         # Summary
         self.logger.info(f"\n{'=' * 80}")
@@ -1115,6 +1166,20 @@ class PreprocessingOrchestrator:
                 # Trigger QC if enabled
                 self._trigger_qc_if_needed(step_name, context, result)
 
+                # Archive snapshot if enabled
+                if self.archiver and self.archiver.should_archive(patient_id):
+                    try:
+                        self.archiver.on_modality_step_done(
+                            patient_id=patient_id,
+                            study_id=study_dir.name,
+                            step_name=step_name,
+                            step_index=step_num,
+                            modality=modality,
+                            nifti_path=paths["nifti"],
+                        )
+                    except Exception as e:
+                        self.logger.warning(f"    Archive snapshot failed: {e}")
+
                 # Save checkpoint after successful step completion
                 if self.checkpoint_manager:
                     output_path = paths.get("nifti") or paths.get("resampled")
@@ -1164,6 +1229,34 @@ class PreprocessingOrchestrator:
 
                 # Trigger QC if enabled
                 self._trigger_qc_if_needed(step_name, context, result)
+
+                # Archive study-level snapshot if enabled
+                if self.archiver and self.archiver.should_archive(patient_id):
+                    try:
+                        modality_paths = {
+                            mod: self._get_output_paths(
+                                patient_id, study_dir, mod
+                            )["nifti"]
+                            for mod in self.config.modalities
+                        }
+                        # Compute 1-based step index from pipeline config
+                        step_index = (
+                            self.config.steps.index(step_name) + 1
+                            if step_name in self.config.steps
+                            else 0
+                        )
+                        self.archiver.on_study_step_done(
+                            patient_id=patient_id,
+                            study_id=study_dir.name,
+                            step_name=step_name,
+                            step_index=step_index,
+                            modality_paths=modality_paths,
+                            result=result or {},
+                        )
+                    except Exception as e:
+                        self.logger.warning(
+                            f"  Archive study snapshot failed: {e}"
+                        )
 
             except Exception as e:
                 self.logger.error(f"  Study-level step '{step_name}' failed: {e}")
@@ -1250,13 +1343,16 @@ class PreprocessingOrchestrator:
 
 
 def run_preprocessing(
-    config: PipelineExecutionConfig, patient_id: Optional[str] = None
+    config: PipelineExecutionConfig,
+    patient_id: Optional[str] = None,
+    study_id: Optional[str] = None,
 ) -> None:
     """Run preprocessing pipeline on selected patients.
 
     Args:
         config: Pipeline execution configuration (returned by loader)
         patient_id: Specific patient to process (overrides config.patient_selector)
+        study_id: Specific study to process (filters study directories)
 
     Raises:
         ValueError: If patient_selector is invalid
@@ -1274,7 +1370,7 @@ def run_preprocessing(
         logger.info(f"Overriding config: processing single patient {patient_id}")
 
     # Initialize orchestrator
-    orchestrator = PreprocessingOrchestrator(config, verbose=True)
+    orchestrator = PreprocessingOrchestrator(config, verbose=True, study_id=study_id)
 
     # Process patients
     if config.patient_selector == "single":
