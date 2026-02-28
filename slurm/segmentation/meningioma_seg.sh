@@ -47,7 +47,7 @@ export CONDA_ENV_NAME="mengrowth"
 # Defaults
 CONFIG_FILE="${REPO_ROOT}/configs/picasso/segmentation.yaml"
 PATIENT_ARG=""
-WALL_TIME="0-01:00:00"
+WALL_TIME="0-02:00:00"
 DEPENDS_ON=""
 
 # Parse arguments
@@ -221,8 +221,8 @@ SBATCH_ARGS=(
     --job-name="mg_men_seg"
     --time="${WALL_TIME}"
     --ntasks=1
-    --cpus-per-task=8
-    --mem=32G
+    --cpus-per-task=4
+    --mem=8G
     --constraint=dgx
     --gres=gpu:1
     --output="${LOG_DIR}/men_seg_%j.out"
