@@ -22,13 +22,16 @@
 #   BraTS Meningioma Dataset — LaBella et al. (2024), Scientific Data 11:496
 #
 # Usage (from Picasso login node):
+#   bash slurm/segmentation/meningioma_seg.sh
+#   bash slurm/segmentation/meningioma_seg.sh --patient MenGrowth-0015
+#   bash slurm/segmentation/meningioma_seg.sh --depends-on 123456
 #   bash slurm/segmentation/meningioma_seg.sh --config configs/picasso/segmentation.yaml
-#   bash slurm/segmentation/meningioma_seg.sh --config configs/picasso/segmentation.yaml --patient MenGrowth-0015
 # =============================================================================
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 echo "================================================="
 echo "MENINGIOMA SEGMENTATION — LAUNCHER"
@@ -42,9 +45,10 @@ echo ""
 export CONDA_ENV_NAME="mengrowth"
 
 # Defaults
-CONFIG_FILE=""
+CONFIG_FILE="${REPO_ROOT}/configs/picasso/segmentation.yaml"
 PATIENT_ARG=""
 WALL_TIME="0-01:00:00"
+DEPENDS_ON=""
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -61,13 +65,18 @@ while [[ $# -gt 0 ]]; do
             WALL_TIME="$2"
             shift 2
             ;;
+        --depends-on)
+            DEPENDS_ON="$2"
+            shift 2
+            ;;
         --help|-h)
             echo "Usage: bash meningioma_seg.sh [OPTIONS]"
             echo ""
             echo "Options:"
-            echo "  --config PATH       Path to segmentation YAML config (required)"
+            echo "  --config PATH       Path to segmentation YAML config (default: configs/picasso/segmentation.yaml)"
             echo "  --patient ID        Process only this patient (e.g., MenGrowth-0015)"
             echo "  --wall-time T       SLURM wall time (default: 0-01:00:00)"
+            echo "  --depends-on JID    SLURM job ID to depend on (afterok dependency)"
             echo "  --help, -h          Show this help"
             exit 0
             ;;
@@ -78,13 +87,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Validate required arguments
-if [ -z "${CONFIG_FILE}" ]; then
-    echo "ERROR: --config is required."
-    echo "Run with --help for usage information."
-    exit 1
-fi
-
+# Validate config file exists
 if [ ! -f "${CONFIG_FILE}" ]; then
     echo "ERROR: Config file not found: ${CONFIG_FILE}"
     exit 1
@@ -108,6 +111,9 @@ if [ -n "${PATIENT_ARG}" ]; then
     echo "  Patient:     ${PATIENT_ARG}"
 fi
 echo "  Wall time:   ${WALL_TIME}"
+if [ -n "${DEPENDS_ON}" ]; then
+    echo "  Depends on:  ${DEPENDS_ON} (afterok)"
+fi
 echo ""
 
 # ========================================================================
@@ -209,18 +215,26 @@ echo "================================================="
 
 mkdir -p "${LOG_DIR}"
 
-JOB_ID=$(sbatch --parsable \
-    --job-name="mg_men_seg" \
-    --time="${WALL_TIME}" \
-    --ntasks=1 \
-    --cpus-per-task=8 \
-    --mem=32G \
-    --constraint=dgx \
-    --gres=gpu:1 \
-    --output="${LOG_DIR}/men_seg_%j.out" \
-    --error="${LOG_DIR}/men_seg_%j.err" \
-    --export=ALL \
-    "${SCRIPT_DIR}/meningioma_seg_worker.sh")
+# Build sbatch command
+SBATCH_ARGS=(
+    --parsable
+    --job-name="mg_men_seg"
+    --time="${WALL_TIME}"
+    --ntasks=1
+    --cpus-per-task=8
+    --mem=32G
+    --constraint=dgx
+    --gres=gpu:1
+    --output="${LOG_DIR}/men_seg_%j.out"
+    --error="${LOG_DIR}/men_seg_%j.err"
+    --export=ALL
+)
+
+if [ -n "${DEPENDS_ON}" ]; then
+    SBATCH_ARGS+=(--dependency="afterok:${DEPENDS_ON}")
+fi
+
+JOB_ID=$(sbatch "${SBATCH_ARGS[@]}" "${SCRIPT_DIR}/meningioma_seg_worker.sh")
 
 echo ""
 echo "================================================="
