@@ -5,8 +5,7 @@
 # Login-node script that:
 #   1. Pulls the BraTS 2025 Meningioma 1st-place Docker image as Singularity SIF
 #      (compute nodes have no internet)
-#   2. Runs mengrowth-segment prepare to create BraTS-format input
-#   3. Submits a SLURM job to run inference on the prepared data
+#   2. Submits a SLURM job that runs prepare + inference + postprocess
 #
 # The container is the BraTS 2025 Meningioma Segmentation 1st place winner
 # by Yu Haitao et al., distributed via BrainLesion BraTS Orchestrator.
@@ -75,7 +74,7 @@ while [[ $# -gt 0 ]]; do
             echo "Options:"
             echo "  --config PATH       Path to segmentation YAML config (default: configs/picasso/segmentation.yaml)"
             echo "  --patient ID        Process only this patient (e.g., MenGrowth-0015)"
-            echo "  --wall-time T       SLURM wall time (default: 0-01:00:00)"
+            echo "  --wall-time T       SLURM wall time (default: 0-02:00:00)"
             echo "  --depends-on JID    SLURM job ID to depend on (afterok dependency)"
             echo "  --help, -h          Show this help"
             exit 0
@@ -94,6 +93,7 @@ if [ ! -f "${CONFIG_FILE}" ]; then
 fi
 
 export CONFIG_FILE
+export PATIENT_ARG
 
 # Extract SIF path, docker image, and log dir from config
 # Uses grep+awk to avoid depending on Python/pyyaml before conda activation
@@ -153,64 +153,10 @@ fi
 echo ""
 
 # ========================================================================
-# STEP 2: PREPARE BRATS INPUT (login node, uses mengrowth-segment CLI)
+# STEP 2: SUBMIT SLURM JOB
 # ========================================================================
 echo "================================================="
-echo "STEP 2: Preparing BraTS input"
-echo "================================================="
-
-# Activate conda for the prepare step
-module_loaded=0
-for m in miniconda3 Miniconda3 anaconda3 Anaconda3 miniforge mambaforge; do
-    if module avail "$m" 2>&1 | grep -qi "${m}"; then
-        module load "$m" && module_loaded=1 && break
-    fi
-done
-
-if command -v conda >/dev/null 2>&1; then
-    source "$(conda info --base)/etc/profile.d/conda.sh" || true
-    conda activate "${CONDA_ENV_NAME}" 2>/dev/null || source activate "${CONDA_ENV_NAME}"
-else
-    source activate "${CONDA_ENV_NAME}"
-fi
-
-# Build prepare command
-PREPARE_CMD="mengrowth-segment prepare --config ${CONFIG_FILE} --verbose"
-if [ -n "${PATIENT_ARG}" ]; then
-    PREPARE_CMD="${PREPARE_CMD} --patient ${PATIENT_ARG}"
-fi
-
-echo "Running: ${PREPARE_CMD}"
-set +e
-PREPARE_OUTPUT=$(${PREPARE_CMD})
-PREPARE_EXIT=$?
-set -e
-
-if [ "${PREPARE_EXIT}" -ne 0 ]; then
-    echo "ERROR: Prepare step failed with exit code ${PREPARE_EXIT}"
-    exit "${PREPARE_EXIT}"
-fi
-
-# Capture WORK_DIR from the last line of prepare output
-WORK_DIR=$(echo "${PREPARE_OUTPUT}" | grep "^WORK_DIR=" | tail -1 | cut -d= -f2-)
-
-if [ -z "${WORK_DIR}" ] || [ ! -d "${WORK_DIR}" ]; then
-    echo "ERROR: Failed to capture WORK_DIR from prepare output."
-    echo "Prepare output:"
-    echo "${PREPARE_OUTPUT}"
-    exit 1
-fi
-
-export WORK_DIR
-echo ""
-echo "Work directory: ${WORK_DIR}"
-echo ""
-
-# ========================================================================
-# STEP 3: SUBMIT SLURM JOB
-# ========================================================================
-echo "================================================="
-echo "STEP 3: Submitting SLURM job"
+echo "STEP 2: Submitting SLURM job"
 echo "================================================="
 
 mkdir -p "${LOG_DIR}"
@@ -243,5 +189,4 @@ echo "================================================="
 echo "Job ID:     ${JOB_ID}"
 echo "Monitor:    squeue -j ${JOB_ID}"
 echo "Logs:       ${LOG_DIR}/men_seg_${JOB_ID}.{out,err}"
-echo "Work dir:   ${WORK_DIR}"
 echo ""

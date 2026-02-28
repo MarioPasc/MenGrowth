@@ -10,13 +10,16 @@
 # =============================================================================
 # MENINGIOMA SEGMENTATION — SLURM WORKER
 #
-# Runs the BraTS 2025 Meningioma Segmentation 1st-place algorithm
-# (Yu Haitao et al.) via Singularity on an A100 GPU, then calls
-# mengrowth-segment postprocess to remap outputs.
+# Runs the full segmentation pipeline on the compute node:
+#   1. Prepare BraTS-format input (mengrowth-segment prepare)
+#   2. Run inference via Singularity
+#   3. Post-process outputs back to study directories
+#
+# Prepare runs here (not on the login node) so that --depends-on works
+# correctly: the data must be fully preprocessed before prepare discovers it.
 #
 # Expected env vars (exported by meningioma_seg.sh launcher):
-#   CONDA_ENV_NAME, REPO_SRC, CONFIG_FILE,
-#   SIF_PATH, WORK_DIR
+#   CONDA_ENV_NAME, CONFIG_FILE, SIF_PATH, PATIENT_ARG
 #
 # Reference:
 #   BraTS Orchestrator — Kofler et al. (2025), arXiv:2506.13807
@@ -71,10 +74,47 @@ nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv
 echo ""
 
 # ========================================================================
-# PRE-FLIGHT CHECKS
+# STEP 1: PREPARE BRATS INPUT
 # ========================================================================
 echo "=========================================="
-echo "PRE-FLIGHT CHECKS"
+echo "STEP 1: PREPARE BRATS INPUT"
+echo "=========================================="
+
+PREPARE_CMD="mengrowth-segment prepare --config ${CONFIG_FILE} --verbose"
+if [ -n "${PATIENT_ARG:-}" ]; then
+    PREPARE_CMD="${PREPARE_CMD} --patient ${PATIENT_ARG}"
+fi
+
+echo "Running: ${PREPARE_CMD}"
+set +e
+PREPARE_OUTPUT=$(${PREPARE_CMD})
+PREPARE_EXIT=$?
+set -e
+
+if [ "${PREPARE_EXIT}" -ne 0 ]; then
+    echo "ERROR: Prepare step failed with exit code ${PREPARE_EXIT}"
+    echo "${PREPARE_OUTPUT}"
+    exit "${PREPARE_EXIT}"
+fi
+
+# Capture WORK_DIR from prepare output
+WORK_DIR=$(echo "${PREPARE_OUTPUT}" | grep "^WORK_DIR=" | tail -1 | cut -d= -f2-)
+
+if [ -z "${WORK_DIR}" ] || [ ! -d "${WORK_DIR}" ]; then
+    echo "ERROR: Failed to capture WORK_DIR from prepare output."
+    echo "Prepare output:"
+    echo "${PREPARE_OUTPUT}"
+    exit 1
+fi
+
+echo "Work directory: ${WORK_DIR}"
+echo ""
+
+# ========================================================================
+# STEP 2: PRE-FLIGHT CHECKS
+# ========================================================================
+echo "=========================================="
+echo "STEP 2: PRE-FLIGHT CHECKS"
 echo "=========================================="
 
 # Verify SIF exists
@@ -83,14 +123,6 @@ if [ -f "${SIF_PATH}" ]; then
 else
     echo "[FAIL] SIF image not found: ${SIF_PATH}"
     echo "       Run the launcher from the login node first."
-    exit 1
-fi
-
-# Verify work directory
-if [ -d "${WORK_DIR}" ]; then
-    echo "[OK]   Work dir: ${WORK_DIR}"
-else
-    echo "[FAIL] Work dir not found: ${WORK_DIR}"
     exit 1
 fi
 
@@ -113,10 +145,10 @@ echo "Pre-flight checks PASSED"
 echo ""
 
 # ========================================================================
-# RUN SINGULARITY INFERENCE
+# STEP 3: RUN SINGULARITY INFERENCE
 # ========================================================================
 echo "=========================================="
-echo "RUNNING INFERENCE"
+echo "STEP 3: RUNNING INFERENCE"
 echo "=========================================="
 
 BRATS_INPUT="${WORK_DIR}/input"
@@ -165,11 +197,11 @@ if [ "${INFER_EXIT}" -ne 0 ]; then
 fi
 
 # ========================================================================
-# POST-PROCESS: REMAP OUTPUTS TO STUDY DIRECTORIES
+# STEP 4: POST-PROCESS
 # ========================================================================
 echo ""
 echo "=========================================="
-echo "POST-PROCESSING"
+echo "STEP 4: POST-PROCESSING"
 echo "=========================================="
 
 mengrowth-segment postprocess \
