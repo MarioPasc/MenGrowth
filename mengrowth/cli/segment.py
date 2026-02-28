@@ -227,6 +227,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         "--cleanenv",
         "--no-home",
         "--writable-tmpfs",
+        "--pwd", "/app",
         "--bind",
         f"{brats_input}:/input:rw",
         "--bind",

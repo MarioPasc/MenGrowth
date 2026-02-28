@@ -99,6 +99,16 @@ singularity exec --nv "${SIF_PATH}" nvidia-smi --query-gpu=name --format=csv,noh
     echo "[OK]   Singularity --nv GPU passthrough" || \
     echo "[WARN] Singularity --nv GPU check failed; inference may fall back to CPU or error"
 
+# Detect container WORKDIR (inference.py location)
+CONTAINER_PWD=$(singularity exec --nv "${SIF_PATH}" \
+    find / -maxdepth 3 -name inference.py -printf '%h\n' -quit 2>/dev/null || true)
+if [ -z "${CONTAINER_PWD}" ]; then
+    CONTAINER_PWD="/app"
+    echo "[WARN] Could not detect inference.py location, defaulting to ${CONTAINER_PWD}"
+else
+    echo "[OK]   inference.py found in: ${CONTAINER_PWD}"
+fi
+
 echo "Pre-flight checks PASSED"
 echo ""
 
@@ -125,6 +135,7 @@ singularity run \
     --cleanenv \
     --no-home \
     --writable-tmpfs \
+    --pwd "${CONTAINER_PWD}" \
     --bind "${BRATS_INPUT}:/input:ro" \
     --bind "${BRATS_OUTPUT}:/output:rw" \
     "${SIF_PATH}"
