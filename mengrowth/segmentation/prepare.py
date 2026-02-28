@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import json
 import logging
-import os
+import shutil
 import tempfile
 
 import nibabel as nib
@@ -246,6 +246,7 @@ def prepare_brats_input(
         work_dir = Path(config.work_dir)
     else:
         base = Path(config.log_dir) if config.log_dir else Path(tempfile.gettempdir())
+        base.mkdir(parents=True, exist_ok=True)
         work_dir = Path(tempfile.mkdtemp(prefix="brats_men_", dir=str(base)))
 
     input_dir = work_dir / "input"
@@ -287,7 +288,9 @@ def prepare_brats_input(
                 shape_corrected = True
                 original_shape_info[mod] = correction_info["original_shape"]
             else:
-                os.symlink(src_path.resolve(), dst_path)
+                # Copy instead of symlink: Singularity bind mounts cannot
+                # follow symlinks that point outside the mounted volume.
+                shutil.copy2(src_path, dst_path)
 
         name_map[brats_name] = {
             "patient_id": study.patient_id,

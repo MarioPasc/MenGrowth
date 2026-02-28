@@ -143,11 +143,13 @@ if [ "${INFER_EXIT}" -ne 0 ]; then
     echo "ERROR: Singularity inference failed with exit code ${INFER_EXIT}"
     echo ""
     echo "Debugging tips:"
-    echo "  1. Inspect container interactively:"
+    echo "  1. Inspect work dir: ${WORK_DIR}"
+    echo "  2. Inspect container interactively:"
     echo "     singularity shell --nv ${SIF_PATH}"
-    echo "  2. Check container's runscript:"
+    echo "  3. Check container's runscript:"
     echo "     singularity inspect --runscript ${SIF_PATH}"
-    rm -rf "${WORK_DIR}"
+    echo ""
+    echo "Work directory preserved for debugging."
     exit "${INFER_EXIT}"
 fi
 
@@ -167,14 +169,7 @@ mengrowth-segment postprocess \
 POST_EXIT=$?
 
 # ========================================================================
-# CLEANUP
-# ========================================================================
-echo ""
-echo "Cleaning up work directory: ${WORK_DIR}"
-rm -rf "${WORK_DIR}"
-
-# ========================================================================
-# COMPLETION
+# CLEANUP & COMPLETION
 # ========================================================================
 END_TIME=$(date +%s)
 ELAPSED=$((END_TIME - START_TIME))
@@ -189,8 +184,11 @@ echo ""
 
 if [ "${INFER_EXIT}" -eq 0 ] && [ "${POST_EXIT}" -eq 0 ]; then
     echo "Segmentation completed successfully."
+    echo "Cleaning up work directory: ${WORK_DIR}"
+    rm -rf "${WORK_DIR}"
     exit 0
 else
     echo "Segmentation FAILED (inference=${INFER_EXIT}, postproc=${POST_EXIT})"
+    echo "Work directory preserved for debugging: ${WORK_DIR}"
     exit 1
 fi

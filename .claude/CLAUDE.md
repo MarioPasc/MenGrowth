@@ -104,6 +104,33 @@ Steps are defined in YAML (`steps:` list) and can be reordered, repeated (e.g., 
 | `study` | Per (patient, study) | Cubic padding, registration, skull stripping |
 | `patient` | Per patient (all studies) | Longitudinal registration |
 
+### Detailed Patient Archive (HDF5)
+
+**Code:** `mengrowth/preprocessing/src/archiver.py` → `DetailedPatientArchiver`
+**Config:** `detailed_archive:` section in `general_configuration` (enabled per patient_ids list)
+**Output:** `{output_root}/detailed_patient/{patient_id}/{study_id}/archive.h5`
+
+Saves per-step MRI snapshots, brain masks, and registration transforms to HDF5 for showcase patients. Archive failure never halts the pipeline. Hooks in `PreprocessingOrchestrator`: init, metadata, modality step done, study step done, finalize.
+
+---
+
+## Segmentation Pipeline
+
+**Entry:** `mengrowth/cli/segment.py` → `mengrowth-segment`
+**Config:** `configs/picasso/segmentation.yaml`
+**Subcommands:** `prepare`, `postprocess`, `cleanup`, `run`, `attach-to-archive`
+
+| Stage | What | Code |
+|-------|------|------|
+| prepare | Discover studies, validate shapes, create BraTS-format input dir | `segmentation/prepare.py` |
+| inference | Singularity container (BraTS 2025 1st-place) | `slurm/segmentation/meningioma_seg_worker.sh` |
+| postprocess | Remap BraTS outputs back to study dirs as `seg.nii.gz` | `segmentation/postprocess.py` |
+| attach-to-archive | Attach `seg.nii.gz` to HDF5 detailed archive | `preprocessing/src/archiver.py` |
+
+**Shape correction:** `prepare_brats_input()` pads/crops (no interpolation) to exact `(240, 240, 155)`. Uses `shutil.copy2()` (not symlinks — Singularity bind mounts can't follow external symlinks).
+
+**SLURM launcher:** `slurm/segmentation/meningioma_seg.sh` (defaults to `configs/picasso/segmentation.yaml`, supports `--depends-on JOB_ID`)
+
 ---
 
 ## Standardized Identifiers
@@ -155,6 +182,7 @@ Steps are defined in YAML (`steps:` list) and can be reordered, repeated (e.g., 
 4. **Quality-first ordering:** Quality filtering before anonymization → gap-free MenGrowth IDs
 5. **Parallel by default:** `ProcessPoolExecutor` (CPU-bound), `ThreadPoolExecutor` (I/O-bound)
 6. **Configurable step order:** Preprocessing steps defined in YAML list, matched by `StepRegistry` pattern
+7. **Singularity-safe I/O:** Never use symlinks for files passed to Singularity containers — bind mounts cannot follow symlinks pointing outside the mounted volume. Use `shutil.copy2()` instead.
 
 ---
 
@@ -195,3 +223,9 @@ Steps are defined in YAML (`steps:` list) and can be reordered, repeated (e.g., 
 | Change method variant | Modify `method:` in the step's config (e.g., `"hdbet"` → `"synthstrip"`) |
 | Debug step failure | Check viz PNGs in `{viz_root}/`, artifacts in `{artifacts}/` |
 | Process single patient | `--patient MenGrowth-0015` or `patient_selector: "single"` in config |
+
+### Utility Scripts
+
+| Script | Purpose |
+|--------|---------|
+| `scripts/check_shapes.py <dataset_root>` | Report NIfTI shapes across preprocessed dataset (header-only, fast) |
