@@ -164,10 +164,10 @@ ARRAY_MAX=$((NUM_PATIENTS - 1))
 
 JOB_ID=$(sbatch --parsable \
     --job-name="mgpp" \
-    --time=0-02:00:00 \
+    --time=0-01:30:00 \
     --ntasks=1 \
-    --cpus-per-task=16 \
-    --mem=64G \
+    --cpus-per-task=8 \
+    --mem=16G \
     --constraint=dgx \
     --gres=gpu:1 \
     --array="0-${ARRAY_MAX}%${MAX_CONCURRENT}" \

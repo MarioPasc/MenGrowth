@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #SBATCH -J mgpp
-#SBATCH --time=0-02:00:00
+#SBATCH --time=0-01:30:00
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=16
-#SBATCH --mem=64G
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=16G
 #SBATCH --constraint=dgx
 #SBATCH --gres=gpu:1
 #SBATCH --output=preprocess_%A_%a.out
@@ -79,8 +79,8 @@ fi
 # THREADING CONFIGURATION
 # ========================================================================
 # ANTs/ITK multi-threading: use all allocated CPUs for registration
-export ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS="${SLURM_CPUS_PER_TASK:-16}"
-export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-16}"
+export ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS="${SLURM_CPUS_PER_TASK:-8}"
+export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-8}"
 # Deterministic ANTs registration
 export ANTS_RANDOM_SEED=42
 
