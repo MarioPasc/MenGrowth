@@ -1,0 +1,28 @@
+# Manual curation exclusions — applied after automated pipeline
+# Usage: mengrowth-curate-dataset --config configs/raw_data.yaml --final-manual-curation configs/templates/manual_curation.yaml
+#
+# Each exclusion removes one study from the curated dataset.
+# After all removals, patients with fewer than min_studies_per_patient studies
+# are automatically removed as well.
+#
+# Fields:
+#   patient_id (required): MenGrowth patient ID
+#   study_id   (required): MenGrowth study ID
+#   reason     (required): Human-readable reason for exclusion
+#   sequence   (optional): Modalities where the issue was observed, e.g. [t1c] or [t1c, t2w]
+
+exclusions:
+  - patient_id: "MenGrowth-0019"
+    study_id: "MenGrowth-0019-000"
+    reason: "Postprocessing: Axial resolution was too low"
+    sequence: [t1n]
+  - patient_id: "MenGrowth-0023"
+    study_id: "MenGrowth-0023-000"
+    reason: "Postprocessing: Axial resolution was too low"
+    sequence: [t1n]
+  - patient_id: "MenGrowth-0024"
+    study_id: "MenGrowth-0024-001"
+    reason: "Postprocessing: Axial resolution was too low"
+    sequence: [t1n]
+# Minimum longitudinal studies required to keep a patient (default: 2)
+min_studies_per_patient: 2
