@@ -21,21 +21,21 @@ logger = logging.getLogger(__name__)
 # Set azimuth/elevation to None for auto camera.
 # Use scripts snippet below to find good angles interactively.
 SHOWCASE_PATIENTS: Final[List[Tuple[str, str, Optional[float], Optional[float]]]] = [
-    ("MenGrowth-0009", "Clear grower (37k→82k, 5 tp)", None, None),
-    ("MenGrowth-0015", "Most timepoints (6 studies)", None, None),
-    ("MenGrowth-0020", "Steady grower (9k→13k, 5 tp)", None, None),
-    ("MenGrowth-0032", "Largest tumor at baseline (48k)", None, None),
-    ("MenGrowth-0007", "Small stable (1.4k→1.1k, 4 tp)", None, None),
+    ("MenGrowth-0009", "Clear grower (37k→82k, 5 tp)", 38.3, -37.1),
+    ("MenGrowth-0015", "Most timepoints (6 studies)", 43.1, -20.1),
+    ("MenGrowth-0020", "Steady grower (9k→13k, 5 tp)", -119.8, -20.9),
+    #("MenGrowth-0032", "Largest tumor at baseline (48k)", None, None),
+    #("MenGrowth-0007", "Small stable (1.4k→1.1k, 4 tp)", None, None),
 ]
 
 # Row ordering for grids (matches plan)
 GRID_MODALITIES: Final[List[str]] = ["t1n", "t1c", "t2f", "t2w"]
 
 MODALITY_DISPLAY: Final[Dict[str, str]] = {
-    "t1n": "T1",
-    "t1c": "T1c",
-    "t2f": "T2-FLAIR",
-    "t2w": "T2",
+    "t1n": "t1n",
+    "t1c": "t1c",
+    "t2f": "t2f",
+    "t2w": "t2w",
 }
 
 # Distinct grayscale brain surface tint per modality so rows are

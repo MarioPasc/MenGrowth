@@ -29,8 +29,8 @@ from visualize_meningioma_octant import (
 ROOT = "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/preprocessed/MenGrowth-2025"
 
 # === EDIT THESE ===
-PATIENT = "MenGrowth-0009"
-STUDY = "MenGrowth-0009-000"
+PATIENT = "MenGrowth-0032"
+STUDY = "MenGrowth-0032-001"
 MOD = "t1c"
 AZIM = None  # degrees, or None for auto
 ELEV = None  # degrees, or None for auto

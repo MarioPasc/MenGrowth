@@ -42,19 +42,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dataset-root",
         type=Path,
-        required=True,
+        default=Path("/media/mpascual/PortableSSD/Meningiomas/MenGrowth/preprocessed"),
         help="Root of preprocessed dataset (contains MenGrowth-XXXX/ dirs)",
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
-        required=True,
+        default=Path("/media/mpascual/PortableSSD/Meningiomas/MenGrowth/analysis"),
         help="Analysis output directory",
     )
     parser.add_argument(
         "--metadata-root",
         type=Path,
-        default=None,
+        default=Path("/media/mpascual/PortableSSD/Meningiomas/MenGrowth/curated/dataset"),
         help="Path to curated metadata (id_mapping.json, metadata_clean.json)",
     )
     parser.add_argument(
