@@ -42,7 +42,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dataset-root",
         type=Path,
-        default=Path("/media/mpascual/PortableSSD/Meningiomas/MenGrowth/preprocessed"),
+        default=Path("/media/mpascual/PortableSSD/Meningiomas/MenGrowth/preprocessed/MenGrowth-2025"),
         help="Root of preprocessed dataset (contains MenGrowth-XXXX/ dirs)",
     )
     parser.add_argument(
