@@ -77,6 +77,7 @@ mengrowth-visualize-analysis = "mengrowth.cli.visualize_analysis:main"
 mengrowth-curate-dataset = "mengrowth.cli.curate_dataset:main"
 mengrowth-preprocess = "mengrowth.cli.preprocess:main"
 mengrowth-segment = "mengrowth.cli.segment:main"
+mengrowth-graphical-abstract = "mengrowth.cli.graphical_abstract:main"
 
 [tool.setuptools.packages.find]
 include = ["mengrowth*"]

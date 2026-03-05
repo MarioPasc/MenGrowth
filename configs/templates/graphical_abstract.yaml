@@ -1,0 +1,42 @@
+graphical_abstract:
+  archive_root: "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/preprocessed/detailed_patient"
+  artifacts_root: "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/preprocessed/detailed_patient/artifacts"
+  preprocessed_root: "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/preprocessed/MenGrowth-2025"
+  atlas_path: "/media/mpascual/PortableSSD/Meningiomas/ATLAS/sri24_spm8/templates/T1.nii"
+  patient_id: "MenGrowth-0009"
+  study_ids:
+    - "MenGrowth-0009-000"
+    - "MenGrowth-0009-001"
+    - "MenGrowth-0009-002"
+    - "MenGrowth-0009-003"
+  modalities: ["t1c", "t1n", "t2w", "t2f"]
+  steps: []   # empty = all available in archive
+  slice:
+    views: ["axial", "sagittal", "coronal"]
+    axial_frac: 0.295       # tumor center (slice ~45/155)
+    sagittal_frac: 0.571    # tumor center (slice ~136/240)
+    coronal_frac: 0.540     # tumor center (slice ~129/240)
+  intensity_percentile_low: 1.0
+  intensity_percentile_high: 99.0
+  show_segmentation: true
+  step_options:
+    bias_field_cmap: "RdBu_r"
+    bias_field_alpha: 0.5
+    registration_overlay_cmap: "hot"
+    registration_alpha: 0.5
+    mask_contour_color: "#00FF00"
+    mask_contour_linewidth: 1.5
+    segmentation_colors:
+      1: "#DDCC77"     # necrotic core (NET)
+      2: "#44AA99"     # peritumoral edema (SNFH)
+      3: "#CC3311"     # enhancing tumor (ET)
+    segmentation_linewidth: 1.5
+    segmentation_alpha: 0.3
+  output:
+    output_dir: "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/preprocessed/detailed_patient/figures"
+    format: "png"
+    dpi: 300
+    generate_combined: true
+    combined_filename: "pipeline_overview"
+  three_d:
+    enabled: false
