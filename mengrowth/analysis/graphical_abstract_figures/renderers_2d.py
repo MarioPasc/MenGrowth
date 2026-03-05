@@ -114,6 +114,29 @@ def get_slice_frac(slice_config: SliceConfig, view: str) -> Optional[float]:
     return frac_map.get(view)
 
 
+def get_pre_reg_slice_frac(slice_config: SliceConfig, view: str) -> Optional[float]:
+    """Get the fractional slice position for pre-registration steps.
+
+    Falls back to the standard frac if no pre-reg frac is configured.
+
+    Args:
+        slice_config: SliceConfig instance.
+        view: One of "axial", "sagittal", "coronal".
+
+    Returns:
+        Fractional position, or None for center.
+    """
+    pre_reg_map = {
+        "axial": slice_config.pre_reg_axial_frac,
+        "sagittal": slice_config.pre_reg_sagittal_frac,
+        "coronal": slice_config.pre_reg_coronal_frac,
+    }
+    frac = pre_reg_map.get(view)
+    if frac is not None:
+        return frac
+    return get_slice_frac(slice_config, view)
+
+
 def make_clean_figure(
     slice_2d: np.ndarray,
     cmap: str = "gray",
@@ -261,6 +284,7 @@ def render_registration_step(
     phigh: float,
     step_options: StepFigureConfig,
     dpi: int = 300,
+    pre_reg_frac: Optional[float] = None,
 ) -> List[Tuple[Figure, str]]:
     """Render registration: pre-reg, alpha-blend, and atlas.
 
@@ -272,19 +296,22 @@ def render_registration_step(
         post_reg_volume: 3D array after registration (e.g., step5).
         atlas_volume: 3D atlas array (optional).
         view: Anatomical view.
-        frac: Fractional slice position.
+        frac: Fractional slice position (used for post-reg and atlas).
         plow: Low percentile.
         phigh: High percentile.
         step_options: StepFigureConfig with registration rendering options.
         dpi: Figure resolution.
+        pre_reg_frac: Fractional slice position for the pre-reg volume.
+            None = uses frac.
 
     Returns:
         List of (Figure, suffix) tuples: pre, blend, and optionally atlas.
     """
     results: List[Tuple[Figure, str]] = []
 
-    # Pre-registration slice
-    pre_idx = compute_slice_index(pre_reg_volume.shape, view, frac)
+    # Pre-registration slice (uses pre_reg_frac if provided)
+    effective_pre_frac = pre_reg_frac if pre_reg_frac is not None else frac
+    pre_idx = compute_slice_index(pre_reg_volume.shape, view, effective_pre_frac)
     sl_pre = extract_slice(pre_reg_volume, view, pre_idx)
     normed_pre = normalize_for_display(sl_pre, plow, phigh)
 

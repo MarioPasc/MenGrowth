@@ -25,12 +25,21 @@ class SliceConfig:
         axial_frac: Fractional position along the axial axis (0-1). None = center.
         sagittal_frac: Fractional position along the sagittal axis (0-1). None = center.
         coronal_frac: Fractional position along the coronal axis (0-1). None = center.
+        pre_reg_axial_frac: Fractional position for pre-registration steps (axial).
+            None = falls back to axial_frac.
+        pre_reg_sagittal_frac: Fractional position for pre-registration steps (sagittal).
+            None = falls back to sagittal_frac.
+        pre_reg_coronal_frac: Fractional position for pre-registration steps (coronal).
+            None = falls back to coronal_frac.
     """
 
     views: List[str] = field(default_factory=lambda: ["axial"])
     axial_frac: Optional[float] = None
     sagittal_frac: Optional[float] = None
     coronal_frac: Optional[float] = None
+    pre_reg_axial_frac: Optional[float] = None
+    pre_reg_sagittal_frac: Optional[float] = None
+    pre_reg_coronal_frac: Optional[float] = None
 
 
 @dataclass

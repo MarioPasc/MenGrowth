@@ -25,6 +25,7 @@ from .loader import ArchiveLoader, StepVolume
 from .renderers_2d import (
     compute_slice_index,
     extract_slice,
+    get_pre_reg_slice_frac,
     get_slice_frac,
     normalize_for_display,
     render_bias_field_step,
@@ -157,6 +158,7 @@ class GraphicalAbstractGenerator:
         for modality in cfg.modalities:
             for view in cfg.slice.views:
                 frac = get_slice_frac(cfg.slice, view)
+                pre_reg_frac = get_pre_reg_slice_frac(cfg.slice, view)
 
                 combined_slices: List[Tuple[str, np.ndarray]] = []
 
@@ -165,7 +167,13 @@ class GraphicalAbstractGenerator:
 
                     try:
                         figures = self._render_step(
-                            loader, step_key, modality, view, frac, ordered_steps
+                            loader,
+                            step_key,
+                            modality,
+                            view,
+                            frac,
+                            ordered_steps,
+                            pre_reg_frac,
                         )
                     except Exception:
                         logger.exception(
@@ -183,7 +191,9 @@ class GraphicalAbstractGenerator:
                     if figures:
                         vol = self._load_volume_for_step(loader, step_key, modality)
                         if vol is not None:
-                            idx = compute_slice_index(vol.data.shape, view, frac)
+                            step_is_pre_reg = self._is_pre_registration(step_key)
+                            grid_frac = pre_reg_frac if step_is_pre_reg else frac
+                            idx = compute_slice_index(vol.data.shape, view, grid_frac)
                             sl = extract_slice(vol.data, view, idx)
                             normed = normalize_for_display(
                                 sl,
@@ -235,6 +245,24 @@ class GraphicalAbstractGenerator:
             return "skull_stripping"
         return "standard"
 
+    def _is_pre_registration(self, step_key: str) -> bool:
+        """Check if a step occurs before registration (different volume shape).
+
+        Pre-registration steps (data_harmonization, bias_field_correction,
+        resampling, cubic_padding) have different shapes than post-registration
+        steps, so they may need separate slice fractions.
+
+        Args:
+            step_key: Full HDF5 group key.
+
+        Returns:
+            True if the step is before registration.
+        """
+        step_type = self._classify_step(step_key)
+        return (
+            step_type in ("standard", "bias_field") and "registration" not in step_key
+        )
+
     def _load_volume_for_step(
         self, loader: ArchiveLoader, step_key: str, modality: str
     ) -> Optional[StepVolume]:
@@ -273,12 +301,22 @@ class GraphicalAbstractGenerator:
         view: str,
         frac: Optional[float],
         all_steps: List[str],
+        pre_reg_frac: Optional[float] = None,
     ) -> List[Tuple[Figure, str]]:
-        """Render figures for a single step."""
+        """Render figures for a single step.
+
+        Args:
+            pre_reg_frac: Separate slice frac for pre-registration steps.
+                Used for steps before registration (different volume shape)
+                so the displayed slice can be tuned to match the post-reg view.
+        """
         step_type = self._classify_step(step_key)
         plow = self.config.intensity_percentile_low
         phigh = self.config.intensity_percentile_high
         dpi = self.config.output.dpi
+
+        # Use pre_reg_frac for steps before registration
+        effective_frac = pre_reg_frac if self._is_pre_registration(step_key) else frac
 
         if step_type == "bias_field":
             vol = loader.load_step_volume(step_key, modality)
@@ -287,7 +325,7 @@ class GraphicalAbstractGenerator:
                 vol.data,
                 bias,
                 view,
-                frac,
+                effective_frac,
                 plow,
                 phigh,
                 self.config.step_options,
@@ -313,6 +351,7 @@ class GraphicalAbstractGenerator:
                     phigh,
                     self.config.step_options,
                     dpi,
+                    pre_reg_frac=pre_reg_frac,
                 )
                 del pre_vol
             else:
@@ -365,9 +404,11 @@ class GraphicalAbstractGenerator:
             del vol
             return result
 
-        else:  # standard
+        else:  # standard (pre-registration steps)
             vol = loader.load_step_volume(step_key, modality)
-            result = render_standard_slice(vol.data, view, frac, plow, phigh, dpi)
+            result = render_standard_slice(
+                vol.data, view, effective_frac, plow, phigh, dpi
+            )
             del vol
             return result
 

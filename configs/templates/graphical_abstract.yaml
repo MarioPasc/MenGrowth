@@ -12,10 +12,16 @@ graphical_abstract:
   modalities: ["t1c", "t1n", "t2w", "t2f"]
   steps: []   # empty = all available in archive
   slice:
-    views: ["axial", "sagittal", "coronal"]
+    views: ["axial"]
     axial_frac: 0.295       # tumor center (slice ~45/155)
     sagittal_frac: 0.571    # tumor center (slice ~136/240)
     coronal_frac: 0.540     # tumor center (slice ~129/240)
+    # Pre-registration slices have different shapes (e.g., 336x512x512 vs 240x240x155).
+    # Tune these so the pre-reg slice shows ~same anatomy as post-reg.
+    # Set to null to fall back to the standard frac above.
+    pre_reg_axial_frac: 0.55 
+    pre_reg_sagittal_frac: null
+    pre_reg_coronal_frac: null
   intensity_percentile_low: 1.0
   intensity_percentile_high: 99.0
   show_segmentation: true
