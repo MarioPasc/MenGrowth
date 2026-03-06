@@ -133,6 +133,9 @@ def resolve_brats_paths(
 ) -> Tuple[pathlib.Path, pathlib.Path]:
     """Resolve image and segmentation paths from a BraTS-MEN subject directory.
 
+    Uses glob matching (*-{modality}.nii.gz and *-seg.nii.gz) so filenames
+    don't need to follow the exact ``{subject_id}-{modality}.nii.gz`` convention.
+
     Args:
         subject_dir: Path to BraTS subject directory (e.g., BraTS-MEN-00027-000/)
         modality: MRI modality to load (t1c, t1n, t2w, t2f)
@@ -141,24 +144,36 @@ def resolve_brats_paths(
         Tuple of (image_path, segmentation_path)
 
     Raises:
-        FileNotFoundError: If files don't exist
-        ValueError: If invalid modality
+        FileNotFoundError: If no matching files are found
+        ValueError: If invalid modality or multiple matches
     """
     if modality not in VALID_MODALITIES:
         raise ValueError(
             f"Invalid modality '{modality}'. Must be one of {VALID_MODALITIES}"
         )
 
-    subject_id = subject_dir.name
-    image_path = subject_dir / f"{subject_id}-{modality}.nii.gz"
-    seg_path = subject_dir / f"{subject_id}-seg.nii.gz"
+    image_matches = sorted(subject_dir.glob(f"*{modality}.nii.gz"))
+    seg_matches = sorted(subject_dir.glob("*seg.nii.gz"))
 
-    if not image_path.exists():
-        raise FileNotFoundError(f"Image not found: {image_path}")
-    if not seg_path.exists():
-        raise FileNotFoundError(f"Segmentation not found: {seg_path}")
+    if not image_matches:
+        raise FileNotFoundError(
+            f"No *{modality}.nii.gz found in {subject_dir}"
+        )
+    if len(image_matches) > 1:
+        raise ValueError(
+            f"Multiple *{modality}.nii.gz matches in {subject_dir}: {image_matches}"
+        )
 
-    return image_path, seg_path
+    if not seg_matches:
+        raise FileNotFoundError(
+            f"No *seg.nii.gz found in {subject_dir}"
+        )
+    if len(seg_matches) > 1:
+        raise ValueError(
+            f"Multiple *seg.nii.gz matches in {subject_dir}: {seg_matches}"
+        )
+
+    return image_matches[0], seg_matches[0]
 
 
 def load_volume(path: pathlib.Path) -> np.ndarray:
