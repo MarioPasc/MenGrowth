@@ -114,7 +114,7 @@ Examples:
 
 Pipeline steps:
   1. REORGANIZE: Convert raw data to standardized structure
-     - Source: {input-root}/source/..., {input-root}/extension_1/...
+     - Source: {input-root}/source/..., {input-root}/extension_*/...
      - Output: {output-root}/dataset/MenGrowth-2025/P{id}/{study}/modality.nrrd
 
   2. FILTER: Apply quality and completeness criteria

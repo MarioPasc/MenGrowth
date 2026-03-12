@@ -10,13 +10,15 @@ Usage:
     # Single patient (for testing):
     python scripts/visualize_curated_dataset.py --patient MenGrowth-0001
 
-    # All patients:
-    python scripts/visualize_curated_dataset.py
+    # All patients (parallel):
+    python scripts/visualize_curated_dataset.py --workers 8
 """
 
 import argparse
 import logging
+import os
 import sys
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -53,8 +55,8 @@ def load_volume(path: Path) -> Optional[np.ndarray]:
       - axis 1 = coronal slice index (anterior → posterior)
       - axis 2 = sagittal slice index (right → left)
 
-    Nearest-neighbor resampling to 1 mm³ ensures sagittal/coronal views
-    have correct proportions without blurring.
+    B-spline resampling to 1 mm³ ensures sagittal/coronal views
+    have correct proportions with smooth interpolation.
 
     Args:
         path: Path to the .nrrd file.
@@ -80,7 +82,7 @@ def load_volume(path: Path) -> Optional[np.ndarray]:
     resampler.SetSize(new_size)
     resampler.SetOutputDirection(img.GetDirection())
     resampler.SetOutputOrigin(img.GetOrigin())
-    resampler.SetInterpolator(sitk.sitkNearestNeighbor)
+    resampler.SetInterpolator(sitk.sitkBSpline)
     resampler.SetDefaultPixelValue(0)
     img = resampler.Execute(img)
 
@@ -299,6 +301,12 @@ def main() -> None:
         default=OUTPUT_DIR,
         help="Path for output PNGs.",
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=min(8, os.cpu_count() or 1),
+        help="Number of parallel workers (default: min(8, cpu_count)).",
+    )
     args = parser.parse_args()
 
     output_dir = args.output_dir
@@ -318,12 +326,25 @@ def main() -> None:
             [d for d in args.dataset_dir.iterdir() if d.is_dir()],
             key=lambda p: p.name,
         )
-        logger.info(f"Processing {len(patients)} patients ...")
-        for patient_dir in patients:
-            generate_patient_montage(
-                patient_dir,
-                output_dir / f"{patient_dir.name}.png",
-            )
+        logger.info(f"Processing {len(patients)} patients with {args.workers} workers ...")
+        tasks = [
+            (pd, output_dir / f"{pd.name}.png") for pd in patients
+        ]
+        with ProcessPoolExecutor(max_workers=args.workers) as pool:
+            futures = {
+                pool.submit(generate_patient_montage, p, o): p.name
+                for p, o in tasks
+            }
+            done = 0
+            for fut in as_completed(futures):
+                done += 1
+                pid = futures[fut]
+                try:
+                    fut.result()
+                except Exception:
+                    logger.exception(f"Failed for {pid}")
+                if done % 20 == 0:
+                    logger.info(f"  Progress: {done}/{len(patients)}")
         logger.info(f"Done. {len(patients)} montages saved to {output_dir}")
 
 

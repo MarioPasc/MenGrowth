@@ -179,6 +179,7 @@ raw_data:
     - source/baseline/TC     # Tomografía Computarizada (or Contrast)
     - source/controls        # Control/follow-up studies
     - extension_1            # Extension cohort
+    - extension_2            # Extension cohort    
 
   # Filtering configuration
   # Applied after reorganization to ensure data quality and completeness
@@ -228,7 +229,7 @@ raw_data:
   # Applied after basic filtering to ensure data quality for preprocessing
   quality_filtering:
     # Master switch to enable/disable all quality filtering
-    enabled: true
+    enabled: false
 
     # When true, remove studies/patients with blocking quality issues
     remove_blocked: true
@@ -318,15 +319,15 @@ raw_data:
         t1n: 3.0
         t2w: 3.7
         t2f: 2.7
-      action: "block"            # "warn" or "block"
+      action: "warn"            # "warn" or "block"
 
     # B5: Ghosting Detection
     # Detects ghosting artifacts via corner signal intensity
     ghosting_detection:
-      enabled: true
+      enabled: false
       max_corner_to_foreground_ratio: 0.15  # Max corner/foreground mean ratio
       corner_cube_size: 10       # Voxel cube size for corner sampling
-      action: "block"             # "warn" or "block"
+      action: "warn"             # "warn" or "block"
 
     # C1: Affine Matrix Validation
     # Validates affine transformation matrix

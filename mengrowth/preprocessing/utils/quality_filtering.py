@@ -4,6 +4,7 @@ This module provides validation functions for filtering data based on quality
 metrics before preprocessing. All thresholds are configurable via YAML.
 """
 
+import gc
 import logging
 import os
 import shutil
@@ -618,14 +619,19 @@ def check_motion_artifact(
         for axis in range(min(3, data.ndim)):
             grad_mag_gpu += gpu_sobel(data_gpu, axis=axis) ** 2
         grad_mag = cp.asnumpy(cp.sqrt(grad_mag_gpu))
+        del data_gpu, grad_mag_gpu
     else:
         grad_mag = np.zeros_like(data)
         for axis in range(min(3, data.ndim)):
             grad_mag += sobel(data, axis=axis) ** 2
         grad_mag = np.sqrt(grad_mag)
 
+    # Free the float64 copy — no longer needed after gradient computation
+    del data
+
     # Compute entropy of gradient histogram
     hist, _ = np.histogram(grad_mag[grad_mag > 0], bins=256)
+    del grad_mag
     hist = hist.astype(np.float64)
     hist_sum = hist.sum()
     if hist_sum == 0:
@@ -1189,8 +1195,9 @@ def validate_file(
         modality=modality,
     )
 
-    # Load file once
-    file_data = load_nrrd_file(file_path, load_data=load_data)
+    # Phase 1: Load header only — cheap, catches structural issues before
+    # committing to a potentially multi-GB data load.
+    file_data = load_nrrd_file(file_path, load_data=False)
     if file_data is None:
         report.results.append(
             ValidationResult(
@@ -1207,18 +1214,51 @@ def validate_file(
     report.results.append(detect_scout_localizer(file_data, config))
     report.results.append(check_voxel_spacing(file_data, config))
 
-    # B: Image Quality (requires data)
-    if load_data and file_data.data is not None:
-        report.results.append(check_snr(file_data, config))
-        report.results.append(check_contrast(file_data, config))
-        report.results.append(check_intensity_outliers(file_data, config))
-        report.results.append(check_motion_artifact(file_data, config, use_gpu=use_gpu))
-        report.results.append(check_ghosting(file_data, config))
-
     # C: Geometric (header only)
     report.results.append(validate_affine(file_data, config))
     report.results.append(check_fov_consistency(file_data, config))
     report.results.append(check_brain_coverage(file_data, config))
+
+    # Early exit: if any header check already blocks, skip the expensive
+    # data-loading phase entirely. This prevents a single anomalous file
+    # (e.g., 4D timeseries, ultra-high-res) from OOM-ing the worker.
+    if report.has_blocking_issues:
+        logger.info(
+            f"Skipping data checks for {file_path.name} "
+            f"(blocked by header checks)"
+        )
+        del file_data
+        return report
+
+    # Phase 2: Load full image data for quality checks.
+    if load_data:
+        file_data_full = load_nrrd_file(file_path, load_data=True)
+        if file_data_full is None or file_data_full.data is None:
+            report.results.append(
+                ValidationResult(
+                    passed=False,
+                    check_name="file_read",
+                    message=f"Failed to read image data: {file_path}",
+                    action="block",
+                )
+            )
+            del file_data
+            return report
+
+        # B: Image Quality (requires data)
+        report.results.append(check_snr(file_data_full, config))
+        report.results.append(check_contrast(file_data_full, config))
+        report.results.append(check_intensity_outliers(file_data_full, config))
+        report.results.append(
+            check_motion_artifact(file_data_full, config, use_gpu=use_gpu)
+        )
+        report.results.append(check_ghosting(file_data_full, config))
+
+        # Free image data immediately
+        del file_data_full
+
+    del file_data
+    gc.collect()
 
     return report
 
@@ -1301,6 +1341,9 @@ def _validate_patient(
 
         patient_report.study_reports.append(study_report)
 
+        # Force GC between studies to release image memory in worker processes
+        gc.collect()
+
     # Patient-level checks
     if len(study_dirs) >= 2:
         # D1: Temporal ordering
@@ -1374,6 +1417,59 @@ def _aggregate_patient_stats(
         stats.patients_passed += 1
 
 
+def _get_available_memory_gb() -> Optional[float]:
+    """Get available system memory in GB from /proc/meminfo.
+
+    Returns:
+        Available memory in GB, or None if unavailable (non-Linux).
+    """
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) / (1024 * 1024)
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+def _cap_workers_by_memory(
+    n_workers: int,
+    per_worker_gb: float = 1.0,
+    reserve_gb: float = 2.0,
+) -> int:
+    """Cap worker count based on available system memory.
+
+    Each quality filtering worker loads full 3D MRI volumes and creates
+    temporary float64 arrays during motion artifact detection, peaking at
+    ~500 MB-1 GB per worker. This function ensures we don't spawn more
+    workers than available RAM can support.
+
+    Args:
+        n_workers: Requested number of workers.
+        per_worker_gb: Estimated peak memory per worker in GB.
+        reserve_gb: Memory to reserve for OS and other processes.
+
+    Returns:
+        Capped number of workers (at least 1).
+    """
+    available = _get_available_memory_gb()
+    if available is None:
+        return n_workers
+
+    usable = max(0, available - reserve_gb)
+    safe_workers = max(1, int(usable / per_worker_gb))
+
+    if safe_workers < n_workers:
+        logger.warning(
+            f"Capping workers from {n_workers} to {safe_workers} based on "
+            f"available memory ({available:.1f} GB available, "
+            f"~{per_worker_gb} GB per worker, {reserve_gb} GB reserved)"
+        )
+
+    return min(n_workers, safe_workers)
+
+
 def run_quality_filtering(
     data_root: Path,
     config: QualityFilteringConfig,
@@ -1406,6 +1502,10 @@ def run_quality_filtering(
 
     if n_workers is None:
         n_workers = max(1, (os.cpu_count() or 4) // 2)
+
+    # Cap workers based on available RAM to prevent OOM during parallel
+    # MRI quality checks (each worker peaks at ~0.5-1 GB for motion artifact)
+    n_workers = _cap_workers_by_memory(n_workers)
 
     # Use GPU only in single-process mode to avoid CUDA fork issues
     use_gpu = HAS_CUPY and n_workers <= 1
@@ -1452,7 +1552,9 @@ def run_quality_filtering(
         # temporal ordering check doesn't actually use it.
         logger.info(f"Submitting {total_patients} patients to process pool...")
 
-        with ProcessPoolExecutor(max_workers=n_workers) as executor:
+        with ProcessPoolExecutor(
+            max_workers=n_workers, max_tasks_per_child=1
+        ) as executor:
             future_to_patient = {
                 executor.submit(
                     _validate_patient, patient_dir, config, None

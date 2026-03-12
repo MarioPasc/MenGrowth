@@ -6,11 +6,11 @@ input structures into a standardized format for reproducible research pipelines.
 The reorganization follows the structure:
     {output_root}/MenGrowth-2025/P{patient_id}/{study_number}/*.nrrd
 
-Input sources:
+Input sources (configured via input_sources in YAML):
     - source/baseline/RM/{modality}/{patient}/files.nrrd
     - source/baseline/TC/{patient}/files.nrrd
     - source/controls/{patient}/{control1,control2,...}/files.nrrd
-    - extension_1/{patient_id}/{primera,segunda,...}/files.nrrd
+    - extension_N/{patient_id}/{primera,segunda,...}/files.nrrd  (any number of extensions)
 """
 
 import csv
@@ -284,13 +284,16 @@ def scan_source_controls(
 def scan_extension(
     extension_path: Path, config: RawDataConfig, rejected_files: List[RejectedFile]
 ) -> List[Tuple[Path, str, str]]:
-    """Scan extension_1 directory for additional patient cohort.
+    """Scan an extension directory for additional patient cohort.
 
     Patient IDs are converted to 'P' prefix format (e.g., 85 -> P85).
     Study directories (primera, segunda, ...) map to study numbers (0, 1, ...).
 
+    Works with any extension directory (extension_1, extension_2, etc.) as
+    they all share the same structure: {patient_id}/{study_name}/files.nrrd.
+
     Args:
-        extension_path: Path to extension_1 directory.
+        extension_path: Path to extension directory (e.g., extension_1, extension_2).
         config: Raw data configuration with study mappings and exclusion patterns.
         rejected_files: List to append rejected file records to.
 
@@ -589,17 +592,24 @@ def reorganize_raw_data(
     """Reorganize raw MRI data from complex nested structure to standardized format.
 
     This is the main orchestration function that:
-    1. Scans all input sources (baseline, controls, extension)
+    1. Scans all input sources defined in config.input_sources
     2. Collects file metadata (patient ID, study number)
     3. Copies files to standardized output structure with normalized names
     4. Excludes unwanted files (segmentations, transforms, etc.)
     5. Generates CSV report of all rejected files
 
+    Source dispatching is driven by the ``input_sources`` list in YAML config.
+    Supported source patterns:
+        - ``source/baseline/RM``, ``source/baseline/TC`` → scan_source_baseline
+        - ``source/controls`` → scan_source_controls
+        - ``extension_*`` (e.g. extension_1, extension_2) → scan_extension
+
     Args:
-        input_root: Root directory containing 'source' and 'extension_1' folders.
+        input_root: Root directory containing source and extension folders.
         output_root: Root directory for reorganized output.
         config: Raw data configuration with mappings and exclusions.
         dry_run: If True, simulate operations without copying files.
+        n_workers: Number of parallel threads for file copying.
 
     Returns:
         Dictionary with reorganization statistics.
@@ -630,19 +640,44 @@ def reorganize_raw_data(
     rejected_files: List[RejectedFile] = []
 
     # Collect all files from different sources
-    all_files = []
+    all_files: List[Tuple[Path, str, str]] = []
 
-    # 1. Scan source/baseline (RM + TC -> study 0)
-    baseline_path = input_root / "source" / "baseline"
-    all_files.extend(scan_source_baseline(baseline_path, config, rejected_files))
-
-    # 2. Scan source/controls (control1 -> study 1, control2 -> study 2, ...)
-    controls_path = input_root / "source" / "controls"
-    all_files.extend(scan_source_controls(controls_path, config, rejected_files))
-
-    # 3. Scan extension_1 (primera -> study 0, segunda -> study 1, ...)
-    extension_path = input_root / "extension_1"
-    all_files.extend(scan_extension(extension_path, config, rejected_files))
+    # Dispatch scanning based on configured input sources
+    if config.input_sources:
+        baseline_scanned = False
+        for source in config.input_sources:
+            if source.startswith("source/baseline"):
+                # source/baseline/RM and source/baseline/TC are handled
+                # together by scan_source_baseline — only scan once
+                if not baseline_scanned:
+                    baseline_scanned = True
+                    baseline_path = input_root / "source" / "baseline"
+                    all_files.extend(
+                        scan_source_baseline(baseline_path, config, rejected_files)
+                    )
+            elif source == "source/controls":
+                controls_path = input_root / source
+                all_files.extend(
+                    scan_source_controls(controls_path, config, rejected_files)
+                )
+            elif source.startswith("extension"):
+                extension_path = input_root / source
+                all_files.extend(
+                    scan_extension(extension_path, config, rejected_files)
+                )
+            else:
+                logger.warning(f"Unknown input source '{source}', skipping")
+    else:
+        # Fallback: legacy hardcoded paths when no input_sources configured
+        logger.warning(
+            "No input_sources configured in YAML, using legacy hardcoded paths"
+        )
+        baseline_path = input_root / "source" / "baseline"
+        all_files.extend(scan_source_baseline(baseline_path, config, rejected_files))
+        controls_path = input_root / "source" / "controls"
+        all_files.extend(scan_source_controls(controls_path, config, rejected_files))
+        extension_path = input_root / "extension_1"
+        all_files.extend(scan_extension(extension_path, config, rejected_files))
 
     if not all_files:
         raise ValueError(

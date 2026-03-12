@@ -12,21 +12,70 @@
 #   sequence   (optional): Modalities where the issue was observed, e.g. [t1c] or [t1c, t2w]
 
 exclusions:
-  - patient_id: "MenGrowth-0022"
-    study_id: "MenGrowth-0022-001"
+  - patient_id: "MenGrowth-0013"
+    study_id: "MenGrowth-0013-000"
     reason: "Out-of-FOV brain"
-    sequence: [t1c, t1w]
-  - patient_id: "MenGrowth-0024"
-    study_id: "MenGrowth-0024-001"
+    sequence: [t1c]
+  - patient_id: "MenGrowth-0014"
+    study_id: "MenGrowth-0014-000"
     reason: "Out-of-FOV brain"
-    sequence: [t1w]
-  - patient_id: "MenGrowth-0034"
-    study_id: "MenGrowth-0034-000"
+    sequence: [t1c]
+  - patient_id: "MenGrowth-0019"
+    study_id: "MenGrowth-0019-003"
     reason: "Out-of-FOV brain"
-    sequence: [t2f]
-  - patient_id: "MenGrowth-0005"
-    study_id: "MenGrowth-0005-000"
+    sequence: [t1c]
+  - patient_id: "MenGrowth-0027"
+    study_id: "MenGrowth-0027-000"
     reason: "Out-of-FOV brain"
-    sequence: [t2f]
+    sequence: [t1c]
+  - patient_id: "MenGrowth-0028"
+    study_id: "MenGrowth-0028-000"
+    reason: "Out-of-FOV brain"
+    sequence: [t1c]
+  - patient_id: "MenGrowth-0037"
+    study_id: "MenGrowth-0037-000"
+    reason: "Out-of-FOV brain"
+    sequence: [t1c]
+  - patient_id: "MenGrowth-0038"
+    study_id: "MenGrowth-0038-004"
+    reason: "Out-of-FOV brain"
+    sequence: [t1c]
+
+  - patient_id: "MenGrowth-0039"
+    study_id: "MenGrowth-0039-000"
+    reason: "Out-of-FOV brain"
+    sequence: [t1c]
+  - patient_id: "MenGrowth-0039"
+    study_id: "MenGrowth-0039-001"
+    reason: "Out-of-FOV brain"
+    sequence: [t1c]
+  - patient_id: "MenGrowth-0039"
+    study_id: "MenGrowth-0039-002"
+    reason: "Out-of-FOV brain"
+    sequence: [t1c]
+
+
+
+  - patient_id: "MenGrowth-0040"
+    study_id: "MenGrowth-0040-001"
+    reason: "Out-of-FOV brain"
+    sequence: [t1c]
+  - patient_id: "MenGrowth-0041"
+    study_id: "MenGrowth-0041-000"
+    reason: "Out-of-FOV brain"
+    sequence: [t1c]
+  - patient_id: "MenGrowth-0051"
+    study_id: "MenGrowth-0051-000"
+    reason: "Out-of-FOV brain"
+    sequence: [t1c]
+  - patient_id: "MenGrowth-0051"
+    study_id: "MenGrowth-0051-000"
+    reason: "Out-of-FOV brain"
+    sequence: [t1c]
+  - patient_id: "MenGrowth-0055"
+    study_id: "MenGrowth-0055-000"
+    reason: "Out-of-FOV brain"
+    sequence: [t1c]
+
 # Minimum longitudinal studies required to keep a patient (default: 2)
 min_studies_per_patient: 2

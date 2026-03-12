@@ -5,6 +5,7 @@ scanning, metric computation, parallelization, and result aggregation.
 """
 
 import csv
+import gc
 import json
 import logging
 import time
@@ -35,6 +36,58 @@ from mengrowth.preprocessing.quality_analysis.metrics import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _get_available_memory_gb() -> Optional[float]:
+    """Get available system memory in GB from /proc/meminfo."""
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) / (1024 * 1024)
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+def _cap_workers_by_memory(
+    n_workers: Optional[int],
+    log: Optional[logging.Logger] = None,
+    per_worker_gb: float = 1.0,
+    reserve_gb: float = 2.0,
+) -> Optional[int]:
+    """Cap worker count based on available system memory.
+
+    Args:
+        n_workers: Requested number of workers (None means unlimited).
+        log: Logger instance for warnings.
+        per_worker_gb: Estimated peak memory per worker in GB.
+        reserve_gb: Memory to reserve for OS and other processes.
+
+    Returns:
+        Capped number of workers.
+    """
+    if n_workers is not None and n_workers <= 1:
+        return n_workers
+
+    available = _get_available_memory_gb()
+    if available is None:
+        return n_workers
+
+    usable = max(0, available - reserve_gb)
+    safe_workers = max(1, int(usable / per_worker_gb))
+
+    if n_workers is None or safe_workers < n_workers:
+        _log = log or logger
+        effective = n_workers if n_workers is not None else "unlimited"
+        _log.warning(
+            f"Capping workers from {effective} to {safe_workers} based on "
+            f"available memory ({available:.1f} GB available, "
+            f"~{per_worker_gb} GB per worker, {reserve_gb} GB reserved)"
+        )
+        return safe_workers
+
+    return n_workers
 
 
 class QualityAnalyzer:
@@ -214,9 +267,13 @@ class QualityAnalyzer:
                         image, sequence_name, image_path
                     )
 
+                    # Free image data after metrics are computed
+                    del image
+
                 study_result["sequences"][sequence_name] = seq_result
 
             patient_results["studies"].append(study_result)
+            gc.collect()
 
         return patient_results
 
@@ -325,12 +382,18 @@ class QualityAnalyzer:
         if self.config.parallel.enabled and not self.config.dry_run:
             # Parallel processing
             n_workers = self.config.parallel.n_workers or None
+
+            # Cap workers based on available RAM
+            n_workers = _cap_workers_by_memory(n_workers, self.logger)
+
             self.logger.info(
                 f"Analyzing {total_patients} patients ({total_studies} studies) "
                 f"in parallel (workers={n_workers})..."
             )
 
-            with ProcessPoolExecutor(max_workers=n_workers) as executor:
+            with ProcessPoolExecutor(
+                max_workers=n_workers, max_tasks_per_child=1
+            ) as executor:
                 # Submit all patient analysis tasks
                 future_to_patient = {
                     executor.submit(self.analyze_patient, patient_id, studies): patient_id
