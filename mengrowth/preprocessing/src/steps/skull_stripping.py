@@ -17,6 +17,7 @@ import logging
 
 import numpy as np
 import nibabel as nib
+from nibabel.processing import resample_from_to
 from scipy.ndimage import label as ndimage_label
 
 from mengrowth.preprocessing.src.config import StepExecutionContext
@@ -47,6 +48,28 @@ def _largest_connected_component(mask: np.ndarray) -> np.ndarray:
     component_sizes[0] = 0
     largest_label = component_sizes.argmax()
     return (labeled == largest_label).astype(mask.dtype)
+
+
+def _resample_mask_to_match(
+    mask_nii: nib.Nifti1Image,
+    target_nii: nib.Nifti1Image,
+) -> np.ndarray:
+    """Resample a binary mask to match a target image's voxel grid.
+
+    HD-BET and SynthStrip may internally resample the input image (e.g., to
+    isotropic spacing), producing masks whose shape differs from the original.
+    This function resamples the mask back to the target grid using
+    nearest-neighbor interpolation to preserve binary values.
+
+    Args:
+        mask_nii: Binary mask NIfTI image (any shape/affine).
+        target_nii: Target image whose shape and affine the mask must match.
+
+    Returns:
+        Boolean mask array with shape == target_nii.shape[:3].
+    """
+    resampled = resample_from_to(mask_nii, (target_nii.shape[:3], target_nii.affine), order=0)
+    return (resampled.get_fdata() > 0).astype(bool)
 
 
 def _execute_reference_mask_mode(
@@ -101,9 +124,23 @@ def _execute_reference_mask_mode(
         f"coverage={ref_result['brain_coverage_percent']:.1f}%"
     )
 
-    # Load the reference mask
+    # Load the reference mask and resample to match the reference image if needed
     ref_mask_nii = nib.load(str(ref_mask_path))
-    ref_mask_data = (ref_mask_nii.get_fdata() > 0).astype(bool)
+    ref_image_nii = nib.load(str(ref_path))
+    if ref_mask_nii.shape[:3] != ref_image_nii.shape[:3]:
+        logger.warning(
+            f"  Mask shape {ref_mask_nii.shape[:3]} != image shape {ref_image_nii.shape[:3]} "
+            f"for {ref_modality} — resampling mask to match image grid"
+        )
+        ref_mask_data = _resample_mask_to_match(ref_mask_nii, ref_image_nii)
+        # Save the resampled mask back so downstream steps get the correct shape
+        resampled_mask_nii = nib.Nifti1Image(
+            ref_mask_data.astype(np.uint8), ref_image_nii.affine, ref_image_nii.header
+        )
+        nib.save(resampled_mask_nii, str(ref_mask_path))
+        ref_mask_nii = resampled_mask_nii
+    else:
+        ref_mask_data = (ref_mask_nii.get_fdata() > 0).astype(bool)
 
     # ── Phase 2: Skipped (single authoritative mask) ──
     logger.info("  [Phase 2] Skipped — using single reference mask")
@@ -138,7 +175,16 @@ def _execute_reference_mask_mode(
             original_nii = nib.load(str(modality_path))
             original_data = original_nii.get_fdata()
 
-            stripped = np.where(ref_mask_data, original_data, ss_config.fill_value)
+            # Safety: resample mask if this modality has a different shape
+            mask_for_mod = ref_mask_data
+            if ref_mask_data.shape != original_data.shape:
+                logger.warning(
+                    f"  Mask shape {ref_mask_data.shape} != {modality} shape "
+                    f"{original_data.shape} — resampling mask"
+                )
+                mask_for_mod = _resample_mask_to_match(ref_mask_nii, original_nii)
+
+            stripped = np.where(mask_for_mod, original_data, ss_config.fill_value)
             stripped_nii = nib.Nifti1Image(
                 stripped.astype(original_data.dtype),
                 original_nii.affine,
@@ -324,14 +370,30 @@ def execute(
             f"(threshold={ss_config.consensus_threshold})"
         )
 
-        # Load all individual binary masks
+        # Load all individual binary masks, resampling to first modality's image grid
         mask_arrays = {}
         reference_nii = None
+        reference_image_nii = None
         for modality, mp in sorted(mask_paths.items()):
             nii = nib.load(str(mp))
-            mask_arrays[modality] = (nii.get_fdata() > 0).astype(np.uint8)
+            mod_image_path = study_output_dir / f"{modality}.nii.gz"
+            mod_image_nii = nib.load(str(mod_image_path))
+
             if reference_nii is None:
                 reference_nii = nii
+                reference_image_nii = mod_image_nii
+
+            # Resample mask to reference image grid if shapes differ
+            if nii.shape[:3] != reference_image_nii.shape[:3]:
+                logger.warning(
+                    f"  Mask for {modality} shape {nii.shape[:3]} != reference "
+                    f"shape {reference_image_nii.shape[:3]} — resampling for consensus"
+                )
+                mask_arrays[modality] = _resample_mask_to_match(
+                    nii, reference_image_nii
+                ).astype(np.uint8)
+            else:
+                mask_arrays[modality] = (nii.get_fdata() > 0).astype(np.uint8)
 
         # Vote map: sum of binary masks → values 0..N
         vote_map = np.zeros_like(next(iter(mask_arrays.values())), dtype=np.int32)
@@ -390,7 +452,18 @@ def execute(
             logger.info(f"  [Phase 3] Applying consensus mask to {modality}...")
             original_nii = nib.load(str(modality_path))
             original_data = original_nii.get_fdata()
-            consensus_data = consensus_mask_nii.get_fdata().astype(bool)
+
+            # Resample consensus mask if shape doesn't match this modality
+            if consensus_mask_nii.shape[:3] != original_data.shape:
+                logger.warning(
+                    f"  Consensus mask shape {consensus_mask_nii.shape[:3]} != "
+                    f"{modality} shape {original_data.shape} — resampling"
+                )
+                consensus_data = _resample_mask_to_match(
+                    consensus_mask_nii, original_nii
+                )
+            else:
+                consensus_data = consensus_mask_nii.get_fdata().astype(bool)
 
             stripped = np.where(consensus_data, original_data, ss_config.fill_value)
             stripped_nii = nib.Nifti1Image(

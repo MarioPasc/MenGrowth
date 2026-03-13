@@ -90,7 +90,45 @@ def nifti_write_3d(
     """
 
     if isinstance(volume, (str, os.PathLike)):
-        data, hdr = nrrd.read(volume)
+        # Validate header before loading data — catches corrupt files early
+        # without allocating a potentially multi-GB data buffer.
+        try:
+            hdr = nrrd.read_header(str(volume))
+        except Exception as e:
+            raise ValueError(f"Cannot read NRRD header from {volume}: {e}") from e
+
+        if "dimension" not in hdr or hdr["dimension"] != 3:
+            raise ValueError(
+                f"Only 3D NRRD data supported, got dimension={hdr.get('dimension')}"
+            )
+
+        # Validate that declared sizes are consistent before loading data
+        sizes = hdr.get("sizes")
+        if sizes is not None:
+            expected_voxels = int(np.prod(sizes))
+            dtype_str = hdr.get("type", "")
+            # nrrd type strings → numpy dtype for byte-size check
+            _type_map = {
+                "int16": 2, "short": 2, "uint16": 2, "ushort": 2,
+                "int32": 4, "int": 4, "uint32": 4, "uint": 4,
+                "float32": 4, "float": 4, "float64": 8, "double": 8,
+                "int8": 1, "uint8": 1, "uchar": 1, "signed char": 1,
+            }
+            bytes_per_elem = _type_map.get(dtype_str.lower(), 0)
+            if bytes_per_elem > 0:
+                file_size = os.path.getsize(volume)
+                expected_data_bytes = expected_voxels * bytes_per_elem
+                # If file is much smaller than expected raw data, it's likely
+                # compressed — skip this check. But if uncompressed and
+                # mismatched, the file is corrupt.
+                encoding = hdr.get("encoding", "raw")
+                if encoding == "raw" and file_size < expected_data_bytes:
+                    raise ValueError(
+                        f"Corrupt NRRD: expected {expected_data_bytes} bytes "
+                        f"for {sizes} × {dtype_str}, but file is {file_size} bytes"
+                    )
+
+        data, hdr = nrrd.read(str(volume))
     else:
         data, hdr = volume
         data = sitk.GetArrayFromImage(data)
