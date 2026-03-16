@@ -10,7 +10,7 @@ to the nifti header through the numpy converter.
 """
 
 import collections
-import nrrd  
+import nrrd
 import numpy as np
 import argparse
 import os
@@ -109,24 +109,81 @@ def nifti_write_3d(
             dtype_str = hdr.get("type", "")
             # nrrd type strings → numpy dtype for byte-size check
             _type_map = {
-                "int16": 2, "short": 2, "uint16": 2, "ushort": 2,
-                "int32": 4, "int": 4, "uint32": 4, "uint": 4,
-                "float32": 4, "float": 4, "float64": 8, "double": 8,
-                "int8": 1, "uint8": 1, "uchar": 1, "signed char": 1,
+                "int16": 2,
+                "short": 2,
+                "uint16": 2,
+                "ushort": 2,
+                "unsigned short": 2,
+                "int32": 4,
+                "int": 4,
+                "uint32": 4,
+                "uint": 4,
+                "unsigned int": 4,
+                "float32": 4,
+                "float": 4,
+                "float64": 8,
+                "double": 8,
+                "int8": 1,
+                "uint8": 1,
+                "uchar": 1,
+                "signed char": 1,
+                "unsigned char": 1,
             }
             bytes_per_elem = _type_map.get(dtype_str.lower(), 0)
             if bytes_per_elem > 0:
                 file_size = os.path.getsize(volume)
                 expected_data_bytes = expected_voxels * bytes_per_elem
-                # If file is much smaller than expected raw data, it's likely
-                # compressed — skip this check. But if uncompressed and
-                # mismatched, the file is corrupt.
                 encoding = hdr.get("encoding", "raw")
                 if encoding == "raw" and file_size < expected_data_bytes:
                     raise ValueError(
                         f"Corrupt NRRD: expected {expected_data_bytes} bytes "
                         f"for {sizes} × {dtype_str}, but file is {file_size} bytes"
                     )
+                elif encoding in ("gzip", "gz"):
+                    # Validate gzip integrity via streaming decompression:
+                    # count decompressed bytes in chunks to avoid holding the
+                    # full volume in memory twice (validation + nrrd.read).
+                    import gzip as _gzip
+                    import zlib as _zlib
+
+                    try:
+                        # Find where compressed data starts (after header)
+                        with open(str(volume), "rb") as _f:
+                            nrrd.read_header(_f)
+                            data_offset = _f.tell()
+
+                        decompressed_size = 0
+                        _CHUNK = 1 << 20  # 1 MB chunks
+                        _deobj = _zlib.decompressobj(_zlib.MAX_WBITS | 16)
+                        with open(str(volume), "rb") as _f:
+                            _f.seek(data_offset)
+                            while True:
+                                chunk = _f.read(_CHUNK)
+                                if not chunk:
+                                    break
+                                out = _deobj.decompress(chunk)
+                                decompressed_size += len(out)
+                            # Flush remaining
+                            out = _deobj.flush()
+                            decompressed_size += len(out)
+
+                        if decompressed_size != expected_data_bytes:
+                            raise ValueError(
+                                f"Corrupt gzip NRRD: decompressed {decompressed_size} bytes "
+                                f"but expected {expected_data_bytes} bytes "
+                                f"for {sizes} × {dtype_str}. "
+                                f"File likely truncated during transfer — re-copy from source."
+                            )
+                    except (
+                        EOFError,
+                        _zlib.error,
+                        _gzip.BadGzipFile,
+                        OSError,
+                    ) as gz_err:
+                        raise ValueError(
+                            f"Corrupt gzip NRRD: decompression failed ({gz_err}). "
+                            f"File likely truncated during transfer — re-copy from source."
+                        ) from gz_err
 
         data, hdr = nrrd.read(str(volume))
     else:
@@ -206,9 +263,7 @@ def main():
     parser.add_argument(
         "-i", "--input", type=str, required=True, help="Input 3D NRRD/NHDR file"
     )
-    parser.add_argument(
-        "-o", "--output", type=str, help="Output file prefix"
-    )
+    parser.add_argument("-o", "--output", type=str, help="Output file prefix")
     args = parser.parse_args()
 
     nifti_write_3d(args.input, args.output, verbose=True)

@@ -423,6 +423,20 @@ class PreprocessingOrchestrator:
         Returns:
             Component instance (cached for reuse)
         """
+        # Atlas registrator caches the reference modality at creation time.
+        # If the reference changed (different study, different available modalities),
+        # we must recreate it to avoid using a stale reference.
+        if component_type.startswith("intra_study_to_atlas_"):
+            cached = self._components.get(component_type)
+            if cached is not None:
+                cached_ref = getattr(cached, "reference_modality", None)
+                if cached_ref != self.selected_reference_modality:
+                    self.logger.info(
+                        f"  Atlas registrator reference changed: "
+                        f"{cached_ref} → {self.selected_reference_modality}, recreating"
+                    )
+                    del self._components[component_type]
+
         if component_type not in self._components:
             self._components[component_type] = self._create_component(
                 component_type, config
@@ -856,8 +870,10 @@ class PreprocessingOrchestrator:
             for study_dir in study_dirs:
                 try:
                     self.archiver.save_pipeline_metadata(
-                        patient_id, study_dir.name,
-                        self.config.steps, self.config.modalities,
+                        patient_id,
+                        study_dir.name,
+                        self.config.steps,
+                        self.config.modalities,
                     )
                 except Exception as e:
                     self.logger.warning(f"Archive metadata save failed: {e}")
@@ -1234,9 +1250,9 @@ class PreprocessingOrchestrator:
                 if self.archiver and self.archiver.should_archive(patient_id):
                     try:
                         modality_paths = {
-                            mod: self._get_output_paths(
-                                patient_id, study_dir, mod
-                            )["nifti"]
+                            mod: self._get_output_paths(patient_id, study_dir, mod)[
+                                "nifti"
+                            ]
                             for mod in self.config.modalities
                         }
                         # Compute 1-based step index from pipeline config
@@ -1254,9 +1270,7 @@ class PreprocessingOrchestrator:
                             result=result or {},
                         )
                     except Exception as e:
-                        self.logger.warning(
-                            f"  Archive study snapshot failed: {e}"
-                        )
+                        self.logger.warning(f"  Archive study snapshot failed: {e}")
 
             except Exception as e:
                 self.logger.error(f"  Study-level step '{step_name}' failed: {e}")

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #SBATCH -J mgpp
-#SBATCH --time=0-01:30:00
+#SBATCH --time=0-02:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=16G
+#SBATCH --mem=32G
 #SBATCH --constraint=dgx
 #SBATCH --gres=gpu:1
 #SBATCH --output=preprocess_%A_%a.out

@@ -113,7 +113,30 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
         # 1. Register reference modality to atlas
         reference_file = study_dir / f"{self.reference_modality}.nii.gz"
         if not reference_file.exists():
-            raise ValueError(f"Reference modality file not found: {reference_file}")
+            # Graceful fallback: try alternative modalities if reference is missing
+            # (e.g., NRRD conversion failed for this modality in this study)
+            fallback_priority = ["t1c", "t1n", "t2f", "t2w"]
+            original_ref = self.reference_modality
+            found_fallback = False
+            for candidate in fallback_priority:
+                if candidate == original_ref:
+                    continue
+                candidate_file = study_dir / f"{candidate}.nii.gz"
+                if candidate_file.exists():
+                    self.logger.warning(
+                        f"Reference modality '{original_ref}' not found — "
+                        f"falling back to '{candidate}' for atlas registration"
+                    )
+                    self.reference_modality = candidate
+                    reference_file = candidate_file
+                    found_fallback = True
+                    break
+            if not found_fallback:
+                raise ValueError(
+                    f"Reference modality file not found: "
+                    f"{study_dir / f'{original_ref}.nii.gz'} "
+                    f"and no fallback modality available"
+                )
 
         registration_dir = artifacts_dir / "registration"
         registration_dir.mkdir(parents=True, exist_ok=True)

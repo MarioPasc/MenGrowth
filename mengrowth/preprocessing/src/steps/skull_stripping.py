@@ -11,7 +11,7 @@ Two modes of operation:
 """
 
 import shutil
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from pathlib import Path
 import logging
 
@@ -68,7 +68,9 @@ def _resample_mask_to_match(
     Returns:
         Boolean mask array with shape == target_nii.shape[:3].
     """
-    resampled = resample_from_to(mask_nii, (target_nii.shape[:3], target_nii.affine), order=0)
+    resampled = resample_from_to(
+        mask_nii, (target_nii.shape[:3], target_nii.affine), order=0
+    )
     return (resampled.get_fdata() > 0).astype(bool)
 
 
@@ -97,15 +99,33 @@ def _execute_reference_mask_mode(
     ss_config = config.skull_stripping
     ref_modality = ss_config.reference_mask_modality
 
-    logger.info(f"  Reference mask mode: using {ref_modality} mask for all modalities")
-
-    # ── Phase 1: Extract brain mask from reference modality only ──
+    # Graceful fallback: if configured reference modality is missing (e.g., its
+    # NRRD conversion failed), try alternative modalities in priority order.
     ref_path = study_output_dir / f"{ref_modality}.nii.gz"
     if not ref_path.exists():
-        raise RuntimeError(
-            f"Reference modality '{ref_modality}' not found at {ref_path}. "
-            f"Cannot perform reference-mask skull stripping."
-        )
+        fallback_priority = ["t1c", "t1n", "t2f", "t2w"]
+        original_ref = ref_modality
+        ref_modality = None
+        for candidate in fallback_priority:
+            if candidate == original_ref:
+                continue
+            candidate_path = study_output_dir / f"{candidate}.nii.gz"
+            if candidate_path.exists():
+                ref_modality = candidate
+                ref_path = candidate_path
+                logger.warning(
+                    f"  Reference modality '{original_ref}' not found — "
+                    f"falling back to '{ref_modality}' for skull stripping"
+                )
+                break
+        if ref_modality is None:
+            raise RuntimeError(
+                f"Reference modality '{original_ref}' not found at "
+                f"{study_output_dir / f'{original_ref}.nii.gz'} and no fallback "
+                f"modality available. Cannot perform skull stripping."
+            )
+
+    logger.info(f"  Reference mask mode: using {ref_modality} mask for all modalities")
 
     logger.info(f"  [Phase 1] Extracting brain mask from {ref_modality}...")
 
@@ -166,7 +186,9 @@ def _execute_reference_mask_mode(
                 )
 
             # Replace original with skull-stripped output
-            logger.info(f"  [Phase 3] Using skull-stripped output for {modality} (reference)")
+            logger.info(
+                f"  [Phase 3] Using skull-stripped output for {modality} (reference)"
+            )
             temp_ref_stripped.replace(modality_path)
             results[modality] = ref_result
         else:
