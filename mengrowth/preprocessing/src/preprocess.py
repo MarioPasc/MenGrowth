@@ -900,7 +900,28 @@ class PreprocessingOrchestrator:
                 f"(need 2+ for longitudinal registration)"
             )
 
-        # PHASE 3: Finalize QC for this patient (if enabled)
+        # PHASE 3: Generate patient summary montage
+        try:
+            from mengrowth.preprocessing.src.visualization.patient_summary import (
+                generate_patient_summary,
+            )
+
+            viz_root = Path(self.config.viz_root)
+            summary_path = viz_root / patient_id / "patient_summary.png"
+            output_root = (
+                Path(self.config.output_root) if self.config.mode == "test" else None
+            )
+            generate_patient_summary(
+                patient_id=patient_id,
+                study_dirs=study_dirs,
+                modalities=self.config.modalities,
+                output_path=summary_path,
+                output_root=output_root,
+            )
+        except Exception as e:
+            self.logger.warning(f"Patient summary visualization failed: {e}")
+
+        # PHASE 4: Finalize QC for this patient (if enabled)
         if self.qc_manager:
             try:
                 qc_outputs = self.qc_manager.finalize()
