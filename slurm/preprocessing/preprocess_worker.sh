@@ -3,7 +3,7 @@
 #SBATCH --time=0-02:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=32G
+#SBATCH --mem=64G
 #SBATCH --constraint=dgx
 #SBATCH --gres=gpu:1
 #SBATCH --output=preprocess_%A_%a.out
