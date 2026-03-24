@@ -290,6 +290,33 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
                 # Default to the last transform type
                 type_of_transform = transforms[-1] if transforms else "Affine"
 
+            # Detect thick-slice reference volumes and adapt parameters.
+            # When the reference modality is thick-slice (e.g., all-2D studies with
+            # 5-7mm t1n), Affine (12 DOF) can converge to wrong local minima.
+            # Rigid (6 DOF) is more robust for these cases.
+            aniso_detection = self.config.get("anisotropy_detection", True)
+            if aniso_detection:
+                from mengrowth.preprocessing.src.registration.utils import (
+                    detect_thick_slice_volume,
+                )
+
+                aniso_threshold = self.config.get(
+                    "anisotropy_gradient_ratio_threshold", 3.0
+                )
+                is_thick_slice = detect_thick_slice_volume(
+                    reference_img, aniso_threshold, log=self.logger
+                )
+                if is_thick_slice:
+                    override = self.config.get(
+                        "thick_slice_transform_override", "Rigid"
+                    )
+                    self.logger.info(
+                        f"    Thick-slice reference detected — "
+                        f"overriding transform to {override} "
+                        f"(was {type_of_transform})"
+                    )
+                    type_of_transform = override
+
             # Extract parameters
             metric = self.config.get("metric", "Mattes").lower()
             metric_bins = self.config.get("metric_bins", 32)
@@ -306,23 +333,26 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
                 "smoothing_sigmas", [[2, 1, 0], [1, 0, 0]]
             )
 
-            # For multi-stage, use parameters from the final stage
-            # AntsPyX handles multi-resolution internally for composite transforms
+            # Use the FIRST (coarsest) parameter set for robust global alignment.
+            # ANTs' "Affine" type_of_transform runs Rigid+Affine internally but
+            # accepts only one set of aff_* parameters for the multi-resolution
+            # schedule. The first set starts at the highest shrink factor (e.g., 8),
+            # which is critical for finding the correct global alignment before
+            # fine-level refinement.
             if len(number_of_iterations_list) > 0:
-                # For Affine (which includes Rigid), use the affine parameters
-                # Typically the second set of parameters
+                aff_iterations = tuple(number_of_iterations_list[0])
+                aff_shrink_factors = tuple(shrink_factors_list[0])
+                aff_smoothing_sigmas = tuple(smoothing_sigmas_list[0])
                 if len(number_of_iterations_list) > 1:
-                    aff_iterations = tuple(number_of_iterations_list[1])
-                    aff_shrink_factors = tuple(shrink_factors_list[1])
-                    aff_smoothing_sigmas = tuple(smoothing_sigmas_list[1])
-                else:
-                    aff_iterations = tuple(number_of_iterations_list[0])
-                    aff_shrink_factors = tuple(shrink_factors_list[0])
-                    aff_smoothing_sigmas = tuple(smoothing_sigmas_list[0])
+                    self.logger.info(
+                        f"    Note: {len(number_of_iterations_list)} parameter sets "
+                        f"provided; using first (coarsest) set: "
+                        f"iters={aff_iterations}, shrink={aff_shrink_factors}"
+                    )
             else:
-                aff_iterations = (1000, 500, 250)
-                aff_shrink_factors = (4, 2, 1)
-                aff_smoothing_sigmas = (2, 1, 0)
+                aff_iterations = (2000, 1000, 500, 250)
+                aff_shrink_factors = (8, 4, 2, 1)
+                aff_smoothing_sigmas = (4, 2, 1, 0)
 
             transform_prefix = str(transform_path.with_suffix("").with_suffix(""))
 

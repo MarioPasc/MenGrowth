@@ -36,6 +36,12 @@ preprocessing:
       # Orientation
       reorient_to: "RAS"                 # "RAS" | "LPS"
 
+      # Intensity outlier clipping (hot pixel removal)
+      intensity_clipping:
+        enabled: true                    # true | false
+        upper_percentile: 99.9           # Percentile for clipping nonzero voxels [90.0-100.0]
+        log_clipped_count: true          # Log how many voxels were clipped
+
       # Background zeroing (conservative)
       background_zeroing:
         method: null # "border_connected_percentile" | "self_head_mask" | "otsu_foreground" | null
@@ -234,6 +240,11 @@ preprocessing:
           validate_registration_quality: true           # Compute and log registration quality metrics
           quality_warning_threshold: -0.3               # Warn if correlation dissimilarity > this threshold
 
+          # Thick-slice volume handling (auto-detect via gradient energy analysis)
+          anisotropy_detection: true                     # Auto-detect thick-slice volumes
+          anisotropy_gradient_ratio_threshold: 3.0       # In-plane/z gradient energy ratio threshold
+          thick_slice_transform_override: "Rigid"        # Override transform type for thick-slice volumes
+
         # Step 3b: Register reference modality to atlas space and propagate transforms
         intra_study_to_atlas:
           method: "ants"                                # "ants" | null (null to skip atlas registration)
@@ -269,6 +280,11 @@ preprocessing:
           use_center_of_mass_init: true                 # Align centers-of-mass before registration (helps avoid local minima)
           validate_registration_quality: true           # Compute and log registration quality metrics
           quality_warning_threshold: -0.3               # Warn if correlation dissimilarity > this threshold
+
+          # Thick-slice volume handling (auto-detect via gradient energy analysis)
+          anisotropy_detection: true                     # Auto-detect thick-slice reference volumes
+          anisotropy_gradient_ratio_threshold: 3.0       # In-plane/z gradient energy ratio threshold
+          thick_slice_transform_override: "Rigid"        # Override transform type for thick-slice references
 
     skull_stripping:
       save_visualization: true      # Save visualization PNGs

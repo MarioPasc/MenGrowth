@@ -44,6 +44,13 @@ preprocessing:
     data_harmonization:
       save_visualization: true
       reorient_to: "RAS"
+
+      # Intensity outlier clipping (hot pixel removal)
+      intensity_clipping:
+        enabled: true
+        upper_percentile: 99.9
+        log_clipped_count: true
+
       background_zeroing:
         method: null
 
@@ -158,6 +165,11 @@ preprocessing:
           validate_registration_quality: true
           quality_warning_threshold: -0.3
 
+          # Thick-slice volume handling
+          anisotropy_detection: true
+          anisotropy_gradient_ratio_threshold: 3.0
+          thick_slice_transform_override: "Rigid"
+
         intra_study_to_atlas:
           method: "ants"
           engine: "antspyx"
@@ -186,6 +198,11 @@ preprocessing:
           use_center_of_mass_init: true
           validate_registration_quality: true
           quality_warning_threshold: -0.3
+
+          # Thick-slice volume handling
+          anisotropy_detection: true
+          anisotropy_gradient_ratio_threshold: 3.0
+          thick_slice_transform_override: "Rigid"
 
     # Step 6: Skull Stripping (study-level) — NOW AFTER REGISTRATION
     # CHANGED from v2:

@@ -175,6 +175,33 @@ class StepRegistry:
 
 
 @dataclass
+class IntensityClippingConfig:
+    """Configuration for intensity outlier clipping (hot pixel removal).
+
+    Clips nonzero voxels above a high percentile to remove isolated intensity
+    spikes caused by scanner artifacts (dead pixel compensation, RF interference,
+    or reconstruction errors). Only operates on nonzero voxels to avoid
+    affecting background regions.
+
+    Attributes:
+        enabled: Whether to apply intensity clipping
+        upper_percentile: Percentile threshold for clipping nonzero voxels
+        log_clipped_count: Whether to log the number and fraction of clipped voxels
+    """
+
+    enabled: bool = True
+    upper_percentile: float = 99.9
+    log_clipped_count: bool = True
+
+    def __post_init__(self) -> None:
+        """Validate configuration values."""
+        if not 90.0 <= self.upper_percentile <= 100.0:
+            raise ConfigurationError(
+                f"upper_percentile must be in [90.0, 100.0], got {self.upper_percentile}"
+            )
+
+
+@dataclass
 class BackgroundZeroingConfig:
     """Configuration for background removal.
 
@@ -444,22 +471,28 @@ class BiasFieldCorrectionConfig:
 
 @dataclass
 class DataHarmonizationStepConfig:
-    """Configuration for data harmonization step (NRRD to NIfTI, reorient, background removal).
+    """Configuration for data harmonization step (NRRD to NIfTI, reorient, clip, background removal).
 
     Attributes:
         save_visualization: Whether to save visualization outputs for this step
         reorient_to: Target orientation convention ("RAS" or "LPS")
+        intensity_clipping: Configuration for intensity outlier clipping
         background_zeroing: Configuration for background removal
     """
 
     save_visualization: bool = True
     reorient_to: Literal["RAS", "LPS"] = "RAS"
+    intensity_clipping: IntensityClippingConfig = field(
+        default_factory=IntensityClippingConfig
+    )
     background_zeroing: BackgroundZeroingConfig = field(
         default_factory=BackgroundZeroingConfig
     )
 
     def __post_init__(self) -> None:
-        """Ensure background_zeroing is a BackgroundZeroingConfig instance."""
+        """Ensure nested configs are proper dataclass instances."""
+        if isinstance(self.intensity_clipping, dict):
+            self.intensity_clipping = IntensityClippingConfig(**self.intensity_clipping)
         if isinstance(self.background_zeroing, dict):
             self.background_zeroing = BackgroundZeroingConfig(**self.background_zeroing)
 
@@ -879,8 +912,19 @@ class IntraStudyToReferenceConfig:
     validate_registration_quality: bool = True
     quality_warning_threshold: float = -0.3
 
+    # Thick-slice detection and adaptation
+    anisotropy_detection: bool = True
+    anisotropy_gradient_ratio_threshold: float = 3.0
+    thick_slice_transform_override: str = "Rigid"
+
     def __post_init__(self) -> None:
         """Validate configuration values."""
+        if self.thick_slice_transform_override not in ("Rigid", "Affine"):
+            raise ConfigurationError(
+                f"thick_slice_transform_override must be 'Rigid' or 'Affine', "
+                f"got {self.thick_slice_transform_override}"
+            )
+
         # Validate method
         if self.method is not None and self.method not in ["ants"]:
             raise ConfigurationError(
@@ -1072,8 +1116,19 @@ class IntraStudyToAtlasConfig:
     validate_registration_quality: bool = True
     quality_warning_threshold: float = -0.3
 
+    # Thick-slice detection and adaptation
+    anisotropy_detection: bool = True
+    anisotropy_gradient_ratio_threshold: float = 3.0
+    thick_slice_transform_override: str = "Rigid"
+
     def __post_init__(self) -> None:
         """Validate configuration values."""
+        if self.thick_slice_transform_override not in ("Rigid", "Affine"):
+            raise ConfigurationError(
+                f"thick_slice_transform_override must be 'Rigid' or 'Affine', "
+                f"got {self.thick_slice_transform_override}"
+            )
+
         # Validate method
         if self.method is not None and self.method not in ["ants"]:
             raise ConfigurationError(
@@ -1302,7 +1357,10 @@ class SkullStrippingConfig:
 
         # Validate reference_mask_modality
         if self.reference_mask_modality is not None:
-            if not isinstance(self.reference_mask_modality, str) or not self.reference_mask_modality.strip():
+            if (
+                not isinstance(self.reference_mask_modality, str)
+                or not self.reference_mask_modality.strip()
+            ):
                 raise ConfigurationError(
                     f"reference_mask_modality must be a non-empty string or None, "
                     f"got {self.reference_mask_modality!r}"
