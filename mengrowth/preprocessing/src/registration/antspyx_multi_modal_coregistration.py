@@ -12,6 +12,7 @@ import time
 import json
 from datetime import datetime
 
+import numpy as np
 import nibabel as nib
 import matplotlib.pyplot as plt
 
@@ -355,9 +356,7 @@ class AntsPyXMultiModalCoregistration(BaseRegistrator):
                     # Safety check: if COM offset is too large, the custom
                     # Euler3DTransform init can diverge. Fall back to ANTs'
                     # built-in [fixed,moving,1] initialization.
-                    import numpy as _np
-
-                    com_offset = float(_np.linalg.norm(translation))
+                    com_offset = float(np.linalg.norm(translation))
                     max_com_offset = self.config.get("max_com_offset_mm", 150.0)
 
                     if com_offset > max_com_offset:

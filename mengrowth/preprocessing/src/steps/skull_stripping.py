@@ -185,6 +185,10 @@ def _execute_reference_mask_mode(
                     modality_path, temp_ref_stripped, viz_output, **ref_result
                 )
 
+            # Save pre-stripped backup for cross-study mask union
+            pre_stripped_path = get_artifact_path(context, f"{modality}_pre_stripped")
+            shutil.copy2(str(modality_path), str(pre_stripped_path))
+
             # Replace original with skull-stripped output
             logger.info(
                 f"  [Phase 3] Using skull-stripped output for {modality} (reference)"
@@ -233,6 +237,11 @@ def _execute_reference_mask_mode(
                 skull_stripper.visualize(
                     modality_path, temp_out, viz_output, **results[modality]
                 )
+
+            # Save pre-stripped backup for cross-study mask union
+            pre_stripped_path = get_artifact_path(context, f"{modality}_pre_stripped")
+            if not pre_stripped_path.exists():
+                shutil.copy2(str(modality_path), str(pre_stripped_path))
 
             # Replace original with masked output
             temp_out.replace(modality_path)
@@ -600,16 +609,45 @@ def compute_and_apply_union_brain_mask(
             )
             nib.save(union_nii, str(info["path"]))
 
+            # Merge union mask with existing data: keep normalized brain tissue,
+            # fill newly-included voxels (e.g., tumor near skull) from the
+            # pre-stripped backup which still has that tissue intact.
             img_path = info["study_dir"] / f"{modality}.nii.gz"
+            pre_stripped_path = (
+                artifacts_root
+                / patient_id
+                / info["study_id"]
+                / f"{modality}_pre_stripped.nii.gz"
+            )
+
             if img_path.exists():
-                img_nii = nib.load(str(img_path))
-                img_data = img_nii.get_fdata()
-                stripped = np.where(union_mask, img_data, 0.0)
-                stripped_nii = nib.Nifti1Image(
-                    stripped.astype(img_data.dtype), img_nii.affine, img_nii.header
+                current_nii = nib.load(str(img_path))
+                current_data = current_nii.get_fdata().copy()
+
+                # Identify voxels that the union mask ADDS (not in original mask)
+                original_mask = info["data"]  # This study's original mask
+                new_voxels = union_mask & ~original_mask
+
+                n_new = int(new_voxels.sum())
+                if n_new > 0 and pre_stripped_path.exists():
+                    # Fill new voxels from pre-stripped backup
+                    pre_data = nib.load(str(pre_stripped_path)).get_fdata()
+                    current_data[new_voxels] = pre_data[new_voxels]
+                    _log.info(
+                        f"    {info['study_id']}: recovered {n_new} voxels "
+                        f"from pre-stripped backup"
+                    )
+
+                # Zero out voxels outside union mask
+                current_data[~union_mask] = 0.0
+
+                merged_nii = nib.Nifti1Image(
+                    current_data.astype(current_nii.get_data_dtype()),
+                    current_nii.affine,
+                    current_nii.header,
                 )
                 temp = img_path.with_suffix(".tmp.nii.gz")
-                nib.save(stripped_nii, str(temp))
+                nib.save(merged_nii, str(temp))
                 temp.replace(img_path)
 
             _log.info(f"    {info['study_id']}: {info['volume']} -> {union_vol} voxels")
