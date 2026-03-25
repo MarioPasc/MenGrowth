@@ -917,6 +917,10 @@ class IntraStudyToReferenceConfig:
     anisotropy_gradient_ratio_threshold: float = 3.0
     thick_slice_transform_override: str = "Rigid"
 
+    # Catastrophic failure detection and COM safety
+    min_nonzero_ratio: float = 0.1
+    max_com_offset_mm: float = 150.0
+
     def __post_init__(self) -> None:
         """Validate configuration values."""
         if self.thick_slice_transform_override not in ("Rigid", "Affine"):

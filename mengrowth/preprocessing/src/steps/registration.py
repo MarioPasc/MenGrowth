@@ -200,6 +200,7 @@ def execute(
             results["registered_modalities"] = reg_result.get(
                 "registered_modalities", []
             )
+            results["failed_modalities"] = reg_result.get("failed_modalities", set())
             intra_study_transforms = reg_result["transforms"]
 
             # Update orchestrator state
@@ -254,6 +255,38 @@ def execute(
             "  [Sub-step 3a] Intra-study to reference registration skipped (method=None)"
         )
 
+    # Quality gate: check if reference modality is thick-slice
+    # If so, flag the study — 3D registration will be unreliable
+    if results["reference_modality"] is not None:
+        try:
+            import ants as _ants
+            import json as _json
+
+            from mengrowth.preprocessing.src.registration.utils import (
+                detect_thick_slice_volume as _detect_thick,
+            )
+
+            _ref_path = study_output_dir / f"{results['reference_modality']}.nii.gz"
+            if _ref_path.exists():
+                _ref_img = _ants.image_read(str(_ref_path))
+                _ref_is_thick = _detect_thick(_ref_img, threshold_ratio=5.0, log=logger)
+                if _ref_is_thick:
+                    logger.warning(
+                        f"  QUALITY WARNING: Reference {results['reference_modality']} "
+                        f"is thick-slice. 3D registration will be unreliable."
+                    )
+                    _flag_path = study_output_dir / "quality_flag.json"
+                    _flag_path.write_text(
+                        _json.dumps(
+                            {
+                                "quality_flag": "low_quality_3d",
+                                "reason": "reference_modality_thick_slice",
+                            }
+                        )
+                    )
+        except Exception as _qg_err:
+            logger.debug(f"  Quality gate check failed: {_qg_err}")
+
     # Step 3b: Intra-study to atlas registration
     atlas_method = (
         config.intra_study_to_atlas.method
@@ -272,12 +305,15 @@ def execute(
         )
 
         try:
-            # Execute atlas registration
+            # Execute atlas registration, passing failed modalities for atlas-only fallback
             atlas_result = atlas_registrator.execute(
                 study_dir=study_output_dir,
                 artifacts_dir=artifacts_base,
                 modalities=orchestrator.config.modalities,
                 intra_study_transforms=intra_study_transforms,
+                failed_coregistration_modalities=results.get(
+                    "failed_modalities", set()
+                ),
             )
 
             logger.info(

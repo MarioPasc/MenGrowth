@@ -74,6 +74,7 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
         artifacts_dir: Path,
         modalities: List[str],
         intra_study_transforms: Dict[str, Path],
+        failed_coregistration_modalities: Optional[set] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         """Execute atlas registration for a single study.
@@ -83,6 +84,9 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
             artifacts_dir: Directory to save transform artifacts
             modalities: List of expected modalities
             intra_study_transforms: Dict mapping modality to M→ref transform path
+            failed_coregistration_modalities: Set of modalities where intra-study
+                coregistration failed catastrophically. These will be registered
+                directly to the atlas instead of using the ref→atlas composite.
             **kwargs: Additional parameters (unused)
 
         Returns:
@@ -168,6 +172,7 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
         registered_modalities = [
             self.reference_modality
         ]  # Reference is already registered
+        failed_coreg = failed_coregistration_modalities or set()
 
         for modality in modalities:
             if modality == self.reference_modality:
@@ -183,7 +188,30 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
                     )
                 continue
 
-            # Get the M→ref transform from step 3a
+            # Check if this modality needs atlas-only fallback
+            if modality in failed_coreg:
+                self.logger.info(
+                    f"Registering {modality} directly to atlas (coregistration failed)..."
+                )
+                try:
+                    self._register_modality_directly_to_atlas(
+                        modality_path=modality_file,
+                        atlas_path=atlas_path,
+                        study_dir=study_dir,
+                        modality=modality,
+                    )
+                    atlas_transforms[modality] = {"direct_atlas": True}
+                    registered_modalities.append(modality)
+                    self.logger.info(
+                        f"✓ {modality} registered directly to atlas (fallback)"
+                    )
+                except Exception as e:
+                    self.logger.error(
+                        f"✗ Failed direct atlas registration for {modality}: {e}"
+                    )
+                continue
+
+            # Normal path: apply ref→atlas transform
             m_to_ref_transform = intra_study_transforms.get(modality)
             if not m_to_ref_transform or not m_to_ref_transform.exists():
                 self.logger.warning(f"Transform for {modality} not found, skipping")
@@ -192,7 +220,7 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
             self.logger.info(f"Transforming {modality} to atlas space...")
 
             try:
-                # Apply both transforms: M→ref→atlas
+                # Apply ref→atlas transform (M→ref already applied in-place in step 3a)
                 self._apply_transforms_to_modality(
                     modality_path=modality_file,
                     atlas_path=atlas_path,
@@ -617,6 +645,88 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
 
         except Exception as e:
             error_msg = f"AntsPyX transform application failed for {modality}: {str(e)}"
+            self.logger.error(error_msg)
+            raise RuntimeError(error_msg) from e
+
+    def _register_modality_directly_to_atlas(
+        self,
+        modality_path: Path,
+        atlas_path: Path,
+        study_dir: Path,
+        modality: str,
+    ) -> Path:
+        """Fallback: register modality directly to atlas when coregistration failed.
+
+        Used when intra-study coregistration produced catastrophic failure (near-zero
+        output). Instead of applying the ref→atlas composite transform, this method
+        runs an independent Rigid registration of the modality to the atlas.
+
+        Args:
+            modality_path: Path to modality NIfTI (in original space, not coregistered)
+            atlas_path: Path to atlas NIfTI
+            study_dir: Study directory
+            modality: Modality name
+
+        Returns:
+            Path to the registered output file
+
+        Raises:
+            RuntimeError: If direct atlas registration fails
+        """
+        import ants
+
+        try:
+            atlas_img = ants.image_read(str(atlas_path))
+            moving_img = ants.image_read(str(modality_path))
+
+            self.logger.info(
+                f"    Direct atlas registration for {modality}: "
+                f"shape={moving_img.shape}, spacing={moving_img.spacing}"
+            )
+
+            # Use Rigid registration with robust coarse-level parameters
+            result = ants.registration(
+                fixed=atlas_img,
+                moving=moving_img,
+                type_of_transform="Rigid",
+                aff_metric="mattes",
+                aff_sampling=128,
+                aff_random_sampling_rate=0.5,
+                aff_iterations=(2000, 1000, 500, 250),
+                aff_shrink_factors=(8, 4, 2, 1),
+                aff_smoothing_sigmas=(4, 2, 1, 0),
+                write_composite_transform=False,
+                verbose=self.verbose,
+            )
+
+            warped_img = result["warpedmovout"]
+
+            # Validate result
+            import numpy as np
+
+            original_nonzero = int(np.count_nonzero(moving_img.numpy()))
+            registered_nonzero = int(np.count_nonzero(warped_img.numpy()))
+            nonzero_ratio = registered_nonzero / max(original_nonzero, 1)
+
+            if nonzero_ratio < 0.05:
+                raise RuntimeError(
+                    f"Direct atlas registration also failed: "
+                    f"only {nonzero_ratio:.1%} nonzero voxels"
+                )
+
+            # Write via temp-file-then-rename
+            temp_output = study_dir / f"_temp_{modality}_direct_atlas.nii.gz"
+            ants.image_write(warped_img, str(temp_output))
+            temp_output.replace(modality_path)
+
+            self.logger.info(
+                f"    Direct atlas registration: {nonzero_ratio:.1%} nonzero preserved"
+            )
+
+            return modality_path
+
+        except Exception as e:
+            error_msg = f"Direct atlas registration failed for {modality}: {e}"
             self.logger.error(error_msg)
             raise RuntimeError(error_msg) from e
 

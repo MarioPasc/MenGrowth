@@ -116,6 +116,33 @@ def execute(
         viz_path = get_visualization_path(context, suffix="_convert")
         converter.visualize(input_file, paths["nifti"], viz_path)
 
+    # Sub-step 1.5: Detect and fix transposed/corrupted axes
+    # Some NRRD files have the slice dimension misidentified (e.g., 512x28x512
+    # instead of 512x512x28). Detect by checking if one spatial dimension has
+    # vastly fewer voxels than the others and is NOT in the z-position.
+    conv_nii = nib.load(str(paths["nifti"]))
+    conv_shape = conv_nii.shape[:3]
+    min_dim = min(conv_shape)
+    max_dim = max(conv_shape)
+    min_axis = conv_shape.index(min_dim)
+
+    if min_dim < 40 and max_dim / min_dim > 10 and min_axis != 2:
+        logger.warning(
+            f"        - Detected likely transposed axes: shape={conv_shape}, "
+            f"axis {min_axis} has only {min_dim} voxels. "
+            f"Transposing to move thin axis to z-position."
+        )
+        conv_data = conv_nii.get_fdata()
+        conv_data = np.moveaxis(conv_data, min_axis, 2)
+        # Swap the corresponding affine columns to keep spatial mapping correct
+        new_affine = conv_nii.affine.copy()
+        new_affine[:, [min_axis, 2]] = new_affine[:, [2, min_axis]]
+        fixed_nii = nib.Nifti1Image(conv_data, new_affine, conv_nii.header)
+        temp_transposed = get_temp_path(context, modality, "transposed")
+        nib.save(fixed_nii, str(temp_transposed))
+        temp_transposed.replace(paths["nifti"])
+        logger.info(f"          Fixed: new shape={conv_data.shape}")
+
     # Sub-step 2: Reorientation
     logger.info(f"        - Reorienting to {config.reorient_to}...")
     reorienter = orchestrator._get_component("reorienter", config)

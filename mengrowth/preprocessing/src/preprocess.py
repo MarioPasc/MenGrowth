@@ -900,6 +900,39 @@ class PreprocessingOrchestrator:
                 f"(need 2+ for longitudinal registration)"
             )
 
+        # PHASE 2.5: Cross-study brain mask union (if ≥2 studies)
+        # After longitudinal registration, all studies are in the same space.
+        # Compute union of brain masks to ensure consistent coverage across
+        # timepoints (prevents over-aggressive skull stripping from excluding
+        # peripheral lesions like meningiomas near the skull/dura).
+        if len(study_dirs) >= 2:
+            try:
+                from mengrowth.preprocessing.src.steps.skull_stripping import (
+                    compute_and_apply_union_brain_mask,
+                )
+
+                artifacts_root = Path(self.config.preprocessing_artifacts_path)
+                # Get the study output dirs (where preprocessed NIfTIs live)
+                study_output_dirs = []
+                for sd in study_dirs:
+                    if self.config.mode == "test":
+                        sod = Path(self.config.output_root) / patient_id / sd.name
+                    else:
+                        sod = sd
+                    if sod.exists():
+                        study_output_dirs.append(sod)
+
+                if len(study_output_dirs) >= 2:
+                    compute_and_apply_union_brain_mask(
+                        patient_id=patient_id,
+                        study_dirs=study_output_dirs,
+                        artifacts_root=artifacts_root,
+                        modalities=self.config.modalities,
+                        log=self.logger,
+                    )
+            except Exception as e:
+                self.logger.warning(f"Cross-study mask union failed: {e}")
+
         # PHASE 3: Generate patient summary montage
         try:
             from mengrowth.preprocessing.src.visualization.patient_summary import (

@@ -25,6 +25,18 @@ from mengrowth.preprocessing.src.registration.diagnostic_parser import (
 logger = logging.getLogger(__name__)
 
 
+class _CoregistrationCatastrophicFailure(Exception):
+    """Raised when coregistration produces catastrophic loss (near-zero output).
+
+    This is an internal exception caught by execute() to track failed modalities
+    for atlas-only fallback, not propagated to the caller.
+    """
+
+    def __init__(self, modality: str) -> None:
+        self.modality = modality
+        super().__init__(f"Catastrophic coregistration failure for {modality}")
+
+
 class AntsPyXMultiModalCoregistration(BaseRegistrator):
     """Intra-study rigid multi-modal coregistration using AntsPyX.
 
@@ -123,6 +135,7 @@ class AntsPyXMultiModalCoregistration(BaseRegistrator):
         # 4. Register each non-reference modality
         transforms = {}
         registered_modalities = []
+        failed_modalities = set()
 
         for modality, moving_path in modality_files.items():
             if modality == reference_modality:
@@ -149,6 +162,13 @@ class AntsPyXMultiModalCoregistration(BaseRegistrator):
 
                 self.logger.info(f"✓ {modality} registered successfully")
 
+            except _CoregistrationCatastrophicFailure:
+                # Catastrophic failure: original file preserved, modality needs
+                # atlas-only fallback in step 3b
+                failed_modalities.add(modality)
+                self.logger.warning(f"⚠ {modality} marked for atlas-only fallback")
+                continue
+
             except Exception as e:
                 self.logger.error(f"✗ Failed to register {modality}: {e}")
                 # Continue with other modalities rather than failing completely
@@ -158,12 +178,18 @@ class AntsPyXMultiModalCoregistration(BaseRegistrator):
         self.logger.info(
             f"Completed registration in {elapsed:.1f}s. "
             f"Registered {len(registered_modalities)}/{len(modality_files) - 1} modalities"
+            + (
+                f", {len(failed_modalities)} marked for atlas-only fallback"
+                if failed_modalities
+                else ""
+            )
         )
 
         return {
             "reference_modality": reference_modality,
             "registered_modalities": registered_modalities,
             "transforms": transforms,
+            "failed_modalities": failed_modalities,
         }
 
     def _register_modality(
@@ -326,19 +352,35 @@ class AntsPyXMultiModalCoregistration(BaseRegistrator):
                     # Create translation to align centers
                     translation = [f - m for f, m in zip(fixed_com, moving_com)]
 
-                    com_tx = ants.create_ants_transform(
-                        transform_type="Euler3DTransform",
-                        center=moving_com,
-                        translation=translation,
-                    )
-                    # Write to temp file — ants.registration() needs a file path, not an object
-                    com_tx_path = study_dir / f"_temp_{modality}_com_init.mat"
-                    ants.write_transform(com_tx, str(com_tx_path))
-                    initial_tx = str(com_tx_path)
-                    if self.verbose:
-                        self.logger.debug(
-                            f"[DEBUG] [AntsPyX] COM translation: {translation}"
+                    # Safety check: if COM offset is too large, the custom
+                    # Euler3DTransform init can diverge. Fall back to ANTs'
+                    # built-in [fixed,moving,1] initialization.
+                    import numpy as _np
+
+                    com_offset = float(_np.linalg.norm(translation))
+                    max_com_offset = self.config.get("max_com_offset_mm", 150.0)
+
+                    if com_offset > max_com_offset:
+                        self.logger.warning(
+                            f"    COM offset {com_offset:.0f}mm exceeds threshold "
+                            f"{max_com_offset:.0f}mm — using ANTs built-in init"
                         )
+                        initial_tx = None
+                    else:
+                        com_tx = ants.create_ants_transform(
+                            transform_type="Euler3DTransform",
+                            center=moving_com,
+                            translation=translation,
+                        )
+                        # Write to temp file — ants.registration() needs a file path
+                        com_tx_path = study_dir / f"_temp_{modality}_com_init.mat"
+                        ants.write_transform(com_tx, str(com_tx_path))
+                        initial_tx = str(com_tx_path)
+                        if self.verbose:
+                            self.logger.debug(
+                                f"[DEBUG] [AntsPyX] COM translation: {translation} "
+                                f"(offset={com_offset:.0f}mm)"
+                            )
                 except Exception as com_error:
                     self.logger.warning(
                         f"  COM initialization failed, proceeding without: {com_error}"
@@ -439,6 +481,25 @@ class AntsPyXMultiModalCoregistration(BaseRegistrator):
 
             if not temp_output.exists():
                 raise RuntimeError(f"Registered image not created: {temp_output}")
+
+            # Validate registration result before in-place replacement.
+            # If the registered output lost most nonzero voxels, the registration
+            # diverged catastrophically (moved volume outside FOV). In that case,
+            # keep the original file to enable atlas-only fallback.
+            original_nonzero = int(np.count_nonzero(moving_img.numpy()))
+            registered_nonzero = int(np.count_nonzero(warped_img.numpy()))
+            nonzero_ratio = registered_nonzero / max(original_nonzero, 1)
+
+            min_nonzero_ratio = self.config.get("min_nonzero_ratio", 0.1)
+            if nonzero_ratio < min_nonzero_ratio:
+                self.logger.warning(
+                    f"    COREGISTRATION FAILED for {modality}: registered output "
+                    f"has {nonzero_ratio:.1%} of original nonzero voxels "
+                    f"(threshold={min_nonzero_ratio:.0%}). "
+                    f"Keeping original — will use atlas-only fallback."
+                )
+                temp_output.unlink(missing_ok=True)
+                raise _CoregistrationCatastrophicFailure(modality)
 
             if self.verbose:
                 self.logger.debug("[DEBUG] [AntsPyX] Outputs verified successfully")

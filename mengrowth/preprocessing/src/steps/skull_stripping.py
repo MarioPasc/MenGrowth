@@ -515,43 +515,105 @@ def execute(
                 mp.unlink()
                 logger.debug("    Temporary brain mask deleted")
 
-        # Clean up any additional temporary files created by skull stripping libraries
-        temp_pattern_files = list(study_output_dir.glob(f"_temp_*{modality}*.nii.gz"))
-        for temp_file in temp_pattern_files:
-            if temp_file != modality_path and temp_file.exists():
-                temp_file.unlink()
-                logger.debug(f"    Cleaned up temporary file: {temp_file.name}")
 
-    # ── Diagnostic: log final file state after skull stripping ──
-    for modality in list(results.keys()):
-        final_path = study_output_dir / f"{modality}.nii.gz"
-        if final_path.exists():
-            diag_nii = nib.load(str(final_path))
-            diag_data = diag_nii.get_fdata()
-            nonzero_frac = np.count_nonzero(diag_data) / diag_data.size
-            logger.info(
-                f"  [DIAG] {modality} after skull stripping: "
-                f"shape={diag_data.shape}, "
-                f"nonzero={nonzero_frac:.3%}, "
-                f"range=[{diag_data.min():.2f}, {diag_data.max():.2f}], "
-                f"path={final_path}"
+def compute_and_apply_union_brain_mask(
+    patient_id: str,
+    study_dirs: "list[Path]",
+    artifacts_root: Path,
+    modalities: "list[str]",
+    log: "logging.Logger | None" = None,
+) -> bool:
+    """Compute union of brain masks across all studies and re-apply.
+
+    After longitudinal registration, all studies are in the same space. This
+    function computes the logical OR of brain masks from all studies for each
+    modality, then re-applies the union mask to each study's images and saves
+    the updated masks. This ensures consistent brain coverage across timepoints,
+    preventing over-aggressive skull stripping from excluding peripheral lesions
+    (e.g., meningiomas near the skull/dura).
+
+    Args:
+        patient_id: Patient identifier.
+        study_dirs: List of study directory paths (preprocessed output).
+        artifacts_root: Root directory for preprocessing artifacts.
+        modalities: List of modality names.
+        log: Optional logger.
+
+    Returns:
+        True if union masks were computed and applied, False otherwise.
+    """
+    _log = log or logging.getLogger(__name__)
+
+    if len(study_dirs) < 2:
+        _log.info(f"  Union mask: skipped (only {len(study_dirs)} study)")
+        return False
+
+    applied = False
+
+    for modality in modalities:
+        mask_infos = []
+        for study_dir in sorted(study_dirs, key=lambda d: d.name):
+            study_id = study_dir.name
+            mask_path = (
+                artifacts_root / patient_id / study_id / f"{modality}_brain_mask.nii.gz"
             )
+            if mask_path.exists():
+                mask_nii = nib.load(str(mask_path))
+                mask_data = mask_nii.get_fdata() > 0
+                mask_infos.append(
+                    {
+                        "path": mask_path,
+                        "data": mask_data,
+                        "nii": mask_nii,
+                        "study_dir": study_dir,
+                        "study_id": study_id,
+                        "volume": int(mask_data.sum()),
+                    }
+                )
 
-    logger.info("  Skull stripping completed successfully")
+        if len(mask_infos) < 2:
+            continue
 
-    # Add qc_paths for QC system (study-level step output paths)
-    processed_modalities = list(results.keys())
-    results["qc_paths"] = {
-        "study_output_dir": str(study_output_dir),
-        "mask_outputs": {
-            mod: str(artifacts_base / f"{mod}_brain_mask.nii.gz")
-            for mod in processed_modalities
-        }
-        if config.save_mask
-        else {},
-        "image_outputs": {
-            mod: str(study_output_dir / f"{mod}.nii.gz") for mod in processed_modalities
-        },
-    }
+        union_mask = np.logical_or.reduce([m["data"] for m in mask_infos])
+        union_vol = int(union_mask.sum())
+        volumes = [m["volume"] for m in mask_infos]
+        max_vol = max(volumes)
+        min_vol = min(volumes)
 
-    return results
+        volume_spread = (max_vol - min_vol) / max_vol
+        if volume_spread < 0.05:
+            _log.info(
+                f"  Union mask ({modality}): volumes consistent "
+                f"(spread={volume_spread:.1%}), no correction needed"
+            )
+            continue
+
+        _log.info(
+            f"  Union mask ({modality}): volume spread={volume_spread:.1%} "
+            f"(min={min_vol}, max={max_vol}, union={union_vol}). "
+            f"Applying union mask to all studies."
+        )
+
+        for info in mask_infos:
+            union_nii = nib.Nifti1Image(
+                union_mask.astype(np.uint8), info["nii"].affine, info["nii"].header
+            )
+            nib.save(union_nii, str(info["path"]))
+
+            img_path = info["study_dir"] / f"{modality}.nii.gz"
+            if img_path.exists():
+                img_nii = nib.load(str(img_path))
+                img_data = img_nii.get_fdata()
+                stripped = np.where(union_mask, img_data, 0.0)
+                stripped_nii = nib.Nifti1Image(
+                    stripped.astype(img_data.dtype), img_nii.affine, img_nii.header
+                )
+                temp = img_path.with_suffix(".tmp.nii.gz")
+                nib.save(stripped_nii, str(temp))
+                temp.replace(img_path)
+
+            _log.info(f"    {info['study_id']}: {info['volume']} -> {union_vol} voxels")
+
+        applied = True
+
+    return applied
