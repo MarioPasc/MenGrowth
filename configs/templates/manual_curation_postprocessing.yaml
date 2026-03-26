@@ -12,17 +12,37 @@
 #   sequence   (optional): Modalities where the issue was observed, e.g. [t1c] or [t1c, t2w]
 
 exclusions:
-  - patient_id: "MenGrowth-0019"
-    study_id: "MenGrowth-0019-000"
-    reason: "Postprocessing: Axial resolution was too low"
-    sequence: [t1n]
   - patient_id: "MenGrowth-0023"
     study_id: "MenGrowth-0023-000"
-    reason: "Postprocessing: Axial resolution was too low"
-    sequence: [t1n]
-  - patient_id: "MenGrowth-0024"
-    study_id: "MenGrowth-0024-001"
-    reason: "Postprocessing: Axial resolution was too low"
-    sequence: [t1n]
+    reason: "Preprocessing failed due to low t2w quality"
+    sequence: [t2w]
+  - patient_id: "MenGrowth-0025"
+    study_id: "MenGrowth-0025-001"
+    reason: "Preprocessing failed due to low t2w quality"
+    sequence: [t2w]
+  - patient_id: "MenGrowth-0041"
+    study_id: "MenGrowth-0041-002"
+    reason: "Preprocessing failed due to low t2w quality"
+    sequence: [t2w]
+  - patient_id: "MenGrowth-0046"
+    study_id: "MenGrowth-0046-002"
+    reason: "Preprocessing failed due to low t2w quality"
+    sequence: [t2w]
+  - patient_id: "MenGrowth-0046"
+    study_id: "MenGrowth-0046-003"
+    reason: "Preprocessing failed due to low t2w quality"
+    sequence: [t2w]
+  - patient_id: "MenGrowth-0050"
+    study_id: "MenGrowth-0050-001"
+    reason: "Preprocessing failed due to low t2w quality"
+    sequence: [t2w]
+  - patient_id: "MenGrowth-0055"
+    study_id: "MenGrowth-0055-000"
+    reason: "Preprocessing failed due to low t2w quality"
+    sequence: [t1c]
+  - patient_id: "MenGrowth-0058"
+    study_id: "MenGrowth-0058-001"
+    reason: "Preprocessing failed due to low t2w quality"
+    sequence: [t2w]
 # Minimum longitudinal studies required to keep a patient (default: 2)
 min_studies_per_patient: 2
