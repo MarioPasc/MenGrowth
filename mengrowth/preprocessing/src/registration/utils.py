@@ -53,3 +53,53 @@ def detect_thick_slice_volume(
         )
 
     return ratio > threshold_ratio
+
+
+def drop_coarsest_levels(
+    number_of_iterations: list[int],
+    shrink_factors: list[int],
+    smoothing_sigmas: list[int],
+    max_shrink_factor: int = 4,
+) -> tuple[list[int], list[int], list[int]]:
+    """Drop multi-resolution levels where shrink factor exceeds threshold.
+
+    Thick-slice volumes have near-zero gradient energy at coarse resolution
+    levels. Starting at shrink_factor=8 on 5mm-original data means 8mm
+    effective resolution — the z-direction is constant and MI optimization
+    receives no gradient signal.
+
+    This function removes leading (coarsest) levels from the multi-resolution
+    schedule where `shrink_factors[i] > max_shrink_factor`, keeping at least
+    the finest level.
+
+    Ref: Avants et al., NeuroImage 2011, DOI: 10.1016/j.neuroimage.2010.09.025
+
+    Args:
+        number_of_iterations: Iterations per resolution level (coarsest first).
+        shrink_factors: Shrink factors per resolution level (coarsest first).
+        smoothing_sigmas: Smoothing sigmas per resolution level (coarsest first).
+        max_shrink_factor: Maximum allowed shrink factor. Levels with higher
+            shrink factors are dropped.
+
+    Returns:
+        Trimmed copies of (number_of_iterations, shrink_factors, smoothing_sigmas).
+        At least one level (the finest) is always preserved.
+    """
+    if not shrink_factors:
+        return list(number_of_iterations), list(shrink_factors), list(smoothing_sigmas)
+
+    # Find first index where shrink factor is within threshold
+    first_valid = 0
+    for i, sf in enumerate(shrink_factors):
+        if sf <= max_shrink_factor:
+            first_valid = i
+            break
+    else:
+        # All levels exceed threshold — keep only the last (finest)
+        first_valid = len(shrink_factors) - 1
+
+    return (
+        list(number_of_iterations[first_valid:]),
+        list(shrink_factors[first_valid:]),
+        list(smoothing_sigmas[first_valid:]),
+    )

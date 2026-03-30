@@ -525,27 +525,103 @@ def execute(
                 logger.debug("    Temporary brain mask deleted")
 
 
+def _warp_artifact_through_longitudinal_transform(
+    artifact_path: Path,
+    transform_path: Path,
+    reference_path: Path,
+    output_path: Path,
+    is_mask: bool = True,
+    log: "logging.Logger | None" = None,
+) -> bool:
+    """Warp a preprocessing artifact through a longitudinal registration transform.
+
+    Applies a pre-computed longitudinal transform to move a brain mask or
+    pre-stripped backup from pre-longitudinal space to post-longitudinal
+    (reference) space. Uses nearest-neighbor interpolation for binary masks
+    and BSpline for continuous intensity images.
+
+    Args:
+        artifact_path: Path to the artifact NIfTI to warp.
+        transform_path: Path to the .h5 longitudinal transform.
+        reference_path: Path to an image in the target (post-longitudinal)
+            space, used as the fixed geometry for resampling.
+        output_path: Path to write the warped artifact.
+        is_mask: If True, uses nearestNeighbor interpolation (preserves binary
+            values). If False, uses bSpline (preserves continuous intensity).
+        log: Optional logger.
+
+    Returns:
+        True if warping succeeded and the output file exists, False otherwise.
+    """
+    _log = log or logging.getLogger(__name__)
+
+    if not artifact_path.exists():
+        _log.warning(f"    Warp artifact: source not found: {artifact_path}")
+        return False
+
+    if not transform_path.exists():
+        _log.warning(f"    Warp artifact: transform not found: {transform_path}")
+        return False
+
+    try:
+        import ants
+
+        artifact_img = ants.image_read(str(artifact_path))
+        reference_img = ants.image_read(str(reference_path))
+
+        interpolator = "nearestNeighbor" if is_mask else "bSpline"
+        warped = ants.apply_transforms(
+            fixed=reference_img,
+            moving=artifact_img,
+            transformlist=[str(transform_path)],
+            interpolator=interpolator,
+        )
+
+        # Atomic write: temp file then rename
+        temp_path = output_path.with_suffix(".tmp.nii.gz")
+        ants.image_write(warped, str(temp_path))
+        temp_path.rename(output_path)
+
+        return output_path.exists()
+
+    except Exception as e:
+        _log.warning(f"    Warp artifact failed for {artifact_path.name}: {e}")
+        # Clean up partial temp file if it exists
+        temp_path = output_path.with_suffix(".tmp.nii.gz")
+        if temp_path.exists():
+            temp_path.unlink()
+        return False
+
+
 def compute_and_apply_union_brain_mask(
     patient_id: str,
     study_dirs: "list[Path]",
     artifacts_root: Path,
     modalities: "list[str]",
+    longitudinal_transforms_dir: "Path | None" = None,
+    save_intermediates: bool = False,
     log: "logging.Logger | None" = None,
 ) -> bool:
     """Compute union of brain masks across all studies and re-apply.
 
-    After longitudinal registration, all studies are in the same space. This
-    function computes the logical OR of brain masks from all studies for each
-    modality, then re-applies the union mask to each study's images and saves
-    the updated masks. This ensures consistent brain coverage across timepoints,
-    preventing over-aggressive skull stripping from excluding peripheral lesions
-    (e.g., meningiomas near the skull/dura).
+    After longitudinal registration, all studies are in the reference study's
+    space. This function warps each study's brain mask and pre-stripped backup
+    through its longitudinal transform into the common reference space,
+    computes the logical OR union, then re-applies the union mask to each
+    study's images. This ensures consistent brain coverage across timepoints,
+    preventing over-aggressive skull stripping from excluding peripheral
+    lesions (e.g., meningiomas near the skull/dura).
 
     Args:
         patient_id: Patient identifier.
         study_dirs: List of study directory paths (preprocessed output).
         artifacts_root: Root directory for preprocessing artifacts.
         modalities: List of modality names.
+        longitudinal_transforms_dir: Path to directory containing longitudinal
+            transforms ({timestamp}_{modality}_to_ref.h5). If None, masks are
+            used as-is (no warping).
+        save_intermediates: If True, keep warped mask and pre-stripped files
+            for QC inspection. If False, delete them after union is applied.
         log: Optional logger.
 
     Returns:
@@ -560,41 +636,123 @@ def compute_and_apply_union_brain_mask(
     applied = False
 
     for modality in modalities:
-        mask_infos = []
+        # Collect masks and warp to reference space if transforms available
+        mask_infos: list[dict] = []
+        warped_intermediates: list[Path] = []
+
         for study_dir in sorted(study_dirs, key=lambda d: d.name):
             study_id = study_dir.name
-            mask_path = (
-                artifacts_root / patient_id / study_id / f"{modality}_brain_mask.nii.gz"
+            artifact_dir = artifacts_root / patient_id / study_id
+            mask_path = artifact_dir / f"{modality}_brain_mask.nii.gz"
+            if not mask_path.exists():
+                continue
+
+            # Try to warp mask through longitudinal transform
+            timestamp = study_id.split("-")[-1]
+            warped = False
+            mask_data = None
+            info_extra: dict = {}
+
+            if longitudinal_transforms_dir is not None:
+                # Try both naming conventions (single-ref and per-modality)
+                transform_candidates = [
+                    longitudinal_transforms_dir / f"{timestamp}_{modality}_to_ref.h5",
+                    longitudinal_transforms_dir
+                    / f"{timestamp}_{modality}_to_ref_{modality}.h5",
+                ]
+                transform_path = None
+                for candidate in transform_candidates:
+                    if candidate.exists():
+                        transform_path = candidate
+                        break
+
+                if transform_path is not None:
+                    # Non-reference study: warp mask to reference space
+                    ref_img_path = study_dir / f"{modality}.nii.gz"
+                    warped_mask_path = (
+                        artifact_dir / f"{modality}_brain_mask_warped.nii.gz"
+                    )
+
+                    if ref_img_path.exists():
+                        success = _warp_artifact_through_longitudinal_transform(
+                            artifact_path=mask_path,
+                            transform_path=transform_path,
+                            reference_path=ref_img_path,
+                            output_path=warped_mask_path,
+                            is_mask=True,
+                            log=_log,
+                        )
+                        if success:
+                            mask_data = nib.load(str(warped_mask_path)).get_fdata() > 0
+                            warped = True
+                            warped_intermediates.append(warped_mask_path)
+                            _log.info(
+                                f"    Warped {study_id} {modality} mask "
+                                f"to reference space"
+                            )
+
+                        # Also warp the pre-stripped backup (BSpline for intensity)
+                        pre_stripped_path = (
+                            artifact_dir / f"{modality}_pre_stripped.nii.gz"
+                        )
+                        if pre_stripped_path.exists():
+                            warped_pre_stripped = (
+                                artifact_dir / f"{modality}_pre_stripped_warped.nii.gz"
+                            )
+                            ps_success = _warp_artifact_through_longitudinal_transform(
+                                artifact_path=pre_stripped_path,
+                                transform_path=transform_path,
+                                reference_path=ref_img_path,
+                                output_path=warped_pre_stripped,
+                                is_mask=False,
+                                log=_log,
+                            )
+                            if ps_success:
+                                info_extra["warped_pre_stripped_path"] = (
+                                    warped_pre_stripped
+                                )
+                                warped_intermediates.append(warped_pre_stripped)
+
+            if mask_data is None:
+                # Reference study or no transforms: use mask as-is
+                mask_data = nib.load(str(mask_path)).get_fdata() > 0
+
+            mask_infos.append(
+                {
+                    "path": mask_path,
+                    "data": mask_data,
+                    "study_dir": study_dir,
+                    "study_id": study_id,
+                    "volume": int(mask_data.sum()),
+                    "warped": warped,
+                    **info_extra,
+                }
             )
-            if mask_path.exists():
-                mask_nii = nib.load(str(mask_path))
-                mask_data = mask_nii.get_fdata() > 0
-                mask_infos.append(
-                    {
-                        "path": mask_path,
-                        "data": mask_data,
-                        "nii": mask_nii,
-                        "study_dir": study_dir,
-                        "study_id": study_id,
-                        "volume": int(mask_data.sum()),
-                    }
-                )
 
         if len(mask_infos) < 2:
             continue
 
+        # Compute union in reference space
         union_mask = np.logical_or.reduce([m["data"] for m in mask_infos])
         union_vol = int(union_mask.sum())
         volumes = [m["volume"] for m in mask_infos]
         max_vol = max(volumes)
         min_vol = min(volumes)
 
+        # 2% threshold: meningioma growth can cause HD-BET to strip tumor at
+        # later timepoints but retain it at earlier ones, producing mask volume
+        # differences of 3-4% that a 5% threshold would miss.
         volume_spread = (max_vol - min_vol) / max_vol
-        if volume_spread < 0.05:
+        if volume_spread < 0.02:
             _log.info(
                 f"  Union mask ({modality}): volumes consistent "
                 f"(spread={volume_spread:.1%}), no correction needed"
             )
+            # Clean up warped intermediates even when union not applied
+            if not save_intermediates:
+                for wp in warped_intermediates:
+                    if wp.exists():
+                        wp.unlink()
             continue
 
         _log.info(
@@ -603,42 +761,47 @@ def compute_and_apply_union_brain_mask(
             f"Applying union mask to all studies."
         )
 
+        # Apply union mask to each study
         for info in mask_infos:
+            # Save updated mask
+            ref_nii = nib.load(str(info["path"]))
             union_nii = nib.Nifti1Image(
-                union_mask.astype(np.uint8), info["nii"].affine, info["nii"].header
+                union_mask.astype(np.uint8), ref_nii.affine, ref_nii.header
             )
             nib.save(union_nii, str(info["path"]))
 
-            # Merge union mask with existing data: keep normalized brain tissue,
-            # fill newly-included voxels (e.g., tumor near skull) from the
-            # pre-stripped backup which still has that tissue intact.
+            # Merge union mask with existing data: keep normalized tissue,
+            # fill newly-included voxels from the pre-stripped backup
             img_path = info["study_dir"] / f"{modality}.nii.gz"
-            pre_stripped_path = (
-                artifacts_root
-                / patient_id
-                / info["study_id"]
-                / f"{modality}_pre_stripped.nii.gz"
-            )
+
+            # Use warped pre-stripped if available, else fall back to original
+            pre_stripped_path = info.get("warped_pre_stripped_path")
+            if pre_stripped_path is None or not pre_stripped_path.exists():
+                pre_stripped_path = (
+                    artifacts_root
+                    / patient_id
+                    / info["study_id"]
+                    / f"{modality}_pre_stripped.nii.gz"
+                )
 
             if img_path.exists():
                 current_nii = nib.load(str(img_path))
                 current_data = current_nii.get_fdata().copy()
 
-                # Identify voxels that the union mask ADDS (not in original mask)
-                original_mask = info["data"]  # This study's original mask
+                # Identify voxels that the union mask ADDS
+                original_mask = info["data"]
                 new_voxels = union_mask & ~original_mask
 
                 n_new = int(new_voxels.sum())
                 if n_new > 0 and pre_stripped_path.exists():
-                    # Fill new voxels from pre-stripped backup
                     pre_data = nib.load(str(pre_stripped_path)).get_fdata()
                     current_data[new_voxels] = pre_data[new_voxels]
                     _log.info(
                         f"    {info['study_id']}: recovered {n_new} voxels "
                         f"from pre-stripped backup"
+                        + (" (warped)" if info.get("warped_pre_stripped_path") else "")
                     )
 
-                # Zero out voxels outside union mask
                 current_data[~union_mask] = 0.0
 
                 merged_nii = nib.Nifti1Image(
@@ -651,6 +814,12 @@ def compute_and_apply_union_brain_mask(
                 temp.replace(img_path)
 
             _log.info(f"    {info['study_id']}: {info['volume']} -> {union_vol} voxels")
+
+        # Clean up warped intermediates after union is applied
+        if not save_intermediates:
+            for wp in warped_intermediates:
+                if wp.exists():
+                    wp.unlink()
 
         applied = True
 

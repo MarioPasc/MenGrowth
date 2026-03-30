@@ -905,7 +905,15 @@ class PreprocessingOrchestrator:
         # Compute union of brain masks to ensure consistent coverage across
         # timepoints (prevents over-aggressive skull stripping from excluding
         # peripheral lesions like meningiomas near the skull/dura).
-        if len(study_dirs) >= 2:
+        # Check config flag for cross-study mask union
+        skull_strip_cfg = self.config.step_configs.get("skull_stripping", {})
+        mask_union_enabled = (
+            skull_strip_cfg.get("cross_study_mask_union", True)
+            if isinstance(skull_strip_cfg, dict)
+            else getattr(skull_strip_cfg, "cross_study_mask_union", True)
+        )
+
+        if len(study_dirs) >= 2 and mask_union_enabled:
             try:
                 from mengrowth.preprocessing.src.steps.skull_stripping import (
                     compute_and_apply_union_brain_mask,
@@ -923,11 +931,24 @@ class PreprocessingOrchestrator:
                         study_output_dirs.append(sod)
 
                 if len(study_output_dirs) >= 2:
+                    long_transforms_dir = (
+                        artifacts_root / patient_id / "longitudinal_registration"
+                    )
+                    # Pass save_intermediates from skull stripping config
+                    _save_intermediates = (
+                        getattr(skull_strip_cfg, "save_mask", True)
+                        if not isinstance(skull_strip_cfg, dict)
+                        else skull_strip_cfg.get("save_mask", True)
+                    )
                     compute_and_apply_union_brain_mask(
                         patient_id=patient_id,
                         study_dirs=study_output_dirs,
                         artifacts_root=artifacts_root,
                         modalities=self.config.modalities,
+                        longitudinal_transforms_dir=long_transforms_dir
+                        if long_transforms_dir.exists()
+                        else None,
+                        save_intermediates=_save_intermediates,
                         log=self.logger,
                     )
             except Exception as e:

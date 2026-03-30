@@ -361,6 +361,29 @@ class AntsPyXIntraStudyToAtlas(BaseRegistrator):
                 "smoothing_sigmas", [[2, 1, 0], [1, 0, 0]]
             )
 
+            # Adapt multi-resolution schedule for thick-slice volumes.
+            # At coarsest levels (shrink>4), thick-slice z-direction is constant
+            # and MI optimization receives no gradient signal.
+            if is_thick_slice and len(shrink_factors_list) > 0:
+                from mengrowth.preprocessing.src.registration.utils import (
+                    drop_coarsest_levels,
+                )
+
+                adapted_iters, adapted_shrink, adapted_sigmas = drop_coarsest_levels(
+                    number_of_iterations_list[0],
+                    shrink_factors_list[0],
+                    smoothing_sigmas_list[0],
+                    max_shrink_factor=4,
+                )
+                if len(adapted_shrink) < len(shrink_factors_list[0]):
+                    number_of_iterations_list[0] = adapted_iters
+                    shrink_factors_list[0] = adapted_shrink
+                    smoothing_sigmas_list[0] = adapted_sigmas
+                    self.logger.info(
+                        f"    Thick-slice: adapted schedule — "
+                        f"shrink={adapted_shrink}, sigmas={adapted_sigmas}"
+                    )
+
             # Use the FIRST (coarsest) parameter set for robust global alignment.
             # ANTs' "Affine" type_of_transform runs Rigid+Affine internally but
             # accepts only one set of aff_* parameters for the multi-resolution

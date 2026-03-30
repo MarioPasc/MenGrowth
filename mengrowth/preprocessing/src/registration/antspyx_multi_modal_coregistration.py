@@ -302,6 +302,29 @@ class AntsPyXMultiModalCoregistration(BaseRegistrator):
             shrink_factors_list = self.config.get("shrink_factors", [[4, 2, 1]])
             smoothing_sigmas_list = self.config.get("smoothing_sigmas", [[2, 1, 0]])
 
+            # Adapt multi-resolution schedule for thick-slice volumes.
+            # At coarsest levels (shrink>4), thick-slice z-direction is constant
+            # and MI optimization receives no gradient signal.
+            if is_thick_slice and len(shrink_factors_list) > 0:
+                from mengrowth.preprocessing.src.registration.utils import (
+                    drop_coarsest_levels,
+                )
+
+                adapted_iters, adapted_shrink, adapted_sigmas = drop_coarsest_levels(
+                    number_of_iterations_list[0],
+                    shrink_factors_list[0],
+                    smoothing_sigmas_list[0],
+                    max_shrink_factor=4,
+                )
+                if len(adapted_shrink) < len(shrink_factors_list[0]):
+                    number_of_iterations_list[0] = adapted_iters
+                    shrink_factors_list[0] = adapted_shrink
+                    smoothing_sigmas_list[0] = adapted_sigmas
+                    self.logger.info(
+                        f"    Thick-slice: adapted schedule — "
+                        f"shrink={adapted_shrink}, sigmas={adapted_sigmas}"
+                    )
+
             # Use the FIRST (coarsest) parameter set for robust global alignment.
             # ANTs' "Affine" type_of_transform runs Rigid+Affine internally but
             # accepts only one set of aff_* parameters for the multi-resolution
@@ -473,6 +496,16 @@ class AntsPyXMultiModalCoregistration(BaseRegistrator):
                         f"Correlation dissimilarity ({corr_dissim:.4f}) "
                         f"> threshold ({self.quality_warning_threshold})"
                     )
+
+                    # Quality-gated fallback for thick-slice volumes: route to
+                    # direct atlas registration instead of using this poor
+                    # coregistration result.
+                    if is_thick_slice:
+                        self.logger.warning(
+                            f"    Thick-slice quality gate: {modality} will use "
+                            f"direct atlas registration fallback"
+                        )
+                        raise _CoregistrationCatastrophicFailure(modality)
 
             # Save warped image to temp location
             temp_output = study_dir / f"_temp_{modality}_registered.nii.gz"

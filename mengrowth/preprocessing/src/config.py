@@ -1390,6 +1390,7 @@ class SkullStrippingStepConfig:
 
     save_visualization: bool = True
     save_mask: bool = True
+    cross_study_mask_union: bool = True
     skull_stripping: SkullStrippingConfig = field(default_factory=SkullStrippingConfig)
 
     def __post_init__(self) -> None:
