@@ -1383,20 +1383,53 @@ class SkullStrippingStepConfig:
     """Configuration for skull stripping step (brain extraction).
 
     Attributes:
-        save_visualization: Whether to save visualization PNGs
-        save_mask: Whether to save brain mask NIfTI to artifacts directory
-        skull_stripping: Configuration for skull stripping algorithm
+        save_visualization: Whether to save visualization PNGs.
+        save_mask: Whether to save brain mask NIfTI to artifacts directory.
+        cross_study_mask_union: Legacy bool toggle (kept for backwards compat).
+        cross_study_mask_union_mode: Controls cross-study mask union strategy.
+            ``"audit"`` — computes volumes and writes a flag report to the
+            artifacts directory listing studies with significant volume
+            differences, but does NOT modify any masks.
+            ``"protective"`` — only expand masks for studies whose brain volume
+            is significantly below the maximum (prevents skull inclusion while
+            preserving tumor coverage).
+            ``"always"`` — original OR-union applied to all studies.
+            ``"disabled"`` — no cross-study mask union, no reporting.
+        cross_study_mask_union_protective_threshold: Volume deficit fraction
+            (0–1) that triggers mask expansion in protective mode.  A study
+            whose brain volume is below ``max_volume * (1 - threshold)`` will
+            have its mask expanded using the largest individual mask.
+        skull_stripping: Configuration for skull stripping algorithm.
     """
 
     save_visualization: bool = True
     save_mask: bool = True
     cross_study_mask_union: bool = True
+    cross_study_mask_union_mode: str = "audit"
+    cross_study_mask_union_protective_threshold: float = 0.05
     skull_stripping: SkullStrippingConfig = field(default_factory=SkullStrippingConfig)
 
     def __post_init__(self) -> None:
-        """Ensure skull_stripping is a SkullStrippingConfig instance."""
+        """Validate config fields and ensure correct types."""
         if isinstance(self.skull_stripping, dict):
             self.skull_stripping = SkullStrippingConfig(**self.skull_stripping)
+        # Backwards compat: old cross_study_mask_union=False → mode="disabled"
+        if (
+            not self.cross_study_mask_union
+            and self.cross_study_mask_union_mode == "audit"
+        ):
+            self.cross_study_mask_union_mode = "disabled"
+        valid_modes = ("audit", "protective", "always", "disabled")
+        if self.cross_study_mask_union_mode not in valid_modes:
+            raise ValueError(
+                f"cross_study_mask_union_mode must be one of {valid_modes}, "
+                f"got {self.cross_study_mask_union_mode!r}"
+            )
+        if not 0.0 < self.cross_study_mask_union_protective_threshold < 1.0:
+            raise ValueError(
+                f"cross_study_mask_union_protective_threshold must be in (0, 1), "
+                f"got {self.cross_study_mask_union_protective_threshold}"
+            )
 
 
 # Backwards compatibility alias

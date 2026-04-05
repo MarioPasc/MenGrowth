@@ -600,17 +600,28 @@ def compute_and_apply_union_brain_mask(
     modalities: "list[str]",
     longitudinal_transforms_dir: "Path | None" = None,
     save_intermediates: bool = False,
+    union_mode: str = "audit",
+    protective_threshold: float = 0.05,
     log: "logging.Logger | None" = None,
 ) -> bool:
-    """Compute union of brain masks across all studies and re-apply.
+    """Compute and selectively apply brain mask corrections across studies.
 
     After longitudinal registration, all studies are in the reference study's
-    space. This function warps each study's brain mask and pre-stripped backup
-    through its longitudinal transform into the common reference space,
-    computes the logical OR union, then re-applies the union mask to each
-    study's images. This ensures consistent brain coverage across timepoints,
-    preventing over-aggressive skull stripping from excluding peripheral
-    lesions (e.g., meningiomas near the skull/dura).
+    space.  This function warps each study's brain mask and pre-stripped backup
+    through its longitudinal transform into the common reference space, then
+    applies a mask correction strategy controlled by ``union_mode``:
+
+    * ``"audit"`` — computes mask volumes across studies and writes a flag
+      report (JSON) to the artifacts directory listing studies with significant
+      volume differences.  Does NOT modify any masks.
+    * ``"protective"`` — only expand masks for studies whose brain volume is
+      significantly below the maximum (indicating over-aggressive stripping,
+      e.g. meningioma clipped).  Uses the *largest individual mask* as the
+      expansion source, which is anatomically coherent (single HD-BET output)
+      rather than the noisy OR-union of all boundary variations.
+    * ``"always"`` — original behaviour: OR-union of all masks applied to
+      every study.
+    * ``"disabled"`` — no-op (should not be called, but returns False).
 
     Args:
         patient_id: Patient identifier.
@@ -618,16 +629,23 @@ def compute_and_apply_union_brain_mask(
         artifacts_root: Root directory for preprocessing artifacts.
         modalities: List of modality names.
         longitudinal_transforms_dir: Path to directory containing longitudinal
-            transforms ({timestamp}_{modality}_to_ref.h5). If None, masks are
+            transforms ({timestamp}_{modality}_to_ref.h5).  If None, masks are
             used as-is (no warping).
         save_intermediates: If True, keep warped mask and pre-stripped files
-            for QC inspection. If False, delete them after union is applied.
+            for QC inspection.  If False, delete them after processing.
+        union_mode: ``"protective"`` | ``"always"`` | ``"disabled"``.
+        protective_threshold: Volume deficit fraction (0–1) that triggers
+            expansion in protective mode.
         log: Optional logger.
 
     Returns:
-        True if union masks were computed and applied, False otherwise.
+        True if any masks were modified, False otherwise.
     """
     _log = log or logging.getLogger(__name__)
+
+    if union_mode == "disabled":
+        _log.info("  Union mask: disabled by config")
+        return False
 
     if len(study_dirs) < 2:
         _log.info(f"  Union mask: skipped (only {len(study_dirs)} study)")
@@ -636,7 +654,7 @@ def compute_and_apply_union_brain_mask(
     applied = False
 
     for modality in modalities:
-        # Collect masks and warp to reference space if transforms available
+        # ── Collect masks and warp to reference space ──
         mask_infos: list[dict] = []
         warped_intermediates: list[Path] = []
 
@@ -647,14 +665,12 @@ def compute_and_apply_union_brain_mask(
             if not mask_path.exists():
                 continue
 
-            # Try to warp mask through longitudinal transform
             timestamp = study_id.split("-")[-1]
             warped = False
             mask_data = None
             info_extra: dict = {}
 
             if longitudinal_transforms_dir is not None:
-                # Try both naming conventions (single-ref and per-modality)
                 transform_candidates = [
                     longitudinal_transforms_dir / f"{timestamp}_{modality}_to_ref.h5",
                     longitudinal_transforms_dir
@@ -667,7 +683,6 @@ def compute_and_apply_union_brain_mask(
                         break
 
                 if transform_path is not None:
-                    # Non-reference study: warp mask to reference space
                     ref_img_path = study_dir / f"{modality}.nii.gz"
                     warped_mask_path = (
                         artifact_dir / f"{modality}_brain_mask_warped.nii.gz"
@@ -691,7 +706,6 @@ def compute_and_apply_union_brain_mask(
                                 f"to reference space"
                             )
 
-                        # Also warp the pre-stripped backup (BSpline for intensity)
                         pre_stripped_path = (
                             artifact_dir / f"{modality}_pre_stripped.nii.gz"
                         )
@@ -714,7 +728,6 @@ def compute_and_apply_union_brain_mask(
                                 warped_intermediates.append(warped_pre_stripped)
 
             if mask_data is None:
-                # Reference study or no transforms: use mask as-is
                 mask_data = nib.load(str(mask_path)).get_fdata() > 0
 
             mask_infos.append(
@@ -732,49 +745,139 @@ def compute_and_apply_union_brain_mask(
         if len(mask_infos) < 2:
             continue
 
-        # Compute union in reference space
-        union_mask = np.logical_or.reduce([m["data"] for m in mask_infos])
-        union_vol = int(union_mask.sum())
+        # ── Compute volume statistics ──
         volumes = [m["volume"] for m in mask_infos]
         max_vol = max(volumes)
         min_vol = min(volumes)
+        volume_spread = (max_vol - min_vol) / max_vol if max_vol > 0 else 0.0
 
-        # 2% threshold: meningioma growth can cause HD-BET to strip tumor at
-        # later timepoints but retain it at earlier ones, producing mask volume
-        # differences of 3-4% that a 5% threshold would miss.
-        volume_spread = (max_vol - min_vol) / max_vol
-        if volume_spread < 0.02:
-            _log.info(
-                f"  Union mask ({modality}): volumes consistent "
-                f"(spread={volume_spread:.1%}), no correction needed"
-            )
-            # Clean up warped intermediates even when union not applied
+        # ── Mode-dependent logic ──
+        if union_mode == "audit":
+            # Report-only: log volumes, write flag file, never modify masks.
+            flagged = []
+            for info in mask_infos:
+                volume_ratio = info["volume"] / max_vol if max_vol > 0 else 1.0
+                deficit = 1.0 - volume_ratio
+                status = "FLAGGED" if deficit >= protective_threshold else "ok"
+                _log.info(
+                    f"    {info['study_id']} ({modality}): volume="
+                    f"{info['volume']}, deficit={deficit:.1%} [{status}]"
+                )
+                if deficit >= protective_threshold:
+                    flagged.append(
+                        {
+                            "study_id": info["study_id"],
+                            "modality": modality,
+                            "volume": info["volume"],
+                            "max_volume": max_vol,
+                            "deficit_pct": round(deficit * 100, 1),
+                        }
+                    )
+
+            if flagged:
+                _log.warning(
+                    f"  AUDIT ({modality}): {len(flagged)} study(ies) have "
+                    f"brain volume deficit >= {protective_threshold:.0%} — "
+                    f"review recommended"
+                )
+                # Accumulate flags across modalities for this patient
+                if not hasattr(compute_and_apply_union_brain_mask, "_audit_flags"):
+                    compute_and_apply_union_brain_mask._audit_flags = []
+                compute_and_apply_union_brain_mask._audit_flags.extend(flagged)
+            else:
+                _log.info(
+                    f"  AUDIT ({modality}): all volumes within "
+                    f"{protective_threshold:.0%} — no concerns"
+                )
+
+            # Clean up any warped intermediates
             if not save_intermediates:
                 for wp in warped_intermediates:
                     if wp.exists():
                         wp.unlink()
             continue
 
-        _log.info(
-            f"  Union mask ({modality}): volume spread={volume_spread:.1%} "
-            f"(min={min_vol}, max={max_vol}, union={union_vol}). "
-            f"Applying union mask to all studies."
-        )
+        elif union_mode == "always":
+            # Original behaviour: OR-union applied to all studies if spread > 2%
+            if volume_spread < 0.02:
+                _log.info(
+                    f"  Union mask ({modality}): volumes consistent "
+                    f"(spread={volume_spread:.1%}), no correction needed"
+                )
+                if not save_intermediates:
+                    for wp in warped_intermediates:
+                        if wp.exists():
+                            wp.unlink()
+                continue
 
-        # Apply union mask to each study
-        for info in mask_infos:
-            # Save updated mask
-            ref_nii = nib.load(str(info["path"]))
-            union_nii = nib.Nifti1Image(
-                union_mask.astype(np.uint8), ref_nii.affine, ref_nii.header
+            union_mask = np.logical_or.reduce([m["data"] for m in mask_infos])
+            union_vol = int(union_mask.sum())
+            _log.info(
+                f"  Union mask ({modality}): volume spread={volume_spread:.1%} "
+                f"(min={min_vol}, max={max_vol}, union={union_vol}). "
+                f"Applying union mask to all studies."
             )
-            nib.save(union_nii, str(info["path"]))
+            expansion_mask = union_mask
+            studies_to_expand = mask_infos
 
-            # Merge union mask with existing data: keep normalized tissue,
-            # fill newly-included voxels from the pre-stripped backup
+        elif union_mode == "protective":
+            # Only expand studies with significant volume deficit.
+            # Use the largest individual mask (anatomically coherent)
+            # rather than the noisy OR-union of all boundary variations.
+            studies_to_expand = []
+            for info in mask_infos:
+                volume_ratio = info["volume"] / max_vol if max_vol > 0 else 1.0
+                deficit = 1.0 - volume_ratio
+                if deficit >= protective_threshold:
+                    studies_to_expand.append(info)
+                    _log.info(
+                        f"    {info['study_id']} ({modality}): volume "
+                        f"deficit={deficit:.1%} >= {protective_threshold:.0%} "
+                        f"threshold — will expand mask"
+                    )
+                else:
+                    _log.info(
+                        f"    {info['study_id']} ({modality}): volume "
+                        f"deficit={deficit:.1%} < {protective_threshold:.0%} "
+                        f"threshold — keeping original mask"
+                    )
+
+            if not studies_to_expand:
+                _log.info(
+                    f"  Union mask ({modality}): protective mode found no "
+                    f"studies needing expansion (all within "
+                    f"{protective_threshold:.0%} of max). No changes applied."
+                )
+                if not save_intermediates:
+                    for wp in warped_intermediates:
+                        if wp.exists():
+                            wp.unlink()
+                continue
+
+            largest_info = max(mask_infos, key=lambda m: m["volume"])
+            expansion_mask = largest_info["data"]
+            _log.info(
+                f"  Protective expansion ({modality}): using largest mask "
+                f"({largest_info['study_id']}, {largest_info['volume']} voxels) "
+                f"as expansion source for {len(studies_to_expand)} study(ies)"
+            )
+        else:
+            continue  # safety net for unknown modes
+
+        # ── Apply expansion mask to selected studies ──
+        for info in studies_to_expand:
+            target_mask = info["data"] | expansion_mask
+
+            # Save updated mask artifact
+            ref_nii = nib.load(str(info["path"]))
+            target_mask_nii = nib.Nifti1Image(
+                target_mask.astype(np.uint8), ref_nii.affine, ref_nii.header
+            )
+            nib.save(target_mask_nii, str(info["path"]))
+
+            # Merge with image data: keep existing tissue, fill new voxels
+            # from pre-stripped backup
             img_path = info["study_dir"] / f"{modality}.nii.gz"
-
-            # Use warped pre-stripped if available, else fall back to original
             pre_stripped_path = info.get("warped_pre_stripped_path")
             if pre_stripped_path is None or not pre_stripped_path.exists():
                 pre_stripped_path = (
@@ -788,11 +891,10 @@ def compute_and_apply_union_brain_mask(
                 current_nii = nib.load(str(img_path))
                 current_data = current_nii.get_fdata().copy()
 
-                # Identify voxels that the union mask ADDS
                 original_mask = info["data"]
-                new_voxels = union_mask & ~original_mask
-
+                new_voxels = target_mask & ~original_mask
                 n_new = int(new_voxels.sum())
+
                 if n_new > 0 and pre_stripped_path.exists():
                     pre_data = nib.load(str(pre_stripped_path)).get_fdata()
                     current_data[new_voxels] = pre_data[new_voxels]
@@ -802,7 +904,7 @@ def compute_and_apply_union_brain_mask(
                         + (" (warped)" if info.get("warped_pre_stripped_path") else "")
                     )
 
-                current_data[~union_mask] = 0.0
+                current_data[~target_mask] = 0.0
 
                 merged_nii = nib.Nifti1Image(
                     current_data.astype(current_nii.get_data_dtype()),
@@ -813,14 +915,41 @@ def compute_and_apply_union_brain_mask(
                 nib.save(merged_nii, str(temp))
                 temp.replace(img_path)
 
-            _log.info(f"    {info['study_id']}: {info['volume']} -> {union_vol} voxels")
+            target_vol = int(target_mask.sum())
+            _log.info(
+                f"    {info['study_id']}: {info['volume']} -> {target_vol} voxels"
+            )
 
-        # Clean up warped intermediates after union is applied
+        # Clean up warped intermediates
         if not save_intermediates:
             for wp in warped_intermediates:
                 if wp.exists():
                     wp.unlink()
 
         applied = True
+
+    # Write audit report if in audit mode
+    if union_mode == "audit":
+        audit_flags = getattr(compute_and_apply_union_brain_mask, "_audit_flags", [])
+        report_path = artifacts_root / patient_id / "mask_volume_audit.json"
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        import json
+
+        report = {
+            "patient_id": patient_id,
+            "threshold_pct": round(protective_threshold * 100, 1),
+            "flagged_studies": audit_flags,
+            "n_flagged": len(audit_flags),
+        }
+        report_path.write_text(json.dumps(report, indent=2))
+        if audit_flags:
+            _log.warning(
+                f"  AUDIT REPORT: {len(audit_flags)} flagged entries written "
+                f"to {report_path}"
+            )
+        else:
+            _log.info(f"  AUDIT REPORT: no concerns — written to {report_path}")
+        # Clean up function-level state
+        compute_and_apply_union_brain_mask._audit_flags = []
 
     return applied

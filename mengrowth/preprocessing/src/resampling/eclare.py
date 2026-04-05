@@ -215,9 +215,17 @@ class EclareResampler(BaseResampler):
         self.logger.info(f"Running ECLARE command: {' '.join(cmd)}")
 
         try:
-            # Run subprocess with output capture
+            # Run subprocess with output capture and timeout.
+            # ECLARE typically completes in 60-120s per volume.  A 10-minute
+            # timeout catches deadlocked multiprocessing workers that would
+            # otherwise block the pipeline forever.
             result = subprocess.run(
-                cmd, capture_output=True, text=True, check=True, env=os.environ.copy()
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True,
+                env=os.environ.copy(),
+                timeout=600,
             )
 
             # Log stdout if available
@@ -225,6 +233,15 @@ class EclareResampler(BaseResampler):
                 self.logger.debug(f"ECLARE stdout:\n{result.stdout}")
 
             self.logger.info("ECLARE subprocess completed successfully")
+
+        except subprocess.TimeoutExpired as e:
+            self.logger.error(
+                f"ECLARE subprocess timed out after 600s (likely deadlocked). "
+                f"Command: {' '.join(cmd)}"
+            )
+            raise RuntimeError(
+                "ECLARE execution timed out (600s) — likely worker deadlock"
+            ) from e
 
         except subprocess.CalledProcessError as e:
             error_msg = (

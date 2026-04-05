@@ -273,7 +273,7 @@ class TestUnionMaskLogic:
     """Tests for compute_and_apply_union_brain_mask behavior."""
 
     def test_volume_spread_threshold_02_triggers(self, tmp_path: Path) -> None:
-        """Union IS applied when volume spread is 3% (above new 2% threshold)."""
+        """Union IS applied when volume spread is 3% (above 2% threshold) in always mode."""
         from mengrowth.preprocessing.src.steps.skull_stripping import (
             compute_and_apply_union_brain_mask,
         )
@@ -318,12 +318,13 @@ class TestUnionMaskLogic:
             artifacts_root=setup["artifacts_root"],
             modalities=[mod],
             longitudinal_transforms_dir=None,
+            union_mode="always",
         )
 
         assert result is True, "Union should be applied when spread > 2%"
 
     def test_volume_spread_threshold_02_skips(self, tmp_path: Path) -> None:
-        """Union is NOT applied when volume spread is ~1% (below 2% threshold)."""
+        """Union is NOT applied when volume spread is ~1% (below 2% threshold) in always mode."""
         from mengrowth.preprocessing.src.steps.skull_stripping import (
             compute_and_apply_union_brain_mask,
         )
@@ -367,6 +368,7 @@ class TestUnionMaskLogic:
             artifacts_root=setup["artifacts_root"],
             modalities=[mod],
             longitudinal_transforms_dir=None,
+            union_mode="always",
         )
 
         assert result is False, "Union should NOT be applied when spread < 2%"
@@ -410,6 +412,7 @@ class TestUnionMaskLogic:
             artifacts_root=setup["artifacts_root"],
             modalities=[mod],
             longitudinal_transforms_dir=None,  # No transforms
+            union_mode="always",
         )
 
         # Should still compute union (from unwarped masks)
@@ -535,6 +538,7 @@ class TestUnionMaskLogic:
             modalities=[mod],
             longitudinal_transforms_dir=transforms_dir,
             save_intermediates=True,  # Keep for inspection
+            union_mode="always",
         )
 
         assert result is True
@@ -622,3 +626,421 @@ class TestUnionMaskLogic:
             modalities=["t1c"],
         )
         assert result is False
+
+
+# ─── Protective mode tests ──────────────────────────────────────────────────
+
+
+def _setup_three_study_patient(
+    tmp_path: Path,
+    modality: str = "t1c",
+    radii: tuple[int, int, int] = (18, 14, 16),
+) -> dict:
+    """Set up a synthetic three-study patient with different mask sizes.
+
+    Returns a dict with all paths needed for testing.
+    """
+    patient_id = "MenGrowth-0002"
+    studies = [
+        "MenGrowth-0002-000",
+        "MenGrowth-0002-001",
+        "MenGrowth-0002-002",
+    ]
+    affine = np.eye(4)
+    shape = (64, 64, 64)
+
+    study_dirs = []
+    for study_id, radius in zip(studies, radii):
+        out_dir = tmp_path / "output" / patient_id / study_id
+        art_dir = tmp_path / "artifacts" / patient_id / study_id
+        out_dir.mkdir(parents=True)
+        art_dir.mkdir(parents=True)
+
+        mask = _sphere_mask(shape, (32, 32, 32), radius)
+        _make_nifti(mask, affine, art_dir / f"{modality}_brain_mask.nii.gz")
+        _make_nifti(
+            mask.astype(np.float32) * 100.0, affine, out_dir / f"{modality}.nii.gz"
+        )
+        # Pre-stripped backup (full head)
+        full_head = np.random.RandomState(42).rand(*shape).astype(np.float32) * 200
+        _make_nifti(full_head, affine, art_dir / f"{modality}_pre_stripped.nii.gz")
+
+        study_dirs.append(out_dir)
+
+    return {
+        "patient_id": patient_id,
+        "studies": studies,
+        "study_dirs": study_dirs,
+        "artifacts_root": tmp_path / "artifacts",
+        "modality": modality,
+    }
+
+
+class TestProtectiveMaskUnion:
+    """Tests for the protective mask union mode."""
+
+    def test_protective_only_expands_deficit_studies(self, tmp_path: Path) -> None:
+        """In protective mode, only the study with volume deficit gets expanded."""
+        from mengrowth.preprocessing.src.steps.skull_stripping import (
+            compute_and_apply_union_brain_mask,
+        )
+
+        setup = _setup_two_study_patient(tmp_path)
+        mod = setup["modality"]
+        shape = (64, 64, 64)
+
+        # Big mask (ref study) and small mask (nonref study, ~30% deficit)
+        big_mask = _sphere_mask(shape, (32, 32, 32), 18)
+        small_mask = _sphere_mask(shape, (32, 32, 32), 14)
+        big_vol = int(big_mask.sum())
+        small_vol = int(small_mask.sum())
+        deficit = 1.0 - small_vol / big_vol
+        assert deficit > 0.05, f"Test setup: deficit={deficit:.1%} should be > 5%"
+
+        _make_nifti(
+            big_mask,
+            np.eye(4),
+            setup["artifacts_root"]
+            / setup["patient_id"]
+            / setup["ref_study"]
+            / f"{mod}_brain_mask.nii.gz",
+        )
+        _make_nifti(
+            small_mask,
+            np.eye(4),
+            setup["artifacts_root"]
+            / setup["patient_id"]
+            / setup["nonref_study"]
+            / f"{mod}_brain_mask.nii.gz",
+        )
+
+        # Save original ref image data for comparison
+        ref_img_before = (
+            nib.load(str(setup["study_dirs"][0] / f"{mod}.nii.gz")).get_fdata().copy()
+        )
+
+        result = compute_and_apply_union_brain_mask(
+            patient_id=setup["patient_id"],
+            study_dirs=setup["study_dirs"],
+            artifacts_root=setup["artifacts_root"],
+            modalities=[mod],
+            longitudinal_transforms_dir=None,
+            union_mode="protective",
+            protective_threshold=0.05,
+        )
+
+        assert result is True
+
+        # The ref study (big mask) should NOT have been modified
+        ref_img_after = nib.load(
+            str(setup["study_dirs"][0] / f"{mod}.nii.gz")
+        ).get_fdata()
+        np.testing.assert_array_equal(
+            ref_img_before,
+            ref_img_after,
+            err_msg="Ref study with adequate mask should NOT be modified",
+        )
+
+        # The nonref study (small mask) SHOULD have been expanded
+        nonref_mask_after = nib.load(
+            str(
+                setup["artifacts_root"]
+                / setup["patient_id"]
+                / setup["nonref_study"]
+                / f"{mod}_brain_mask.nii.gz"
+            )
+        ).get_fdata()
+        expanded_vol = int((nonref_mask_after > 0).sum())
+        assert expanded_vol > small_vol, (
+            f"Nonref mask should have been expanded: {small_vol} -> {expanded_vol}"
+        )
+
+    def test_protective_uses_largest_mask_not_union(self, tmp_path: Path) -> None:
+        """Protective mode uses the largest individual mask, not the OR union."""
+        from mengrowth.preprocessing.src.steps.skull_stripping import (
+            compute_and_apply_union_brain_mask,
+        )
+
+        setup = _setup_three_study_patient(tmp_path, radii=(18, 12, 16))
+        mod = setup["modality"]
+        shape = (64, 64, 64)
+
+        # Study 000: r=18 (largest), Study 001: r=12 (deficit), Study 002: r=16
+        # In protective mode, expansion source = Study 000's mask (largest)
+        # NOT the union of all three
+
+        result = compute_and_apply_union_brain_mask(
+            patient_id=setup["patient_id"],
+            study_dirs=setup["study_dirs"],
+            artifacts_root=setup["artifacts_root"],
+            modalities=[mod],
+            longitudinal_transforms_dir=None,
+            union_mode="protective",
+            protective_threshold=0.05,
+        )
+
+        assert result is True
+
+        # The deficit study (001, r=12) should be expanded to match the largest
+        # mask (000, r=18), not the union of all three
+        largest_mask = _sphere_mask(shape, (32, 32, 32), 18)
+        largest_vol = int(largest_mask.sum())
+
+        expanded_mask = nib.load(
+            str(
+                setup["artifacts_root"]
+                / setup["patient_id"]
+                / setup["studies"][1]
+                / f"{mod}_brain_mask.nii.gz"
+            )
+        ).get_fdata()
+        expanded_vol = int((expanded_mask > 0).sum())
+
+        # Should be close to largest mask volume (OR of small + largest = largest)
+        assert expanded_vol == largest_vol, (
+            f"Expanded mask should match largest individual mask "
+            f"({largest_vol}), got {expanded_vol}"
+        )
+
+    def test_protective_no_expansion_when_all_adequate(self, tmp_path: Path) -> None:
+        """No expansion when all studies are within the protective threshold."""
+        from mengrowth.preprocessing.src.steps.skull_stripping import (
+            compute_and_apply_union_brain_mask,
+        )
+
+        # All masks identical — zero deficit
+        setup = _setup_three_study_patient(tmp_path, radii=(15, 15, 15))
+        mod = setup["modality"]
+
+        result = compute_and_apply_union_brain_mask(
+            patient_id=setup["patient_id"],
+            study_dirs=setup["study_dirs"],
+            artifacts_root=setup["artifacts_root"],
+            modalities=[mod],
+            longitudinal_transforms_dir=None,
+            union_mode="protective",
+            protective_threshold=0.05,
+        )
+
+        assert result is False, "No expansion should occur when all within threshold"
+
+    def test_always_mode_backwards_compatible(self, tmp_path: Path) -> None:
+        """'always' mode applies union to ALL studies (original behaviour)."""
+        from mengrowth.preprocessing.src.steps.skull_stripping import (
+            compute_and_apply_union_brain_mask,
+        )
+
+        setup = _setup_two_study_patient(tmp_path)
+        mod = setup["modality"]
+        shape = (64, 64, 64)
+
+        big_mask = _sphere_mask(shape, (32, 32, 32), 18)
+        small_mask = _sphere_mask(shape, (32, 32, 32), 14)
+
+        _make_nifti(
+            big_mask,
+            np.eye(4),
+            setup["artifacts_root"]
+            / setup["patient_id"]
+            / setup["ref_study"]
+            / f"{mod}_brain_mask.nii.gz",
+        )
+        _make_nifti(
+            small_mask,
+            np.eye(4),
+            setup["artifacts_root"]
+            / setup["patient_id"]
+            / setup["nonref_study"]
+            / f"{mod}_brain_mask.nii.gz",
+        )
+
+        result = compute_and_apply_union_brain_mask(
+            patient_id=setup["patient_id"],
+            study_dirs=setup["study_dirs"],
+            artifacts_root=setup["artifacts_root"],
+            modalities=[mod],
+            longitudinal_transforms_dir=None,
+            union_mode="always",
+        )
+
+        assert result is True
+
+        # In "always" mode, BOTH studies get the union mask applied.
+        # The ref study mask should now equal the union (= big_mask since
+        # big_mask is a superset of small_mask).
+        ref_mask_after = nib.load(
+            str(
+                setup["artifacts_root"]
+                / setup["patient_id"]
+                / setup["ref_study"]
+                / f"{mod}_brain_mask.nii.gz"
+            )
+        ).get_fdata()
+        union_expected = (big_mask | small_mask).astype(np.uint8)
+        np.testing.assert_array_equal(
+            (ref_mask_after > 0).astype(np.uint8),
+            union_expected,
+            err_msg="In 'always' mode, ref study should receive union mask",
+        )
+
+    def test_disabled_mode_skips(self, tmp_path: Path) -> None:
+        """'disabled' mode returns False without modifying anything."""
+        from mengrowth.preprocessing.src.steps.skull_stripping import (
+            compute_and_apply_union_brain_mask,
+        )
+
+        setup = _setup_two_study_patient(tmp_path)
+        mod = setup["modality"]
+        shape = (64, 64, 64)
+
+        big_mask = _sphere_mask(shape, (32, 32, 32), 18)
+        small_mask = _sphere_mask(shape, (32, 32, 32), 14)
+
+        _make_nifti(
+            big_mask,
+            np.eye(4),
+            setup["artifacts_root"]
+            / setup["patient_id"]
+            / setup["ref_study"]
+            / f"{mod}_brain_mask.nii.gz",
+        )
+        _make_nifti(
+            small_mask,
+            np.eye(4),
+            setup["artifacts_root"]
+            / setup["patient_id"]
+            / setup["nonref_study"]
+            / f"{mod}_brain_mask.nii.gz",
+        )
+
+        result = compute_and_apply_union_brain_mask(
+            patient_id=setup["patient_id"],
+            study_dirs=setup["study_dirs"],
+            artifacts_root=setup["artifacts_root"],
+            modalities=[mod],
+            longitudinal_transforms_dir=None,
+            union_mode="disabled",
+        )
+
+        assert result is False
+
+        # Masks should be untouched
+        ref_mask = nib.load(
+            str(
+                setup["artifacts_root"]
+                / setup["patient_id"]
+                / setup["ref_study"]
+                / f"{mod}_brain_mask.nii.gz"
+            )
+        ).get_fdata()
+        np.testing.assert_array_equal(
+            (ref_mask > 0).astype(np.uint8),
+            big_mask,
+            err_msg="Disabled mode should not modify masks",
+        )
+
+    def test_backwards_compat_bool_false_means_disabled(self) -> None:
+        """Old cross_study_mask_union=False resolves to mode='disabled'."""
+        from mengrowth.preprocessing.src.config import SkullStrippingStepConfig
+
+        cfg = SkullStrippingStepConfig(cross_study_mask_union=False)
+        assert cfg.cross_study_mask_union_mode == "disabled"
+
+    def test_backwards_compat_bool_true_keeps_mode(self) -> None:
+        """Old cross_study_mask_union=True keeps the default audit mode."""
+        from mengrowth.preprocessing.src.config import SkullStrippingStepConfig
+
+        cfg = SkullStrippingStepConfig(cross_study_mask_union=True)
+        assert cfg.cross_study_mask_union_mode == "audit"
+
+    def test_config_explicit_mode_overrides_bool(self) -> None:
+        """Explicit mode setting takes priority regardless of bool value."""
+        from mengrowth.preprocessing.src.config import SkullStrippingStepConfig
+
+        cfg = SkullStrippingStepConfig(
+            cross_study_mask_union=True,
+            cross_study_mask_union_mode="disabled",
+        )
+        assert cfg.cross_study_mask_union_mode == "disabled"
+
+    def test_config_invalid_mode_raises(self) -> None:
+        """Invalid mode raises ValueError."""
+        from mengrowth.preprocessing.src.config import SkullStrippingStepConfig
+
+        with pytest.raises(ValueError, match="cross_study_mask_union_mode"):
+            SkullStrippingStepConfig(cross_study_mask_union_mode="bogus")
+
+    def test_audit_mode_writes_report_no_mask_changes(self, tmp_path: Path) -> None:
+        """Audit mode writes flag report but does NOT modify any masks."""
+        import json
+
+        from mengrowth.preprocessing.src.steps.skull_stripping import (
+            compute_and_apply_union_brain_mask,
+        )
+
+        setup = _setup_two_study_patient(tmp_path)
+        mod = setup["modality"]
+        shape = (64, 64, 64)
+
+        # Large deficit to trigger flagging
+        big_mask = _sphere_mask(shape, (32, 32, 32), 18)
+        small_mask = _sphere_mask(shape, (32, 32, 32), 12)
+
+        _make_nifti(
+            big_mask,
+            np.eye(4),
+            setup["artifacts_root"]
+            / setup["patient_id"]
+            / setup["ref_study"]
+            / f"{mod}_brain_mask.nii.gz",
+        )
+        _make_nifti(
+            small_mask,
+            np.eye(4),
+            setup["artifacts_root"]
+            / setup["patient_id"]
+            / setup["nonref_study"]
+            / f"{mod}_brain_mask.nii.gz",
+        )
+
+        # Save originals for comparison
+        ref_img_before = (
+            nib.load(str(setup["study_dirs"][0] / f"{mod}.nii.gz")).get_fdata().copy()
+        )
+        nonref_img_before = (
+            nib.load(str(setup["study_dirs"][1] / f"{mod}.nii.gz")).get_fdata().copy()
+        )
+
+        result = compute_and_apply_union_brain_mask(
+            patient_id=setup["patient_id"],
+            study_dirs=setup["study_dirs"],
+            artifacts_root=setup["artifacts_root"],
+            modalities=[mod],
+            longitudinal_transforms_dir=None,
+            union_mode="audit",
+            protective_threshold=0.05,
+        )
+
+        # Audit mode returns False (no masks modified)
+        assert result is False
+
+        # Masks and images should be UNCHANGED
+        ref_img_after = nib.load(
+            str(setup["study_dirs"][0] / f"{mod}.nii.gz")
+        ).get_fdata()
+        nonref_img_after = nib.load(
+            str(setup["study_dirs"][1] / f"{mod}.nii.gz")
+        ).get_fdata()
+        np.testing.assert_array_equal(ref_img_before, ref_img_after)
+        np.testing.assert_array_equal(nonref_img_before, nonref_img_after)
+
+        # Audit report should exist
+        report_path = (
+            setup["artifacts_root"] / setup["patient_id"] / "mask_volume_audit.json"
+        )
+        assert report_path.exists(), "Audit report should be written"
+
+        report = json.loads(report_path.read_text())
+        assert report["patient_id"] == setup["patient_id"]
+        assert report["n_flagged"] > 0, "Should flag the small-mask study"
+        assert report["flagged_studies"][0]["study_id"] == setup["nonref_study"]

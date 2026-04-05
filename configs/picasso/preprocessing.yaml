@@ -136,13 +136,18 @@ preprocessing:
     # ========================================================================
     # Step 3: Resampling (modality-level)
     # ========================================================================
-    # BSpline order=3 for isotropic resampling. Robust for all spacing ranges.
-    # ECLARE/composite disabled due to catastrophic failures on thick-slice data.
+    # Composite resampling: BSpline for small spacing gaps, ECLARE (learned
+    # super-resolution) for thick-slice dimensions.  Preserves structural edges
+    # in through-plane upsampling (e.g. 6mm→1mm), improving downstream
+    # registration quality.  Falls back to BSpline if ECLARE fails.
+    #
+    # max_mm_dl_method=7.0: routes 5-6mm thick-slice data directly through
+    # ECLARE (Rule 3) instead of a lossy BSpline pre-interpolation step.
     resampling:
       save_visualization: true
 
       resampling:
-        method: bspline                # BSpline is robust for all spacing ranges.
+        method: composite              # "composite" | "bspline" | "eclare"
         target_voxel_size: [1.0, 1.0, 1.0]   # Isotropic 1mm³ (BraTS standard)
 
         # Pre-resampling normalization (applied BEFORE resampling to stabilize intensities)
@@ -152,7 +157,7 @@ preprocessing:
         # ── BSpline parameters ──
         bspline_order: 3               # 3 = cubic (recommended). 0=NN, 1=linear, 5=quintic.
 
-        # ── ECLARE parameters (inactive when method=bspline, kept for reference) ──
+        # ── ECLARE parameters ──
         conda_environment_eclare: "mengrowth"
         batch_size: 128
         n_patches: 80000
@@ -165,7 +170,7 @@ preprocessing:
         composite_dl_method: "eclare"
 
         max_mm_interpolator: 1.5
-        max_mm_dl_method: 5.0
+        max_mm_dl_method: 7.0          # 7.0: 6mm thick-slice → ECLARE directly (no pre-interp blur)
         resample_mm_to_interpolator_if_max_mm_dl_method: 3.5
 
         # Unused normalization params (kept for config compatibility)
@@ -300,6 +305,15 @@ preprocessing:
     skull_stripping:
       save_visualization: true
       save_mask: true                  # Save brain mask to artifacts (used by intensity normalization)
+
+      # Cross-study mask union mode:
+      #   "audit"      — report volume differences, flag outliers, NO mask changes
+      #   "protective" — expand only deficit masks (prevents skull inclusion)
+      #   "always"     — original OR-union to all studies
+      #   "disabled"   — skip entirely
+      cross_study_mask_union: true
+      cross_study_mask_union_mode: "audit"
+      cross_study_mask_union_protective_threshold: 0.05   # 5% volume deficit
 
       skull_stripping:
           method: "hdbet"              # "hdbet" | "synthstrip". HD-BET for pathological brains.

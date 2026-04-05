@@ -52,12 +52,19 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# NOTE on eclare: it hard-pins scipy==1.11.4 but only uses
+# scipy.interpolate.interp1d and scipy.ndimage.gaussian_filter (works on any version).
+# Install with:  pip install --no-deps eclare && pip install -e ".[preprocessing]"
 deep-learning-interpolation = [
-    "eclare"
+    # eclare's real runtime deps (excluding its broken scipy==1.11.4 pin)
+    "radifox-utils==1.0.3",
+    "torch>=2.5",
+    "tqdm",
+    "exceptiongroup",
+    "tomli",
 ]
 preprocessing = [
-    "brats==0.1.6",
-    "brats[preprocessing]",
+    "brainles_preprocessing>=0.6.7",
     "intensity-normalization @ git+https://github.com/jcreinhold/intensity-normalization.git@6d2e486",
     "cupy-cuda12x",
 ]

@@ -900,27 +900,43 @@ class PreprocessingOrchestrator:
                 f"(need 2+ for longitudinal registration)"
             )
 
-        # PHASE 2.5: Cross-study brain mask union (if ≥2 studies)
+        # PHASE 2.5: Cross-study brain mask audit/union (if ≥2 studies)
         # After longitudinal registration, all studies are in the same space.
-        # Compute union of brain masks to ensure consistent coverage across
-        # timepoints (prevents over-aggressive skull stripping from excluding
-        # peripheral lesions like meningiomas near the skull/dura).
-        # Check config flag for cross-study mask union
+        # "audit" mode: report volume differences without modifying masks.
+        # "protective" mode: only expand masks for studies with significant
+        # brain volume deficit (prevents skull inclusion from boundary noise).
         skull_strip_cfg = self.config.step_configs.get("skull_stripping", {})
-        mask_union_enabled = (
-            skull_strip_cfg.get("cross_study_mask_union", True)
-            if isinstance(skull_strip_cfg, dict)
-            else getattr(skull_strip_cfg, "cross_study_mask_union", True)
-        )
 
-        if len(study_dirs) >= 2 and mask_union_enabled:
+        # Read union mode (new) with backwards compat for old bool field
+        if isinstance(skull_strip_cfg, dict):
+            mask_union_mode = skull_strip_cfg.get(
+                "cross_study_mask_union_mode", "audit"
+            )
+            old_bool = skull_strip_cfg.get("cross_study_mask_union", True)
+            protective_threshold = skull_strip_cfg.get(
+                "cross_study_mask_union_protective_threshold", 0.05
+            )
+        else:
+            mask_union_mode = getattr(
+                skull_strip_cfg, "cross_study_mask_union_mode", "audit"
+            )
+            old_bool = getattr(skull_strip_cfg, "cross_study_mask_union", True)
+            protective_threshold = getattr(
+                skull_strip_cfg,
+                "cross_study_mask_union_protective_threshold",
+                0.05,
+            )
+        # Backwards compat: old bool=False with default mode → disabled
+        if not old_bool and mask_union_mode == "audit":
+            mask_union_mode = "disabled"
+
+        if len(study_dirs) >= 2 and mask_union_mode != "disabled":
             try:
                 from mengrowth.preprocessing.src.steps.skull_stripping import (
                     compute_and_apply_union_brain_mask,
                 )
 
                 artifacts_root = Path(self.config.preprocessing_artifacts_path)
-                # Get the study output dirs (where preprocessed NIfTIs live)
                 study_output_dirs = []
                 for sd in study_dirs:
                     if self.config.mode == "test":
@@ -934,7 +950,6 @@ class PreprocessingOrchestrator:
                     long_transforms_dir = (
                         artifacts_root / patient_id / "longitudinal_registration"
                     )
-                    # Pass save_intermediates from skull stripping config
                     _save_intermediates = (
                         getattr(skull_strip_cfg, "save_mask", True)
                         if not isinstance(skull_strip_cfg, dict)
@@ -949,6 +964,8 @@ class PreprocessingOrchestrator:
                         if long_transforms_dir.exists()
                         else None,
                         save_intermediates=_save_intermediates,
+                        union_mode=mask_union_mode,
+                        protective_threshold=protective_threshold,
                         log=self.logger,
                     )
             except Exception as e:

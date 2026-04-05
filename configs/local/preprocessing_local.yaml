@@ -1,14 +1,14 @@
 preprocessing:
   # ── Pipeline step order ──
-  # v3: register-first, skull-strip T1c only, apply to all (BraTS-standard)
-  # Key change from v2: registration before skull stripping, full-head atlas
+  # v5: composite resampling + protective mask union + longitudinal registration
   steps: ["data_harmonization",
           "bias_field_correction",
           "resampling",
           "cubic_padding",
           "registration_static",
           "skull_stripping",
-          "intensity_normalization"
+          "intensity_normalization",
+          "longitudinal_registration"
           ]
 
   general_configuration:
@@ -16,7 +16,7 @@ preprocessing:
 
     # Selection
     patient_selector: "single"
-    patient_id: "MenGrowth-0009"
+    patient_id: "MenGrowth-0023"
 
     # I/O mode
     mode: "test"
@@ -87,11 +87,11 @@ preprocessing:
         bias_field_fwhm: 0.15
         convergence_threshold: 0.001
 
-    # Step 3: Resampling (modality-level) — no changes from v2
+    # Step 3: Resampling (modality-level) — composite: BSpline + ECLARE
     resampling:
       save_visualization: true
       resampling:
-        method: bspline
+        method: composite
         target_voxel_size: [1.0, 1.0, 1.0]
         normalize_method: null
         bspline_order: 3
@@ -106,7 +106,7 @@ preprocessing:
         composite_interpolator: "bspline"
         composite_dl_method: "eclare"
         max_mm_interpolator: 1.5
-        max_mm_dl_method: 5.0
+        max_mm_dl_method: 7.0
         resample_mm_to_interpolator_if_max_mm_dl_method: 3.5
 
         norm_value: 1.0
@@ -212,6 +212,9 @@ preprocessing:
     skull_stripping:
       save_visualization: true
       save_mask: true
+      cross_study_mask_union: true
+      cross_study_mask_union_mode: "audit"
+      cross_study_mask_union_protective_threshold: 0.05
 
       skull_stripping:
           method: "hdbet"
@@ -249,6 +252,40 @@ preprocessing:
           max_iter: 50
           error_threshold: 0.005
           fuzziness: 2.0
+
+    # Step 8: Longitudinal Registration (patient-level)
+    longitudinal_registration:
+      save_visualization: true
+      longitudinal_registration:
+          method: "ants"
+          engine: "antspyx"
+          reference_modality_priority: "t1n > t1c > t2f > t2w"
+          reference_selection_method: "quality_based"
+          reference_selection_metrics:
+            - "snr_foreground"
+            - "cnr_high_low"
+            - "boundary_gradient_score"
+            - "brain_coverage_fraction"
+            - "laplacian_sharpness"
+            - "ghosting_score"
+          reference_selection_prefer_earlier: true
+          reference_selection_validate_jacobian: true
+          reference_selection_jacobian_threshold: 0.5
+          transform_type: ["Rigid", "Affine"]
+          metric: "Mattes"
+          metric_bins: 64
+          sampling_strategy: "Random"
+          sampling_percentage: 0.5
+          number_of_iterations: [[1000, 500, 250, 0], [1000, 500, 250, 0]]
+          shrink_factors: [[8, 4, 2, 1], [8, 4, 2, 1]]
+          smoothing_sigmas: [[3, 2, 1, 0], [3, 2, 1, 0]]
+          convergence_threshold: 1.0e-6
+          convergence_window_size: 10
+          write_composite_transform: true
+          interpolation: "BSpline"
+          save_detailed_registration_info: false
+          propagate_reference_mask: true
+          compute_mask_comparison: true
 
   # QC disabled for speed
   qc_metrics:
