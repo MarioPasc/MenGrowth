@@ -147,7 +147,7 @@ else:
 
 # ECLARE availability (separate conda env with full deps)
 ECLARE_ENV="${ECLARE_CONDA_ENV:-mengrowth-eclare}"
-conda run --no-banner -n "${ECLARE_ENV}" python -c "
+conda run -n "${ECLARE_ENV}" python -c "
 import eclare; print('[OK]   ECLARE importable (env: ${ECLARE_ENV})')
 " || {
     echo "[FAIL] ECLARE not importable in env '${ECLARE_ENV}'."

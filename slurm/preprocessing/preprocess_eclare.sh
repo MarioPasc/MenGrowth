@@ -162,8 +162,8 @@ else:
 }
 
 # ECLARE import check (mengrowth-eclare has its own full deps)
-conda run --no-banner -n "${ECLARE_CONDA_ENV}" python -c "
-import eclare; print('  ECLARE', eclare.__spec__.origin, ': OK')
+conda run -n "${ECLARE_CONDA_ENV}" python -c "
+import eclare; print('  ECLARE ' + str(eclare.__spec__.origin) + ' : OK')
 " 2>/dev/null || echo "  WARNING: ECLARE not importable in env ${ECLARE_CONDA_ENV} (non-fatal, workers will re-check)"
 
 echo ""
