@@ -581,7 +581,7 @@ class ResamplingConfig:
     bspline_order: int = 3
 
     # ECLARE parameters
-    conda_environment_eclare: str = "eclare_env"
+    conda_environment_eclare: str = "mengrowth-eclare"
     batch_size: int = 128
     n_patches: int = 1000000
     patch_sampling: str = "gradient"

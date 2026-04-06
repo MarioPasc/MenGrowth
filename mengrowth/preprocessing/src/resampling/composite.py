@@ -357,7 +357,7 @@ class CompositeResampler(BaseResampler):
                     try:
                         eclare_config = {
                             "conda_environment_eclare": self.full_config.get(
-                                "conda_environment_eclare", "eclare_env"
+                                "conda_environment_eclare", "mengrowth-eclare"
                             ),
                             "batch_size": self.full_config.get("batch_size", 128),
                             "n_patches": self.full_config.get("n_patches", 50000),

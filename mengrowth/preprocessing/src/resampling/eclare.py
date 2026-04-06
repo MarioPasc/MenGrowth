@@ -67,7 +67,7 @@ class EclareResampler(BaseResampler):
         )
 
         # Extract ECLARE-specific parameters with defaults
-        self.conda_env = config.get("conda_environment_eclare", "eclare_env")
+        self.conda_env = config.get("conda_environment_eclare", "mengrowth-eclare")
         self.batch_size = config.get("batch_size", 128)
         self.n_patches = config.get("n_patches", 1000000)
         self.patch_sampling = config.get("patch_sampling", "gradient")

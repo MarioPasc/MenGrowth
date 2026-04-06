@@ -158,7 +158,7 @@ preprocessing:
         bspline_order: 3               # 3 = cubic (recommended). 0=NN, 1=linear, 5=quintic.
 
         # ── ECLARE parameters ──
-        conda_environment_eclare: "mengrowth"
+        conda_environment_eclare: "mengrowth-eclare"
         batch_size: 128
         n_patches: 80000
         patch_sampling: "gradient"

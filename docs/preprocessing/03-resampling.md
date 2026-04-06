@@ -47,7 +47,7 @@ resampling:
     normalize_method: null        # "zscore" | "kde" | "percentile_minmax" | null
 
     # ECLARE parameters (if method == "eclare")
-    conda_environment_eclare: "eclare_env"
+    conda_environment_eclare: "mengrowth-eclare"
     batch_size: 128
     gpu_id: 0
 
