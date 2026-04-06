@@ -162,12 +162,12 @@ else:
 }
 
 # ECLARE weights — trigger a dry-run import so weights get cached
-conda run -n "${ECLARE_CONDA_ENV}" python -c "
+conda run -n "${CONDA_ENV_NAME}" python -c "
 try:
     from eclare.model import ECLARE
     print('  ECLARE model: import OK (weights will be cached on first run)')
 except ImportError:
-    print('  WARNING: ECLARE not importable in env ${ECLARE_CONDA_ENV}')
+    print('  WARNING: ECLARE not importable in env ${CONDA_ENV_NAME}')
 " 2>/dev/null || echo "  WARNING: Could not verify ECLARE installation"
 
 echo ""

@@ -145,14 +145,12 @@ else:
     print('[OK]   HD-BET weights: all 5 folds present')
 "
 
-# ECLARE availability
-ECLARE_ENV="${ECLARE_CONDA_ENV:-${CONDA_ENV_NAME}}"
-conda run -n "${ECLARE_ENV}" python -c "
+# ECLARE availability (eclare is in the same env, installed with --no-deps)
+python -c "
 from eclare.model import ECLARE
-print('[OK]   ECLARE model importable in env: ${ECLARE_ENV}')
-" 2>/dev/null || {
-    echo "[FAIL] ECLARE not importable in conda env '${ECLARE_ENV}'."
-    echo "       Install: conda run -n ${ECLARE_ENV} pip install eclare"
+print('[OK]   ECLARE model importable')
+" || {
+    echo "[FAIL] ECLARE not importable. Install: pip install --no-deps eclare"
     exit 1
 }
 
