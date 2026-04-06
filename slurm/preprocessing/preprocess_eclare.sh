@@ -161,14 +161,13 @@ else:
     echo "WARNING: Could not verify HD-BET weights."
 }
 
-# ECLARE weights — trigger a dry-run import so weights get cached
-conda run -n "${CONDA_ENV_NAME}" python -c "
-try:
-    from eclare.model import ECLARE
-    print('  ECLARE model: import OK (weights will be cached on first run)')
-except ImportError:
-    print('  WARNING: ECLARE not importable in env ${CONDA_ENV_NAME}')
-" 2>/dev/null || echo "  WARNING: Could not verify ECLARE installation"
+# ECLARE weights — trigger a dry-run import so weights get cached.
+# NOTE: eclare is installed with --no-deps (its scipy==1.11.4 pin conflicts
+# with brainles_preprocessing). conda run may print pip metadata warnings to
+# stderr — we ignore those and only check the Python exit code.
+conda run --no-banner -n "${CONDA_ENV_NAME}" python -c "
+from eclare.model import ECLARE; print('  ECLARE model: import OK (weights will be cached on first run)')
+" 2>/dev/null || echo "  WARNING: ECLARE not importable in env ${CONDA_ENV_NAME} (non-fatal, workers will re-check)"
 
 echo ""
 
