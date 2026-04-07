@@ -81,7 +81,7 @@ preprocessing:
       # Intensity outlier clipping (hot pixel removal)
       intensity_clipping:
         enabled: true                    # true | false
-        upper_percentile: 99.9           # Percentile for clipping nonzero voxels [90.0-100.0]
+        upper_percentile: 95.0           # Aggressive clipping for hot pixel in t2f
         log_clipped_count: true          # Log how many voxels were clipped
 
       background_zeroing:
