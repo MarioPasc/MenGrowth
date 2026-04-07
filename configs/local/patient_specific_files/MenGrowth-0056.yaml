@@ -1,0 +1,301 @@
+preprocessing:
+  # ── Pipeline step order ──
+  # v5: composite resampling + protective mask union + longitudinal registration
+  steps: ["data_harmonization",
+          "bias_field_correction",
+          "resampling",
+          "cubic_padding",
+          "registration_static",
+          "skull_stripping",
+          "intensity_normalization",
+          "longitudinal_registration"
+          ]
+
+  general_configuration:
+    enabled: true
+
+    # Selection
+    patient_selector: "single"
+    patient_id: "MenGrowth-0056"
+
+    # I/O mode
+    mode: "test"
+    dataset_root: "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/curated/dataset/MenGrowth-2025"
+    output_root: "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/preprocessed/test"
+    preprocessing_artifacts_path: "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/preprocessed/test/artifacts"
+    viz_root: "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/preprocessed/test/viz"
+    overwrite: true
+
+    modalities: ["t1c", "t1n", "t2w", "t2f"]
+
+    # Detailed patient archive (HDF5 snapshots for showcase patients)
+    detailed_archive:
+      enabled: true
+      patient_ids: ["MenGrowth-0009"]
+      compression: "gzip"
+      compression_level: 4
+
+  # ============================================================================
+  # Step-specific configurations
+  # ============================================================================
+  step_configs:
+
+    # Step 1: Data Harmonization (modality-level) — no changes from v2
+    data_harmonization:
+      save_visualization: true
+      reorient_to: "RAS"
+
+      # Intensity outlier clipping (hot pixel removal)
+      intensity_clipping:
+        enabled: true
+        upper_percentile: 99.9
+        log_clipped_count: true
+
+      background_zeroing:
+        method: null
+
+        percentile_low: 2
+        gaussian_sigma: 0.5
+        min_comp_voxels: 500
+        auto_fallback: true
+        fallback_threshold: 0.05
+        fallback_method: "otsu"
+        fallback_percentile: 10.0
+        fill_value: 0.0
+        air_p_low: 2.0
+        air_p_high: 20.0
+        air_p_global: 0.2
+        erode_vox: 1
+        close_iters: 2
+        connectivity: 2
+        air_border_margin: 0
+        expand_air_mask: 3
+        gaussian_sigma_px: 1.0
+        n_components_to_keep: 1
+        relaxed_threshold_factor: 0.1
+        p_low: 1.0
+        p_high: 99.0
+
+    # Step 2: Bias Field Correction (modality-level) — no changes from v2
+    bias_field_correction:
+      save_visualization: true
+      save_artifact: true
+      bias_field_correction:
+        method: "n4"
+        shrink_factor: 4
+        max_iterations: [50, 50, 50, 50]
+        bias_field_fwhm: 0.15
+        convergence_threshold: 0.001
+
+    # Step 3: Resampling (modality-level) — composite: BSpline + ECLARE
+    resampling:
+      save_visualization: true
+      resampling:
+        method: bspline
+        target_voxel_size: [1.0, 1.0, 1.0]
+        normalize_method: null
+        bspline_order: 3
+
+        conda_environment_eclare: "mengrowth-eclare"
+        batch_size: 128
+        n_patches: 80000
+        patch_sampling: "gradient"
+        suffix: ""
+        gpu_id: 0
+
+        composite_interpolator: "bspline"
+        composite_dl_method: "eclare"
+        max_mm_interpolator: 1.5
+        max_mm_dl_method: 7.0
+        resample_mm_to_interpolator_if_max_mm_dl_method: 3.5
+
+        norm_value: 1.0
+        p1: 1.0
+        p2: 99.0
+        whitestripe_width: 0.05
+        whitestripe_width_l: null
+        whitestripe_width_u: null
+        fcm_n_clusters: 3
+        fcm_tissue_type: "WM"
+        fcm_max_iter: 50
+        fcm_error_threshold: 0.005
+        fcm_fuzziness: 2.0
+
+    # Step 4: Cubic Padding (study-level) — no changes from v2
+    cubic_padding:
+      save_visualization: true
+      cubic_padding:
+        method: "symmetric"
+        fill_value_mode: "zero"
+        target_shape_mode: "max_across_modalities"
+
+    # Step 5: Registration (study-level) — NOW BEFORE SKULL STRIPPING
+    # CHANGED from v2:
+    #   - Operates on full-head volumes (no skull stripping yet)
+    #   - interpolation: BSpline (no brain boundary discontinuity)
+    #   - atlas: T1.nii (full-head, matches full-head subject)
+    registration_static:
+        save_visualization: true
+        save_detailed_registration_info: true
+
+        intra_study_to_reference:
+          method: "ants"
+          engine: "antspyx"
+          save_detailed_registration_info: true
+          reference_modality_priority: "t1n > t1c > t2f > t2w"
+
+          transform_type: ["Rigid", "Affine"]
+
+          metric: "Mattes"
+          metric_bins: 64
+          sampling_strategy: "Random"
+          sampling_percentage: 0.5
+
+          number_of_iterations: [[1000, 500, 250, 0], [1000, 500, 250, 0]]
+          shrink_factors: [[8, 4, 2, 1], [8, 4, 2, 1]]
+          smoothing_sigmas: [[3, 2, 1, 0], [3, 2, 1, 0]]
+
+          convergence_threshold: 1.0e-6
+          convergence_window_size: 10
+
+          write_composite_transform: true
+          interpolation: "BSpline"          # CHANGED: full-head, no brain boundary
+
+          use_center_of_mass_init: true
+          validate_registration_quality: true
+          quality_warning_threshold: -0.3
+
+          # Thick-slice volume handling
+          anisotropy_detection: true
+          anisotropy_gradient_ratio_threshold: 3.0
+          thick_slice_transform_override: "Rigid"
+
+        intra_study_to_atlas:
+          method: "ants"
+          engine: "antspyx"
+          save_detailed_registration_info: true
+
+          # CHANGED: full-head atlas (T1.nii) to match full-head subject
+          atlas_path: "/media/mpascual/PortableSSD/Meningiomas/ATLAS/sri24_spm8/templates/T1.nii"
+
+          transforms: ["Rigid", "Affine"]
+          create_composite_transforms: false
+
+          metric: "MI"
+          metric_bins: 128
+          sampling_strategy: "Random"
+          sampling_percentage: 0.5
+
+          number_of_iterations: [[2000, 1000, 500, 250], [1000, 500, 250, 100]]
+          shrink_factors: [[8, 4, 2, 1], [4, 2, 1, 1]]
+          smoothing_sigmas: [[4, 2, 1, 0], [2, 1, 0, 0]]
+
+          convergence_threshold: 1.0e-6
+          convergence_window_size: 10
+
+          interpolation: "BSpline"          # CHANGED: full-head, no brain boundary
+
+          use_center_of_mass_init: true
+          validate_registration_quality: true
+          quality_warning_threshold: -0.3
+
+          # Thick-slice volume handling
+          anisotropy_detection: true
+          anisotropy_gradient_ratio_threshold: 3.0
+          thick_slice_transform_override: "Rigid"
+
+    # Step 6: Skull Stripping (study-level) — NOW AFTER REGISTRATION
+    # CHANGED from v2:
+    #   - reference_mask_modality: "t1c" — BraTS-standard approach
+    #   - Only T1c is skull-stripped, its mask is applied to all modalities
+    #   - Consensus masking disabled (single authoritative mask)
+    skull_stripping:
+      save_visualization: true
+      save_mask: true
+      cross_study_mask_union: true
+      cross_study_mask_union_mode: "audit"
+      cross_study_mask_union_protective_threshold: 0.05
+
+      skull_stripping:
+          method: "hdbet"
+          fill_value: 0.0
+
+          # BraTS-standard: T1c mask for all co-registered modalities
+          reference_mask_modality: "t1c"
+
+          # Consensus disabled (irrelevant with reference_mask_modality)
+          consensus_masking: false
+          consensus_threshold: 2
+
+          hdbet_mode: "accurate"
+          hdbet_device: 0
+          hdbet_do_tta: true
+
+          synthstrip_border: 1
+          synthstrip_device: 0
+
+    # Step 7: Intensity Normalization (modality-level) — disabled (defer to dataloader)
+    intensity_normalization:
+      save_visualization: true
+      intensity_normalization:
+          method: null
+          norm_value: 1.0
+          clip_range: [-5.0, 5.0]
+
+          p1: 1.0
+          p2: 99.0
+          width: 0.05
+          width_l: null
+          width_u: null
+          n_clusters: 3
+          tissue_type: "WM"
+          max_iter: 50
+          error_threshold: 0.005
+          fuzziness: 2.0
+
+    # Step 8: Longitudinal Registration (patient-level)
+    longitudinal_registration:
+      save_visualization: true
+      longitudinal_registration:
+          method: "ants"
+          engine: "antspyx"
+          reference_modality_priority: "t1n > t1c > t2f > t2w"
+          reference_selection_method: "quality_based"
+          reference_selection_metrics:
+            - "snr_foreground"
+            - "cnr_high_low"
+            - "boundary_gradient_score"
+            - "brain_coverage_fraction"
+            - "laplacian_sharpness"
+            - "ghosting_score"
+          reference_selection_prefer_earlier: true
+          reference_selection_validate_jacobian: true
+          reference_selection_jacobian_threshold: 0.5
+          transform_type: ["Rigid", "Affine"]
+          metric: "Mattes"
+          metric_bins: 64
+          sampling_strategy: "Random"
+          sampling_percentage: 0.5
+          number_of_iterations: [[1000, 500, 250, 0], [1000, 500, 250, 0]]
+          shrink_factors: [[8, 4, 2, 1], [8, 4, 2, 1]]
+          smoothing_sigmas: [[3, 2, 1, 0], [3, 2, 1, 0]]
+          convergence_threshold: 1.0e-6
+          convergence_window_size: 10
+          write_composite_transform: true
+          interpolation: "BSpline"
+          save_detailed_registration_info: false
+          propagate_reference_mask: true
+          compute_mask_comparison: true
+
+  # QC disabled for speed
+  qc_metrics:
+    enabled: false
+    output_dir: "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/preprocessed/test/quality"
+    artifacts_dir: "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/preprocessed/test/quality/artifacts"
+    overwrite: true
+    compute_after_steps: []
+
+  # Checkpoints disabled for speed
+  checkpoints:
+    enabled: false
+    checkpoint_dir: ""
