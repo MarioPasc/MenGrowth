@@ -16,12 +16,17 @@ LOG_DIR="/mnt/home/users/tic_163_uma/mpascual/execs/mengrowth-dataset/logs/hold_
 
 mkdir -p "${LOG_DIR}"
 
-PATIENTS=(
-    "MenGrowth-0003"
-    "MenGrowth-0011"
-    "MenGrowth-0025"
-    "MenGrowth-0049"
-)
+# If arguments given, use them; otherwise run all hold patients
+if [ $# -gt 0 ]; then
+    PATIENTS=("$@")
+else
+    PATIENTS=(
+        "MenGrowth-0003"
+        "MenGrowth-0011"
+        "MenGrowth-0025"
+        "MenGrowth-0049"
+    )
+fi
 
 echo "=========================================="
 echo "SUBMITTING HOLD PATIENT JOBS"

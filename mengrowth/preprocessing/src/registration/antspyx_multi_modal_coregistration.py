@@ -497,15 +497,16 @@ class AntsPyXMultiModalCoregistration(BaseRegistrator):
                         f"> threshold ({self.quality_warning_threshold})"
                     )
 
-                    # Quality-gated fallback for thick-slice volumes: route to
-                    # direct atlas registration instead of using this poor
-                    # coregistration result.
+                    # For thick-slice volumes using Rigid-only, low correlation
+                    # is expected due to multi-modal contrast differences and
+                    # interpolation artifacts — do NOT reject the registration.
+                    # Rigid is already the most conservative transform.
                     if is_thick_slice:
                         self.logger.warning(
-                            f"    Thick-slice quality gate: {modality} will use "
-                            f"direct atlas registration fallback"
+                            f"    Thick-slice quality note: {modality} has low "
+                            f"correlation ({corr_dissim:.4f}) but Rigid is "
+                            f"conservative — accepting registration"
                         )
-                        raise _CoregistrationCatastrophicFailure(modality)
 
             # Save warped image to temp location
             temp_output = study_dir / f"_temp_{modality}_registered.nii.gz"

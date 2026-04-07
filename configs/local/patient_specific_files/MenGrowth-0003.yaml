@@ -31,7 +31,7 @@ preprocessing:
     # Detailed patient archive (HDF5 snapshots for showcase patients)
     detailed_archive:
       enabled: true
-      patient_ids: ["MenGrowth-0009"]
+      patient_ids: ["MenGrowth-0003"]
       compression: "gzip"
       compression_level: 4
 
@@ -48,7 +48,7 @@ preprocessing:
       # Intensity outlier clipping (hot pixel removal)
       intensity_clipping:
         enabled: true
-        upper_percentile: 99.9
+        upper_percentile: 95.0
         log_clipped_count: true
 
       background_zeroing:
