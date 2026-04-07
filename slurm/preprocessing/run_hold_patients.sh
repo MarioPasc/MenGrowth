@@ -1,27 +1,18 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Submit SLURM jobs for the 4 hold patients that need Picasso re-execution.
-#
-# Each patient runs as an independent SLURM job using the ECLARE worker
-# with patient-specific configs (composite resampling, single-patient mode).
+# Submit SLURM jobs for hold patients needing Picasso re-execution.
 #
 # Usage (from Picasso login node):
 #   cd /mnt/home/users/tic_163_uma/mpascual/fscratch/repos/MenGrowth
 #   bash slurm/preprocessing/run_hold_patients.sh
-#
-# All jobs use:
-#   - 4h walltime, 96G RAM, 1 GPU (DGX), 8 CPUs
-#   - Composite resampling (BSpline + ECLARE)
-#   - overwrite=true (replaces previous v4_eclare results)
-#   - QC metrics disabled (speed)
 # =============================================================================
 
 set -euo pipefail
 
-REPO="/mnt/home/users/tic_163_uma/mpascual/fscratch/repos/MenGrowth"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+WORKER="${SCRIPT_DIR}/hold_patient_worker.sh"
 LOG_DIR="/mnt/home/users/tic_163_uma/mpascual/execs/mengrowth-dataset/logs/hold_patients"
-CONDA_ENV="mengrowth"
-ECLARE_ENV="mengrowth-eclare"
 
 mkdir -p "${LOG_DIR}"
 
@@ -36,6 +27,7 @@ echo "=========================================="
 echo "SUBMITTING HOLD PATIENT JOBS"
 echo "=========================================="
 echo "Time: $(date)"
+echo "Repo: ${REPO}"
 echo ""
 
 for PATIENT in "${PATIENTS[@]}"; do
@@ -46,59 +38,19 @@ for PATIENT in "${PATIENTS[@]}"; do
         continue
     fi
 
-    JOB_NAME="mgpp-fix-${PATIENT##*-}"
-
-    # Submit via sbatch with inline script
+    SHORT="${PATIENT##*-}"
     JOB_ID=$(sbatch \
-        --job-name="${JOB_NAME}" \
-        --time=0-04:00:00 \
-        --ntasks=1 \
-        --cpus-per-task=8 \
-        --mem=96G \
-        --constraint=dgx \
-        --gres=gpu:1 \
+        --job-name="mgpp-fix-${SHORT}" \
         --output="${LOG_DIR}/${PATIENT}_%j.out" \
         --error="${LOG_DIR}/${PATIENT}_%j.err" \
+        --export="PATIENT_ID=${PATIENT},CONFIG_FILE=${CONFIG}" \
         --parsable \
-        --wrap="
-            # Conda setup
-            module_loaded=0
-            for m in miniconda3 Miniconda3 anaconda3 Anaconda3 miniforge mambaforge; do
-                if module avail 2>/dev/null | grep -qi \"^\${m}[[:space:]]\"; then
-                    module load \"\$m\" && module_loaded=1 && break
-                fi
-            done
-            if [ \"\$module_loaded\" -eq 0 ]; then
-                echo '[env] No conda module; assuming conda in PATH'
-            fi
-            if command -v conda >/dev/null 2>&1; then
-                source \"\$(conda info --base)/etc/profile.d/conda.sh\" || true
-                conda activate ${CONDA_ENV} 2>/dev/null || source activate ${CONDA_ENV}
-            else
-                source activate ${CONDA_ENV}
-            fi
+        "${WORKER}")
 
-            # Threading
-            export ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS=\${SLURM_CPUS_PER_TASK:-8}
-            export OMP_NUM_THREADS=\${SLURM_CPUS_PER_TASK:-8}
-            export ANTS_RANDOM_SEED=42
-            export ECLARE_CONDA_ENV=${ECLARE_ENV}
-
-            echo '=========================================='
-            echo 'PATIENT: ${PATIENT}'
-            echo 'CONFIG:  ${CONFIG}'
-            echo '=========================================='
-            python -c \"import sys; print('Python', sys.version.split()[0])\"
-            nvidia-smi --query-gpu=name,memory.total --format=csv 2>/dev/null || true
-
-            cd ${REPO}
-            mengrowth-preprocess --config ${CONFIG} --patient ${PATIENT} --verbose
-        ")
-
-    echo "[OK] ${PATIENT} -> Job ${JOB_ID} (${JOB_NAME})"
+    echo "[OK] ${PATIENT} -> Job ${JOB_ID}"
 done
 
 echo ""
-echo "All jobs submitted. Monitor with:"
-echo "  squeue -u \$(whoami) -n mgpp-fix"
+echo "Monitor:"
+echo "  squeue -u \$(whoami) | grep mgpp-fix"
 echo "  tail -f ${LOG_DIR}/*.out"
