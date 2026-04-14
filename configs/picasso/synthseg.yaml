@@ -1,0 +1,53 @@
+# ============================================================================
+# MenGrowth SynthSeg Pipeline Configuration (Picasso)
+#
+# Runs SynthSeg (Billot et al., MedIA 2023) with --robust on preprocessed
+# T1n volumes to produce per-study brain parcellations, volumes, and QC.
+#
+# The --robust flag is MANDATORY for the meningioma cohort (out-of-distribution
+# pathology requires the robust posterior regularization described in Billot
+# et al., PNAS 2023).
+# ============================================================================
+
+synthseg:
+  # -------------------------------------------------------------------------
+  # Paths
+  # -------------------------------------------------------------------------
+  # Root of the preprocessed dataset (MenGrowth-XXXX/MenGrowth-XXXX-YYY/).
+  input_root: "/mnt/home/users/tic_163_uma/mpascual/fscratch/datasets/meningiomas/dataset/preprocecessed/MenGrowth-2025"
+
+  # Where per-study outputs are written (parallel tree to input_root).
+  output_root: "/mnt/home/users/tic_163_uma/mpascual/fscratch/datasets/meningiomas/dataset/preprocecessed/synthseg"
+
+  # SynthSeg repository (contains scripts/commands/SynthSeg_predict.py).
+  synthseg_repo: "/mnt/home/users/tic_163_uma/mpascual/fscratch/tools/SynthSeg"
+
+  # Dedicated conda env prefix (path, not named env). The SLURM worker
+  # activates this before invoking the CLI.
+  conda_env_path: "/mnt/home/users/tic_163_uma/mpascual/fscratch/tools/synthseg_env"
+
+  # Override for the python interpreter. Empty -> use sys.executable (i.e.
+  # the active environment at invocation time).
+  python_bin: ""
+
+  # -------------------------------------------------------------------------
+  # Invocation
+  # -------------------------------------------------------------------------
+  input_modality: "t1n"          # parcellate T1n only (see plan §1.2)
+  robust: true                   # MANDATORY; validator rejects false
+  threads: 2
+  timeout_seconds: 900           # 15-min cap per volume
+  use_gpu: true                  # drop --cpu; SLURM allocates --gres=gpu:1
+
+  # -------------------------------------------------------------------------
+  # Per-study output filenames (written under output_root/{pid}/{sid}/)
+  # -------------------------------------------------------------------------
+  parcellation_filename: "synthseg_parc.nii.gz"
+  volumes_filename:      "synthseg_volumes.csv"
+  qc_filename:           "synthseg_qc.csv"
+  posteriors_filename:   null    # set a filename to also save posteriors
+
+  # -------------------------------------------------------------------------
+  # Logging / SLURM artifacts
+  # -------------------------------------------------------------------------
+  log_dir: "/mnt/home/users/tic_163_uma/mpascual/fscratch/logs_synthseg"
