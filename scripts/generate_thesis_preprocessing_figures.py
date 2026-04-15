@@ -47,7 +47,7 @@ OUTPUT_ROOT = Path(
 VIEWS = ["axial", "sagittal", "coronal"]
 VIEW_LABELS = {"axial": "Axial", "sagittal": "Sagittal", "coronal": "Coronal"}
 DPI = 300
-FMT = "pdf"
+FMT = "png"
 
 
 # ── helpers ──────────────────────────────────────────────────────────────
