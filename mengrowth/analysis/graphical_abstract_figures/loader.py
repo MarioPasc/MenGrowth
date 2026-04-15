@@ -150,6 +150,7 @@ class ArchiveLoader:
         Returns:
             3D float32 array of the multiplicative bias field, or None.
         """
+        
         bias_path = self.artifacts_dir / f"{modality}_bias_field.nii.gz"
         if not bias_path.exists():
             logger.debug("Bias field not found: %s", bias_path)

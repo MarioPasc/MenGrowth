@@ -1,6 +1,6 @@
 graphical_abstract:
   archive_root: "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/v5_final/visualizations/detailed_patient"
-  artifacts_root: "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/v5_final/detailed_patient/artifacts"
+  artifacts_root: "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/v5_final/artifacts"
   preprocessed_root: "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/v5_final/MenGrowth-2025"
   atlas_path: "/media/mpascual/PortableSSD/Meningiomas/ATLAS/sri24_spm8/templates/T1.nii"
   patient_id: "MenGrowth-0009"
