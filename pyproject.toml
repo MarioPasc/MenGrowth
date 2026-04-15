@@ -49,6 +49,7 @@ dependencies = [
     "scikit-image",
     "openpyxl",
     "h5py>=3.8",
+    "statsmodels>=0.14",
 ]
 
 [project.optional-dependencies]

@@ -1,0 +1,53 @@
+# Phase 2 — SynthSeg statistical QC analysis configuration (local workstation).
+# The analysis reads the finalized Phase 1 SynthSeg outputs under
+# `synthseg_output_root` and cross-references the original acquisition
+# metadata from the curation Phase-5 CSV.
+
+synthseg_analysis:
+  synthseg_output_root: "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/v5_final/synthseg"
+  preprocessed_root:    "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/v5_final/MenGrowth-2025"
+  original_metadata_csv: "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/curated/quality/qc_analysis/per_study_metrics.csv"
+  output_dir: "/home/mpascual/research/code/MenGrowth/outputs/synthseg_analysis"
+
+  tumor_proximity_threshold_mm: 20.0
+
+  modalities_for_roi_analysis: ["t1n", "t1c", "t2w", "t2f"]
+
+  # Subcortical structures where SynthSeg is most reliable — used as ROIs
+  # for the cross-modal metrics (Analysis 3).
+  reliable_regions:
+    - "Left-Thalamus"
+    - "Right-Thalamus"
+    - "Left-Putamen"
+    - "Right-Putamen"
+    - "Left-Caudate"
+    - "Right-Caudate"
+    - "Left-Pallidum"
+    - "Right-Pallidum"
+    - "Left-Hippocampus"
+    - "Right-Hippocampus"
+    - "Left-Amygdala"
+    - "Right-Amygdala"
+    - "Left-Lateral-Ventricle"
+    - "Right-Lateral-Ventricle"
+    - "Left-Cerebral-White-Matter"
+    - "Right-Cerebral-White-Matter"
+
+  # Aggregated for the headline acceptance criterion (plan §7).
+  deep_grey_matter_regions:
+    - "Left-Thalamus"
+    - "Right-Thalamus"
+    - "Left-Putamen"
+    - "Right-Putamen"
+    - "Left-Caudate"
+    - "Right-Caudate"
+
+  cv_acceptance_threshold: 0.05
+  figure_format: "png"
+  figure_dpi: 300
+  n_workers: 4
+
+  parcellation_filename: "synthseg_parc.nii.gz"
+  volumes_filename: "synthseg_volumes.csv"
+  qc_filename: "synthseg_qc.csv"
+  input_modality_for_discovery: "t1n"

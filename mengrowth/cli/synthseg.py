@@ -27,12 +27,14 @@ from typing import List, Optional
 
 import numpy as np
 
+from mengrowth.synthseg.colocate import colocate_synthseg_outputs
 from mengrowth.synthseg.config import SynthSegConfig, load_synthseg_config
 from mengrowth.synthseg.discovery import (
     discover_patients,
     discover_studies,
     summarize_discovery,
 )
+from mengrowth.synthseg.finalize import finalize_synthseg_outputs
 from mengrowth.synthseg.primitives import parse_qc_value, parse_volumes_row
 from mengrowth.synthseg.runner import PatientResult, run_patient
 
@@ -211,6 +213,94 @@ def _verify_one_study(
     return row
 
 
+# ---------------------------------------------------------------------------
+# Phase 2 helpers — bridge AnalysisConfig ↔ SynthSegConfig
+# ---------------------------------------------------------------------------
+
+
+def _synthseg_config_from_analysis(analysis_cfg) -> SynthSegConfig:
+    """Build a throwaway :class:`SynthSegConfig` from an :class:`AnalysisConfig`.
+
+    Used by the ``finalize-outputs`` and ``colocate`` subcommands when the
+    user supplies the Phase 2 analysis YAML — both need an input/output root
+    and the three output filenames, which AnalysisConfig already carries.
+    """
+    return SynthSegConfig(
+        input_root=analysis_cfg.preprocessed_root,
+        output_root=analysis_cfg.synthseg_output_root,
+        synthseg_repo="unused",
+        input_modality=analysis_cfg.input_modality_for_discovery,
+        parcellation_filename=analysis_cfg.parcellation_filename,
+        volumes_filename=analysis_cfg.volumes_filename,
+        qc_filename=analysis_cfg.qc_filename,
+    )
+
+
+def _load_config_for_phase2(path: Path) -> SynthSegConfig:
+    """Accept either a Phase 1 SynthSeg YAML or a Phase 2 analysis YAML."""
+    import yaml
+
+    with open(path, "r", encoding="utf-8") as f:
+        raw = yaml.safe_load(f) or {}
+
+    if "synthseg_analysis" in raw:
+        from mengrowth.synthseg.analysis.config import load_analysis_config
+
+        return _synthseg_config_from_analysis(load_analysis_config(path))
+    return load_synthseg_config(path)
+
+
+def cmd_finalize_outputs(args: argparse.Namespace) -> int:
+    """Rename any orphaned ``.tmp`` Phase 1 outputs to their final names."""
+    logger = logging.getLogger(__name__)
+    cfg = _load_config_for_phase2(args.config)
+
+    logger.info("=" * 60)
+    logger.info("SYNTHSEG FINALIZE-OUTPUTS")
+    logger.info("=" * 60)
+    logger.info("Input root (preprocessed): %s", cfg.input_root)
+    logger.info("Output root (SynthSeg):    %s", cfg.output_root)
+
+    report = finalize_synthseg_outputs(cfg)
+
+    if report.n_failed:
+        logger.warning("Studies that failed finalization:")
+        for r in report.results:
+            if r.status == "failed":
+                logger.warning(
+                    "  %s/%s — %s", r.patient_id, r.study_id, r.error
+                )
+    return report.exit_code()
+
+
+def cmd_colocate(args: argparse.Namespace) -> int:
+    """Link / copy the finalized parcellations into the preprocessed tree."""
+    logger = logging.getLogger(__name__)
+    cfg = _load_config_for_phase2(args.config)
+    report = colocate_synthseg_outputs(cfg, mode=args.mode)
+    if report.n_failed:
+        for r in report.results:
+            if r.status == "failed":
+                logger.warning(
+                    "  %s/%s — %s", r.patient_id, r.study_id, r.error
+                )
+    return report.exit_code()
+
+
+def cmd_analyze(args: argparse.Namespace) -> int:
+    """Run the full Phase 2 statistical QC analysis."""
+    logger = logging.getLogger(__name__)
+    from mengrowth.synthseg.analysis.config import load_analysis_config
+    from mengrowth.synthseg.analysis.pipeline import run_analysis
+
+    analysis_cfg = load_analysis_config(args.config)
+    logger.info("=" * 60)
+    logger.info("SYNTHSEG PHASE 2 — ANALYZE")
+    logger.info("=" * 60)
+    logger.info("Output dir: %s", analysis_cfg.output_dir)
+    return run_analysis(analysis_cfg, skip_collect=args.skip_collect)
+
+
 def cmd_verify(args: argparse.Namespace) -> int:
     """Audit produced outputs; non-zero exit if anything's missing or invalid."""
     logger = logging.getLogger(__name__)
@@ -285,10 +375,13 @@ def parse_arguments() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Subcommands:\n"
-            "  discover      Write patient IDs (for SLURM launcher)\n"
-            "  run-patient   Process all studies of one patient (for SLURM worker)\n"
-            "  run           Process every patient serially (local testing)\n"
-            "  verify        Audit produced outputs\n"
+            "  discover           Write patient IDs (for SLURM launcher)\n"
+            "  run-patient        Process all studies of one patient (for SLURM worker)\n"
+            "  run                Process every patient serially (local testing)\n"
+            "  verify             Audit produced outputs\n"
+            "  finalize-outputs   Commit Phase 1 .tmp outputs to final names\n"
+            "  colocate           Link/copy parcellations into preprocessed tree\n"
+            "  analyze            Run the Phase 2 statistical QC analysis\n"
         ),
     )
     subparsers = parser.add_subparsers(dest="command", help="Subcommand")
@@ -323,6 +416,35 @@ def parse_arguments() -> argparse.Namespace:
     p_ver = subparsers.add_parser("verify", help="Audit produced outputs")
     _add_common_args(p_ver)
 
+    p_fin = subparsers.add_parser(
+        "finalize-outputs",
+        help="Rename Phase 1 .tmp outputs to their final names",
+    )
+    _add_common_args(p_fin)
+
+    p_col = subparsers.add_parser(
+        "colocate",
+        help="Link/copy parcellations into preprocessed study directories",
+    )
+    _add_common_args(p_col)
+    p_col.add_argument(
+        "--mode",
+        choices=("symlink", "copy"),
+        default="symlink",
+        help="Relative symlink (default, zero extra disk) or full copy.",
+    )
+
+    p_ana = subparsers.add_parser(
+        "analyze",
+        help="Run the Phase 2 statistical QC analysis end-to-end",
+    )
+    _add_common_args(p_ana)
+    p_ana.add_argument(
+        "--skip-collect",
+        action="store_true",
+        help="Reuse existing cohort/*.csv instead of re-parsing SynthSeg outputs.",
+    )
+
     return parser.parse_args()
 
 
@@ -344,6 +466,12 @@ def main() -> int:
             return cmd_run(args)
         if args.command == "verify":
             return cmd_verify(args)
+        if args.command == "finalize-outputs":
+            return cmd_finalize_outputs(args)
+        if args.command == "colocate":
+            return cmd_colocate(args)
+        if args.command == "analyze":
+            return cmd_analyze(args)
         print(f"Unknown command: {args.command}", file=sys.stderr)
         return 1
     except FileNotFoundError as e:

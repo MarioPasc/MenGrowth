@@ -1,0 +1,50 @@
+# Phase 2 — SynthSeg statistical QC analysis configuration (Picasso cluster).
+# Mirrors configs/local/synthseg_analysis.yaml but points at the cluster
+# paths. The analysis itself is CPU-only and trivially portable — no GPU,
+# no Singularity containers.
+
+synthseg_analysis:
+  synthseg_output_root: "/mnt/home/users/tic_163_uma/mpascual/fscratch/datasets/meningiomas/dataset/preprocecessed/synthseg"
+  preprocessed_root:    "/mnt/home/users/tic_163_uma/mpascual/fscratch/datasets/meningiomas/dataset/preprocecessed/MenGrowth-2025"
+  original_metadata_csv: "/mnt/home/users/tic_163_uma/mpascual/fscratch/datasets/meningiomas/curated/quality/qc_analysis/per_study_metrics.csv"
+  output_dir: "/mnt/home/users/tic_163_uma/mpascual/fscratch/outputs/synthseg_analysis"
+
+  tumor_proximity_threshold_mm: 20.0
+
+  modalities_for_roi_analysis: ["t1n", "t1c", "t2w", "t2f"]
+
+  reliable_regions:
+    - "Left-Thalamus"
+    - "Right-Thalamus"
+    - "Left-Putamen"
+    - "Right-Putamen"
+    - "Left-Caudate"
+    - "Right-Caudate"
+    - "Left-Pallidum"
+    - "Right-Pallidum"
+    - "Left-Hippocampus"
+    - "Right-Hippocampus"
+    - "Left-Amygdala"
+    - "Right-Amygdala"
+    - "Left-Lateral-Ventricle"
+    - "Right-Lateral-Ventricle"
+    - "Left-Cerebral-White-Matter"
+    - "Right-Cerebral-White-Matter"
+
+  deep_grey_matter_regions:
+    - "Left-Thalamus"
+    - "Right-Thalamus"
+    - "Left-Putamen"
+    - "Right-Putamen"
+    - "Left-Caudate"
+    - "Right-Caudate"
+
+  cv_acceptance_threshold: 0.05
+  figure_format: "png"
+  figure_dpi: 300
+  n_workers: 8
+
+  parcellation_filename: "synthseg_parc.nii.gz"
+  volumes_filename: "synthseg_volumes.csv"
+  qc_filename: "synthseg_qc.csv"
+  input_modality_for_discovery: "t1n"
