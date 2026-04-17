@@ -312,7 +312,7 @@ class ArchiveLoader:
         in the archive directory (co-located with archive.h5).
 
         Returns:
-            3D uint8 array with labels (0=bg, 1=NET, 2=SNFH, 3=ET), or None.
+            3D uint8 array with labels (0=bg, 1=SNFH, 2=ET), or None.
         """
         # Try HDF5 first
         with h5py.File(str(self.archive_path), "r") as h5:
@@ -351,7 +351,7 @@ class ArchiveLoader:
 
         from mengrowth.preprocessing.src.archiver import DetailedPatientArchiver
 
-        label_map = {1: "necrotic_core", 2: "peritumoral_edema", 3: "enhancing_tumor"}
+        label_map = {1: "snfh", 2: "enhancing_tumor"}
         DetailedPatientArchiver.attach_segmentation(
             self.archive_path, seg_path, label_map
         )

@@ -283,7 +283,7 @@ def cmd_attach_to_archive(args: argparse.Namespace) -> int:
 
     from mengrowth.preprocessing.src.archiver import DetailedPatientArchiver
 
-    label_map = {1: "necrotic_core", 2: "peritumoral_edema", 3: "enhancing_tumor"}
+    label_map = {1: "snfh", 2: "enhancing_tumor"}
     DetailedPatientArchiver.attach_segmentation(archive_path, seg_path, label_map)
     logger.info(f"Attached {seg_path.name} to {archive_path}")
     return 0

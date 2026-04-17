@@ -6,7 +6,7 @@ Creates a 3D PyVista visualization showing a brain surface with a cutaway octant
 revealing three orthogonal MRI slices inside. Three meningioma tumor compartments
 are rendered as colored surface meshes:
 
-    Label 1: Non-Enhancing Tumor (NET)         — yellow (#DDCC77)
+    Label 1: Non-Enhancing Tumor Core (NETC)   — yellow (#DDCC77)
     Label 2: Surrounding FLAIR Hyperintensity   — teal   (#44AA99)
     Label 3: Enhancing Tumor (ET)               — red    (#CC3311)
 
@@ -69,16 +69,18 @@ logger = logging.getLogger(__name__)
 # BraTS Meningioma Label Configuration
 # =============================================================================
 
-# BraTS-MEN segmentation labels
+# BraTS-MEN ground-truth convention (this script visualises raw BraTS training data):
+#   1 = NETC, 2 = SNFH, 3 = ET.
+# NOTE: MenGrowth model outputs use a DIFFERENT convention (1=SNFH, 2=ET, no label 3).
 MENINGIOMA_LABELS: Final[Dict[int, str]] = {
-    1: "Non-Enhancing Tumor (NET)",
+    1: "Non-Enhancing Tumor Core (NETC)",
     2: "SNFH",
     3: "Enhancing Tumor (ET)",
 }
 
 # Colorblind-friendly palette (Paul Tol's vibrant)
 MENINGIOMA_COLORS: Final[Dict[int, Tuple[float, float, float]]] = {
-    1: (0.867, 0.800, 0.467),  # Yellow  (#DDCC77) — NET
+    1: (0.867, 0.800, 0.467),  # Yellow  (#DDCC77) — NETC
     2: (0.267, 0.667, 0.600),  # Teal    (#44AA99) — SNFH
     3: (0.800, 0.200, 0.067),  # Red     (#CC3311) — ET
 }
@@ -87,9 +89,9 @@ MENINGIOMA_COLORS: Final[Dict[int, Tuple[float, float, float]]] = {
 # so the tumor core is visible through the surrounding edema.
 # SNFH alpha can be overridden via --snfh-alpha CLI flag.
 MENINGIOMA_ALPHA: Dict[int, float] = {
-    1: 0.7,  # NET — fully opaque (tumor core)
+    1: 0.7,  # NETC — fully opaque (non-enhancing tumor core)
     2: 0.5,  # SNFH — semi-transparent (surrounding edema/hyperintensity)
-    3: 1.0,  # ET — fully opaque (enhancing tumor core)
+    3: 1.0,  # ET — fully opaque (enhancing tumor)
 }
 
 # Valid BraTS modalities
@@ -381,7 +383,7 @@ def render_meningioma_octant(
 
     Args:
         volume: 3D MRI volume (nx, ny, nz), RAS orientation
-        segmentation: 3D integer label array (0=bg, 1=NET, 2=SNFH, 3=ET)
+        segmentation: 3D integer label array (0=bg, 1=NETC, 2=SNFH, 3=ET)
         slice_indices: (k_axial, i_coronal, j_sagittal)
         cfg: Rendering configuration
         brain_mask: Pre-computed brain mask (if None, computed from volume)
