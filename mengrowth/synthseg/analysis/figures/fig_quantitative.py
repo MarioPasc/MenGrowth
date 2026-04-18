@@ -384,6 +384,60 @@ def make_figure(data_dir: Path) -> plt.Figure:
     return fig
 
 
+def make_figure_vertical(data_dir: Path) -> plt.Figure:
+    """Panel A stacked on top of Panel B (2 rows, 1 column)."""
+    qc_spacing_csv, cv_csv, cohort_qc_csv = _resolve_paths(data_dir)
+    merged = pd.read_csv(qc_spacing_csv)
+    cv_df = pd.read_csv(cv_csv)
+    qc_df = pd.read_csv(cohort_qc_csv)
+
+    apply_pub_style()
+
+    fig = plt.figure(figsize=(10.0, 11.5))
+    gs = GridSpec(
+        2, 1, figure=fig,
+        height_ratios=[1.0, 1.15],
+        hspace=0.32,
+        left=0.10, right=0.96, bottom=0.06, top=0.95,
+    )
+    _draw_panel_a(fig, gs[0, 0], merged)
+    _draw_panel_b(fig, gs[1, 0], cv_df, qc_df)
+    return fig
+
+
+def make_figure_panel_a(data_dir: Path) -> plt.Figure:
+    """Standalone Panel A (joint plot)."""
+    qc_spacing_csv, _, _ = _resolve_paths(data_dir)
+    merged = pd.read_csv(qc_spacing_csv)
+
+    apply_pub_style()
+
+    fig = plt.figure(figsize=(7.0, 6.0))
+    gs = GridSpec(
+        1, 1, figure=fig,
+        left=0.12, right=0.96, bottom=0.13, top=0.88,
+    )
+    _draw_panel_a(fig, gs[0, 0], merged)
+    return fig
+
+
+def make_figure_panel_b(data_dir: Path) -> plt.Figure:
+    """Standalone Panel B (CV heatmap)."""
+    _, cv_csv, cohort_qc_csv = _resolve_paths(data_dir)
+    cv_df = pd.read_csv(cv_csv)
+    qc_df = pd.read_csv(cohort_qc_csv)
+
+    apply_pub_style()
+
+    fig = plt.figure(figsize=(10.0, 5.5))
+    gs = GridSpec(
+        1, 1, figure=fig,
+        left=0.14, right=0.985, bottom=0.13, top=0.88,
+    )
+    _draw_panel_b(fig, gs[0, 0], cv_df, qc_df)
+    return fig
+
+
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument(
@@ -414,14 +468,37 @@ def main(argv: list[str] | None = None) -> int:
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    stem = args.output.stem
+    parent = args.output.parent
+
     fig = make_figure(args.data_dir)
     out_pdf = save_figure(fig, args.output, dpi=args.dpi)
     logger.info("Saved %s", out_pdf)
     if args.also_png:
-        png = args.output.with_suffix(".png")
         fig2 = make_figure(args.data_dir)
-        save_figure(fig2, png, dpi=args.dpi)
-        logger.info("Saved %s", png)
+        save_figure(fig2, args.output.with_suffix(".png"), dpi=args.dpi)
+
+    fig_v = make_figure_vertical(args.data_dir)
+    out_v = save_figure(fig_v, parent / f"{stem}_vertical.pdf", dpi=args.dpi)
+    logger.info("Saved %s", out_v)
+    if args.also_png:
+        fig_v2 = make_figure_vertical(args.data_dir)
+        save_figure(fig_v2, parent / f"{stem}_vertical.png", dpi=args.dpi)
+
+    fig_a = make_figure_panel_a(args.data_dir)
+    out_a = save_figure(fig_a, parent / f"{stem}_panelA.pdf", dpi=args.dpi)
+    logger.info("Saved %s", out_a)
+
+    fig_b = make_figure_panel_b(args.data_dir)
+    out_b = save_figure(fig_b, parent / f"{stem}_panelB.pdf", dpi=args.dpi)
+    logger.info("Saved %s", out_b)
+
+    if args.also_png:
+        fig_a2 = make_figure_panel_a(args.data_dir)
+        save_figure(fig_a2, parent / f"{stem}_panelA.png", dpi=args.dpi)
+        fig_b2 = make_figure_panel_b(args.data_dir)
+        save_figure(fig_b2, parent / f"{stem}_panelB.png", dpi=args.dpi)
+
     return 0
 
 

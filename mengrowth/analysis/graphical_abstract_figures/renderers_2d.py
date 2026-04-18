@@ -465,7 +465,7 @@ def render_segmentation_overlay(
 
     Args:
         volume: 3D float MRI array.
-        segmentation: 3D uint8 label array (0=bg, 1=NET, 2=SNFH, 3=ET).
+        segmentation: 3D uint8 label array (0=bg, 1=SNFH, 2=ET).
         view: Anatomical view.
         frac: Fractional slice position.
         plow: Low percentile.

@@ -38,18 +38,24 @@ from mengrowth.synthseg.analysis.figures.common import (
 logger = logging.getLogger(__name__)
 
 
-# BraTS-MEN segmentation labels (per BraTS 2025 Meningioma challenge):
-#   1 = Enhancing Tumor (ET)
-#   2 = Surrounding Non-enhancing FLAIR Hyperintensity (SNFH / edema)
-#   3 = Non-Enhancing Tumor Core (NETC)
-# The conventional aggregated annotations are:
-#   WT (Whole Tumor)  = {1, 2, 3}
-#   TC (Tumor Core)   = {1, 3}      ← excludes edema
-#   ET (Enhancing)    = {1}
+# Model output labels (after BraTS-MEN → BSF conversion):
+#   1 = SNFH (Surrounding Non-enhancing FLAIR Hyperintensity / edema)
+#   2 = ET   (Enhancing Tumor / solid meningioma)
+# NETC was dropped during conversion; label 3 is never produced.
+# Aggregated regions (for overlay selection):
+#   WT (Whole Tumor) = {1, 2}
+#   TC (Tumor Core)  = {2}      (ET only, since NETC is absent)
+#   ET (Enhancing)   = {2}
 TUMOR_REGIONS: dict[str, tuple[int, ...]] = {
+<<<<<<< HEAD
     "WT": (1, 2, 3),
     "TC": (2,),
     "ET": (1,),
+=======
+    "WT": (1, 2),
+    "TC": (2,),
+    "ET": (2,),
+>>>>>>> e04acb143ec5eddf2c70b9449f0f48fe2e37d2c1
 }
 
 
@@ -450,6 +456,136 @@ def make_figure(
     return fig
 
 
+def make_figure_transposed(
+    data_dir: Path,
+    preprocessed_root: Path,
+    synthseg_root: Path,
+    best_override: str | None = None,
+    worst_override: str | None = None,
+    tumor_patient: str | None = "MenGrowth-0015",
+    tumor_region: str = "TC",
+) -> plt.Figure:
+    """Build the qualitative montage with timepoints as rows, patients as columns."""
+    qc_csv = data_dir / "cohort" / "cohort_qc.csv"
+    if not qc_csv.exists():
+        raise FileNotFoundError(qc_csv)
+    qc_df = pd.read_csv(qc_csv)
+
+    if best_override and worst_override:
+        best_pid, worst_pid = best_override, worst_override
+    else:
+        best_pid, worst_pid = select_showcase_patients(qc_df, min_studies=3)
+        if best_override:
+            best_pid = best_override
+        if worst_override:
+            worst_pid = worst_override
+    logger.info(
+        "Rendering transposed: best=%s worst=%s tumor=%s",
+        best_pid, worst_pid, tumor_patient,
+    )
+
+    best_studies = _assemble_patient_studies(
+        qc_df, best_pid, preprocessed_root, synthseg_root,
+        tumor_region=tumor_region,
+    )
+    worst_studies = _assemble_patient_studies(
+        qc_df, worst_pid, preprocessed_root, synthseg_root,
+        tumor_region=tumor_region,
+    )
+    tumor_studies: list[StudyAssets] = []
+    if tumor_patient:
+        tumor_studies = _assemble_patient_studies(
+            qc_df, tumor_patient, preprocessed_root, synthseg_root,
+            tumor_region=tumor_region,
+        )
+
+    cols_spec: list[tuple[str, str | None, list[StudyAssets], object]] = [
+        ("Best-case", best_pid, best_studies, _mid_axial_slice),
+        ("Worst-case", worst_pid, worst_studies, _mid_axial_slice),
+    ]
+    if tumor_studies:
+        cols_spec.append(
+            ("Tumor", tumor_patient, tumor_studies, _max_tumor_slice)
+        )
+
+    n_cols = len(cols_spec)
+    n_rows = max(len(s) for _, _, s, _ in cols_spec)
+
+    apply_pub_style()
+    fig_w = max(7.0, 2.6 * n_cols + 1.3)
+    fig_h = 2.55 * n_rows + 0.65
+    fig, axes = plt.subplots(
+        n_rows, n_cols,
+        figsize=(fig_w, fig_h),
+        gridspec_kw={"wspace": 0.03, "hspace": 0.04,
+                     "left": 0.08, "right": 0.985,
+                     "bottom": 0.02, "top": 1 - 0.55 / fig_h},
+        squeeze=False,
+    )
+    fig.patch.set_facecolor("black")
+
+    tumor_color = (0.95, 0.15, 0.15, 0.9)
+
+    all_parc = [
+        np.unique(s.parc)
+        for _, _, studies, _ in cols_spec
+        for s in studies
+    ]
+    all_labels = np.unique(np.concatenate(all_parc))
+    label_colors = _build_label_color_table(all_labels)
+
+    panel_letters = ["(A)", "(B)", "(C)", "(D)", "(E)"]
+    for col_idx, (label, pid, studies, _) in enumerate(cols_spec):
+        q_values = [s.qc_score for s in studies]
+        mean_qc = float(np.mean(q_values)) if q_values else float("nan")
+        std_qc = (
+            float(np.std(q_values, ddof=1)) if len(q_values) > 1 else float("nan")
+        )
+        qc_summary = (
+            rf"$\overline{{q}} = {mean_qc:.3f} \pm {std_qc:.3f}$"
+            if not np.isnan(std_qc)
+            else rf"$\overline{{q}} = {mean_qc:.3f}$"
+        )
+        if label == "Tumor":
+            title = f"Tumor showcase ({tumor_region})\n{pid}\n{qc_summary}"
+        else:
+            title = f"{label}\n{pid}\n{qc_summary}"
+        panel = panel_letters[col_idx] if col_idx < len(panel_letters) else ""
+        axes[0, col_idx].set_title(
+            f"{panel}  {title}",
+            fontsize=10, fontweight="bold", pad=6, color="white",
+        )
+
+    for row in range(n_rows):
+        txt = axes[row, 0].text(
+            -0.07, 0.5,
+            rf"$t_{{{row}}}$",
+            transform=axes[row, 0].transAxes,
+            fontsize=16, fontweight="bold",
+            ha="right", va="center",
+            color="white",
+        )
+        txt.set_path_effects([
+            pe.Stroke(linewidth=1.8, foreground="black"),
+            pe.Normal(),
+        ])
+
+    for col_idx, (label, pid, studies, slice_picker) in enumerate(cols_spec):
+        slice_idx = slice_picker(studies)
+        for row in range(n_rows):
+            ax = axes[row, col_idx]
+            if row >= len(studies):
+                _blank_cell(ax)
+                continue
+            _render_cell(
+                ax, studies[row], slice_idx,
+                label_colors=label_colors,
+                tumor_color=tumor_color,
+            )
+
+    return fig
+
+
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument(
@@ -515,30 +651,33 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     tumor_patient = args.tumor_patient.strip() or None if args.tumor_patient else None
-    fig = make_figure(
-        args.data_dir,
-        args.preprocessed_root,
-        args.synthseg_root,
+    stem = args.output.stem
+    parent = args.output.parent
+
+    make_kwargs = dict(
+        data_dir=args.data_dir,
+        preprocessed_root=args.preprocessed_root,
+        synthseg_root=args.synthseg_root,
         best_override=args.best_patient,
         worst_override=args.worst_patient,
         tumor_patient=tumor_patient,
         tumor_region=args.tumor_region,
     )
+
+    fig = make_figure(**make_kwargs)
     out_pdf = save_figure(fig, args.output, dpi=args.dpi)
     logger.info("Saved %s", out_pdf)
     if args.also_png:
-        png = args.output.with_suffix(".png")
-        fig2 = make_figure(
-            args.data_dir,
-            args.preprocessed_root,
-            args.synthseg_root,
-            best_override=args.best_patient,
-            worst_override=args.worst_patient,
-            tumor_patient=tumor_patient,
-            tumor_region=args.tumor_region,
-        )
-        save_figure(fig2, png, dpi=args.dpi)
-        logger.info("Saved %s", png)
+        fig2 = make_figure(**make_kwargs)
+        save_figure(fig2, args.output.with_suffix(".png"), dpi=args.dpi)
+
+    fig_t = make_figure_transposed(**make_kwargs)
+    out_t = save_figure(fig_t, parent / f"{stem}_transposed.pdf", dpi=args.dpi)
+    logger.info("Saved %s", out_t)
+    if args.also_png:
+        fig_t2 = make_figure_transposed(**make_kwargs)
+        save_figure(fig_t2, parent / f"{stem}_transposed.png", dpi=args.dpi)
+
     return 0
 
 

@@ -8,25 +8,26 @@ from typing import Any, Dict, Final, List, Optional, Tuple
 import numpy as np
 
 # ── Segmentation label definitions ──────────────────────────────────────────
+# Model output convention (after BraTS-MEN → BSF conversion):
+#   Label 1 = SNFH (Surrounding Non-enhancing FLAIR Hyperintensity / edema)
+#   Label 2 = ET   (Enhancing Tumor / solid meningioma)
+# NETC (BraTS-MEN label 1) was dropped during conversion; label 3 is never produced.
 
-LABEL_IDS: Final[List[int]] = [1, 2, 3]
+LABEL_IDS: Final[List[int]] = [1, 2]
 
 LABEL_NAMES: Final[Dict[int, str]] = {
-    1: "NET",
-    2: "SNFH",
-    3: "ET",
+    1: "SNFH",
+    2: "ET",
 }
 
 LABEL_COLORS_HEX: Final[Dict[int, str]] = {
-    1: "#DDCC77",  # NET  — yellow/sand
-    2: "#44AA99",  # SNFH — teal
-    3: "#CC3311",  # ET   — red
+    1: "#44AA99",  # SNFH — teal
+    2: "#CC3311",  # ET   — red
 }
 
 LABEL_COLORS_RGB: Final[Dict[int, Tuple[float, float, float]]] = {
-    1: (0.867, 0.800, 0.467),
-    2: (0.267, 0.667, 0.600),
-    3: (0.800, 0.200, 0.067),
+    1: (0.267, 0.667, 0.600),
+    2: (0.800, 0.200, 0.067),
 }
 
 MODALITIES: Final[List[str]] = ["t1n", "t1c", "t2f", "t2w"]
