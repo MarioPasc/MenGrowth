@@ -8,10 +8,10 @@ their longitudinal timepoints; each column is a timepoint.
 Run standalone::
 
     python -m mengrowth.synthseg.analysis.figures.fig_qualitative \
-        --data-dir outputs/synthseg_analysis \
+        --data-dir /media/mpascual/PortableSSD/Meningiomas/MenGrowth/synthseg_analysis \
         --preprocessed-root /media/mpascual/PortableSSD/Meningiomas/MenGrowth/v5_final/MenGrowth-2025 \
         --synthseg-root    /media/mpascual/PortableSSD/Meningiomas/MenGrowth/v5_final/synthseg \
-        --output outputs/synthseg_analysis/figures/figure2_qualitative.pdf
+        --output /media/mpascual/PortableSSD/Meningiomas/MenGrowth/synthseg_analysis/figures/figure2_qualitative.pdf
 """
 
 from __future__ import annotations
@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 #   ET (Enhancing)    = {1}
 TUMOR_REGIONS: dict[str, tuple[int, ...]] = {
     "WT": (1, 2, 3),
-    "TC": (1, 3),
+    "TC": (2,),
     "ET": (1,),
 }
 
@@ -85,7 +85,7 @@ def _load_volumes(
     synthseg_root: Path,
     patient_id: str,
     study_id: str,
-    tumor_region: str = "TC",
+    tumor_region: str = "ED",
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
     """Load (t1n, parc, tumor) arrays for a study; tumor may be None.
 
