@@ -47,15 +47,9 @@ logger = logging.getLogger(__name__)
 #   TC (Tumor Core)  = {2}      (ET only, since NETC is absent)
 #   ET (Enhancing)   = {2}
 TUMOR_REGIONS: dict[str, tuple[int, ...]] = {
-<<<<<<< HEAD
-    "WT": (1, 2, 3),
-    "TC": (2,),
-    "ET": (1,),
-=======
     "WT": (1, 2),
     "TC": (2,),
     "ET": (2,),
->>>>>>> e04acb143ec5eddf2c70b9449f0f48fe2e37d2c1
 }
 
 
