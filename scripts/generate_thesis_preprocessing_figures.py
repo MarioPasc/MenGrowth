@@ -19,7 +19,7 @@ import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.figure import Figure
-from scipy.ndimage import zoom
+from scipy.ndimage import binary_dilation, zoom
 
 # ── project imports ──────────────────────────────────────────────────────
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -614,6 +614,116 @@ def fig_presegmentation(
     _save(fig, out_dir / f"step_presegmentation.{FMT}")
 
 
+def _build_synthseg_color_table(label_ids: np.ndarray) -> Dict[int, np.ndarray]:
+    """Distinct RGBA colour per non-zero SynthSeg label.
+
+    Concatenates ``tab20`` + ``tab20b`` + ``tab20c`` so ~30 labels land on
+    visually separable hues (homologous L/R pairs fall on different
+    entries). Mirrors ``fig_qualitative._build_label_color_table``.
+    """
+    palettes = [plt.cm.tab20.colors, plt.cm.tab20b.colors, plt.cm.tab20c.colors]
+    table_colors = [c for p in palettes for c in p]
+    mapping: Dict[int, np.ndarray] = {}
+    idx = 0
+    for lid in label_ids:
+        if int(lid) == 0:
+            continue
+        rgb = np.asarray(table_colors[idx % len(table_colors)], dtype=np.float32)
+        mapping[int(lid)] = np.concatenate([rgb, [1.0]]).astype(np.float32)
+        idx += 1
+    return mapping
+
+
+def fig_synthseg_overlay(
+    loader: ArchiveLoader,
+    cfg: GraphicalAbstractConfig,
+    out_dir: Path,
+    synthseg_root: Path,
+    modality: str = "t1n",
+    fill_alpha: float = 0.20,
+    contour_alpha: float = 1.0,
+) -> None:
+    """Final preprocessed volume with overlayed SynthSeg parcellation, 1×3 panel.
+
+    Loads ``synthseg_parc.nii.gz`` from ``synthseg_root / patient_id /
+    study_id``. For each of the three canonical views, renders the T1
+    slice in greyscale, per-label filled interior at ``fill_alpha`` and a
+    one-voxel-thick per-label boundary at ``contour_alpha``. Layout and
+    colour assignment follow ``fig_qualitative._render_cell``.
+    """
+    import nibabel as nib
+
+    vol = loader.load_longitudinal_volume(modality)
+    if vol is None:
+        vol = loader.load_step_volume("step6_skull_stripping", modality)
+
+    parc_path = synthseg_root / cfg.patient_id / cfg.study_ids[1] / "synthseg_parc.nii.gz"
+    if not parc_path.exists():
+        logger.warning("SynthSeg parcellation not found at %s — skipping", parc_path)
+        return
+    parc = np.asarray(nib.load(str(parc_path)).dataobj, dtype=np.int32)
+
+    plow, phigh = cfg.intensity_percentile_low, cfg.intensity_percentile_high
+    frac = {
+        "axial": cfg.slice.axial_frac,
+        "sagittal": cfg.slice.sagittal_frac,
+        "coronal": cfg.slice.coronal_frac,
+    }
+
+    mri_slices = [_slice_for_view(vol.data, v, frac[v], plow, phigh) for v in VIEWS]
+    parc_slices: List[np.ndarray] = []
+    for v in VIEWS:
+        idx = compute_slice_index(parc.shape, v, frac[v])
+        parc_slices.append(extract_slice(parc, v, idx).astype(np.int32))
+
+    # Common color table across the three views so homologous regions match.
+    all_labels = np.unique(np.concatenate([p.ravel() for p in parc_slices]))
+    label_colors = _build_synthseg_color_table(all_labels)
+
+    max_h = max(s.shape[0] for s in mri_slices)
+    max_w = max(s.shape[1] for s in mri_slices)
+
+    def _pad(s: np.ndarray, dtype: Optional[type] = None) -> np.ndarray:
+        pad_h = max_h - s.shape[0]
+        pad_w = max_w - s.shape[1]
+        top = pad_h // 2
+        left = pad_w // 2
+        p = np.zeros((max_h, max_w), dtype=dtype or s.dtype)
+        p[top : top + s.shape[0], left : left + s.shape[1]] = s
+        return p
+
+    padded_mri = [_pad(s) for s in mri_slices]
+    padded_parc = [_pad(s, dtype=np.int32) for s in parc_slices]
+
+    cell_w = max_w / DPI
+    cell_h = max_h / DPI
+    scale = 3.0
+    fig, axes = plt.subplots(1, 3, figsize=(cell_w * scale * 3, cell_h * scale), dpi=DPI)
+
+    for ax, mri_img, parc_img in zip(axes, padded_mri, padded_parc):
+        ax.imshow(mri_img, cmap="gray", vmin=0, vmax=1, origin="lower", aspect="equal")
+
+        fill = np.zeros((*parc_img.shape, 4), dtype=np.float32)
+        contour = np.zeros((*parc_img.shape, 4), dtype=np.float32)
+        for lid, rgba in label_colors.items():
+            mask = parc_img == lid
+            if not mask.any():
+                continue
+            boundary = binary_dilation(mask, iterations=1) & ~mask
+            interior = mask & ~boundary
+            fill[interior, :3] = rgba[:3]
+            fill[interior, 3] = fill_alpha
+            contour[boundary, :3] = rgba[:3]
+            contour[boundary, 3] = contour_alpha
+
+        ax.imshow(fill, origin="lower", aspect="equal", interpolation="nearest")
+        ax.imshow(contour, origin="lower", aspect="equal", interpolation="nearest")
+        ax.axis("off")
+
+    fig.subplots_adjust(wspace=0.02, left=0.0, right=1.0, top=1.0, bottom=0.0)
+    _save(fig, out_dir / f"step_synthseg.{FMT}")
+
+
 # ── main ─────────────────────────────────────────────────────────────────
 
 
@@ -668,6 +778,11 @@ def main() -> None:
 
     # Pre-segmentation
     fig_presegmentation(loader, cfg, out_dir)
+
+    # SynthSeg parcellation overlay on final preprocessed volume.
+    # synthseg_root is the sibling of preprocessed_root (…/v5_final/synthseg).
+    synthseg_root = Path(cfg.preprocessed_root).parent / "synthseg"
+    fig_synthseg_overlay(loader, cfg, out_dir, synthseg_root=synthseg_root)
 
     logger.info("Done! All figures saved to %s", out_dir)
 
